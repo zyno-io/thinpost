@@ -27,6 +27,10 @@ The tag must be a SemVer version with a leading `v`. The release job rejects any
 
 Release builds do not touch any deployment. Deployments are separate from release tags: run your own installation from a release tag, or from any image digest you choose.
 
+## Notifying a deployer
+
+To track `main` continuously, set a `DEPLOY_HOOK_URL` repository secret in your fork or mirror: a URL that accepts an empty `POST`, such as a CI pipeline trigger. After both `main` images are published and attested, the **Notify deployer** job posts to it once. The request carries no release data, so the deployer must resolve and verify the commit itself, the way [Verify a release](#verify-a-release) does. Without the secret the job does nothing. A failed notification shows as a warning, not a failed build, so a deployer should also poll.
+
 ## Verify a release
 
 Pull the images by digest, or verify the attestation of what a tag points to:

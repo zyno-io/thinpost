@@ -311,6 +311,33 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
+  notify-deploy:
+    name: Notify deployer
+    # Wakes an optional downstream deployer once both main images are
+    # published and attested. DEPLOY_HOOK_URL is a repository secret (a URL
+    # that accepts an empty POST); without it this job does nothing. A failed
+    # notification is a warning, not a failed build: deployers should also poll.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [publish-images]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Notify
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.DEPLOY_HOOK_URL }}
+        run: |
+          set -uo pipefail
+          if [[ -z "$DEPLOY_HOOK_URL" ]]; then
+            echo "DEPLOY_HOOK_URL is not set; nothing to notify."
+            exit 0
+          fi
+          # The URL goes through curl's stdin config, never the command line.
+          if ! printf 'url = "%s"\n' "$DEPLOY_HOOK_URL" |
+            curl -fsS --proto '=https' --max-time 30 --retry 3 -X POST -o /dev/null -K -; then
+            echo "::warning::The deploy hook did not accept the notification."
+          fi
+
   release:
     name: Release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
