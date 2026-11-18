@@ -26,10 +26,10 @@ An automated contract suite runs the official Node SDKs against the real HTTP ad
 
 | Provider | Package and version | Operations exercised | Endpoint override |
 | --- | --- | --- | --- |
-| Postmark | `postmark` 5.1.0 | `sendEmail`, `sendEmailBatch`, `getSuppressions` | `requestHost` and `useHttps` client options |
-| Resend | `resend` 6.37.0 | `emails.send`, `batch.send` | `baseUrl` client option |
+| Postmark | `postmark` 5.1.1 | `sendEmail`, `sendEmailBatch`, `getSuppressions` | `requestHost` and `useHttps` client options |
+| Resend | `resend` 6.38.1 | `emails.send`, `batch.send` | `baseUrl` client option |
 | SendGrid | `@sendgrid/mail` 8.1.6 | `send` (one or several personalizations), `sendMultiple` | `setDefaultRequest('baseUrl', ...)` |
-| Mailgun | `mailgun.js` 14.1.0 | `messages.create` | `url` client option |
+| Mailgun | `mailgun.js` 14.1.1 | `messages.create` | `url` client option |
 
 Other languages and versions that speak the same HTTP shapes should work for the supported fields, but are not part of the suite. The suite also verifies that Postmark, Resend and Mailgun [webhook](/reference/webhook-formats) payloads carry the same message ID the send call returned.
 

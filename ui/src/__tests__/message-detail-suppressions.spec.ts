@@ -62,9 +62,18 @@ async function mountAt() {
 
 const row = (n: number) => wrapper!.findAll('tbody tr')[n]!;
 
+const openMenuItems = () => document.querySelectorAll('[role="menuitem"]');
+
+// The dropdown closes asynchronously after an action, and may still be open when
+// the next step runs. Clicking the trigger then would toggle it shut, so only open
+// it when it is closed, and wait until its items are rendered.
 async function openMenu(n: number) {
-    await row(n).find('.dropdown-trigger[aria-label^="More actions"]').trigger('click');
     await flushPromises();
+    if (openMenuItems().length === 0) {
+        await row(n).find('.dropdown-trigger[aria-label^="More actions"]').trigger('click');
+        await flushPromises();
+    }
+    await vi.waitFor(() => expect(openMenuItems().length).toBeGreaterThan(0));
 }
 
 function menuItem(label: string) {
