@@ -1,6 +1,6 @@
 ---
 title: Database
-description: Create the owner, runtime and optional collector roles, bootstrap and migrate the schema, grant privileges, connect over verified TLS and open the admission gate.
+description: Create the owner, runtime and collector PostgreSQL roles, bootstrap and migrate the schema, connect over verified TLS and open the admission gate.
 ---
 
 # Database

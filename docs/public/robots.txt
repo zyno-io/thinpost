@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://zyno-io.github.io/thinpost/sitemap.xml

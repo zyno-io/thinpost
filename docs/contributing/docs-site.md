@@ -35,3 +35,15 @@ Node must match `ui/.node-version`.
 A workflow builds the site on every pull request that touches `docs/`, the API contracts, the chart or configuration code, and fails on errors. On pushes to `main` it builds the site and deploys it to GitHub Pages. Pull requests never deploy.
 
 Build output in `docs/.vitepress/dist` and the cache are git-ignored.
+
+## Search and link previews
+
+Every page needs a `title` and a `description` in its frontmatter. The
+description (50–160 characters) feeds the page's search snippet and its Open
+Graph and Twitter preview. `npm run docs:build` runs `scripts/check-seo.mjs`
+afterwards and fails if a page is missing either, or if the built site lacks
+the canonical, Open Graph or sitemap output.
+
+The preview image `public/og-image.png` (1200×630) is rendered from
+`og/og-image.html`. After editing the template, regenerate it with
+`npm run og-image` (it uses the console's Playwright install) and commit the PNG.

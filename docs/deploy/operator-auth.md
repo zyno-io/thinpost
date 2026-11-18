@@ -1,6 +1,6 @@
 ---
 title: Operator authentication
-description: Connect the operator console and admin API to any OpenID Connect provider that issues signed JWT access tokens, with settings and claim mappings for Microsoft Entra, Keycloak, Auth0 and Okta.
+description: Connect the Thinpost operator console and admin API to any OpenID Connect provider, with claim mappings for Microsoft Entra, Keycloak, Auth0 and Okta.
 ---
 
 # Operator authentication

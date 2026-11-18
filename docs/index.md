@@ -1,5 +1,7 @@
 ---
 layout: home
+title: Thinpost
+description: Self-hosted transactional email with Postmark, Resend, SendGrid and Mailgun compatible APIs. Keep delivery, keys and message content on your own infrastructure.
 hero:
   name: Thinpost
   text: Self-hosted transactional email

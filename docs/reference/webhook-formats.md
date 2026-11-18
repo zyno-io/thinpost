@@ -1,6 +1,6 @@
 ---
 title: Webhook formats
-description: Request shape, signatures, event mapping and payload fields for the Thinpost-native, Postmark, Resend and Mailgun webhook formats, plus the inbound mail payload.
+description: Request shape, signatures, event mapping and payload fields for Thinpost-native, Postmark, Resend and Mailgun webhooks, plus the inbound mail payload.
 ---
 
 # Webhook formats
