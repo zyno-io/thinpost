@@ -1,6 +1,6 @@
 ---
 title: Upgrades
-description: How schema migrations run during a Helm upgrade, how the admission gate closes and reopens, what each failure leaves behind, and why you never roll back with Helm.
+description: How Thinpost schema migrations run during a Helm upgrade, how the admission gate closes and reopens, what failures leave behind, and why not to roll back.
 ---
 
 # Upgrades

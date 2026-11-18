@@ -1,6 +1,6 @@
 ---
 title: Control PKI
-description: Build the private certificate authority and the SPIFFE-style identities that secure the mTLS channel between the control plane and the edge worker, and rotate them safely.
+description: Build the private CA and SPIFFE-style identities that secure the mTLS channel between the Thinpost control plane and edge worker, and rotate them safely.
 ---
 
 # Control PKI

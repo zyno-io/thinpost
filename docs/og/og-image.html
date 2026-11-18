@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Thinpost Open Graph image</title>
+<style>
+  /* Source for docs/public/og-image.png (1200x630). Render with
+     `npm run og-image` from docs/. System-safe fonts only. */
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1200px; height: 630px; }
+  body {
+    position: relative;
+    overflow: hidden;
+    background: #14212e;
+    background-image:
+      linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+    background-size: 40px 40px;
+    color: #eef3f8;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+  .bar { position: absolute; left: 0; top: 0; bottom: 0; width: 14px; background: #2f5d8a; }
+  .wrap { position: absolute; left: 96px; top: 112px; right: 96px; }
+  .title { display: flex; align-items: center; gap: 28px; }
+  .mark { width: 88px; height: 88px; }
+  h1 { font-size: 112px; line-height: 1; font-weight: 700; letter-spacing: -3px; }
+  .tag { margin-top: 56px; font-size: 40px; line-height: 1.35; color: #b9cce0; max-width: 940px; }
+  .url {
+    position: absolute; left: 96px; bottom: 56px;
+    font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+    font-size: 28px; color: #7fa9d4;
+  }
+</style>
+</head>
+<body>
+  <div class="bar"></div>
+  <div class="wrap">
+    <div class="title">
+      <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="14" fill="#2f5d8a"/>
+        <rect x="14" y="19" width="36" height="26" rx="4" fill="none" stroke="#fff" stroke-width="4"/>
+        <path d="M16 22l16 13 16-13" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <h1>Thinpost</h1>
+    </div>
+    <p class="tag">Self-hosted transactional email. Postmark, Resend, SendGrid and Mailgun compatible APIs on infrastructure you run.</p>
+  </div>
+  <div class="url">zyno-io.github.io/thinpost</div>
+</body>
+</html>

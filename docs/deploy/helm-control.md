@@ -1,6 +1,6 @@
 ---
 title: "Helm: control"
-description: Deploy the control plane with the Thinpost chart (workload=control), including every Secret, ConfigMap, ServiceAccount, Service and NetworkPolicy the chart expects you to provide.
+description: Deploy the Thinpost control plane with the Helm chart (workload=control), including every Secret, ConfigMap, ServiceAccount and NetworkPolicy you provide.
 ---
 
 # Helm: control

@@ -1,6 +1,6 @@
 ---
 title: Deployment overview
-description: What a Thinpost deployment is made of, what it needs from your infrastructure, which parts run in the trusted zone and the edge zone, and the order to set them up.
+description: What a Thinpost deployment is made of, what it needs from your infrastructure, how the trusted and edge zones split, and the order to set it up.
 ---
 
 # Deployment overview

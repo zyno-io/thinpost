@@ -2,6 +2,12 @@ import { defineConfig } from "vitepress";
 import { withMermaid } from "vitepress-plugin-mermaid";
 
 const repo = "https://github.com/zyno-io/thinpost";
+const siteUrl = "https://zyno-io.github.io/thinpost/";
+const ogImage = `${siteUrl}og-image.png`;
+
+// "guide/cli.md" -> "guide/cli"; "reference/api/index.md" -> "reference/api/".
+const pageUrl = (relativePath: string): string =>
+  siteUrl + relativePath.replace(/(^|\/)index\.md$/, "$1").replace(/\.md$/, "");
 
 export default withMermaid(
   defineConfig({
@@ -16,7 +22,38 @@ export default withMermaid(
     ignoreDeadLinks: false,
     // README.md describes the docs directory itself, not a site page.
     srcExclude: ["README.md"],
-    head: [["meta", { name: "theme-color", content: "#2f5d8a" }]],
+    head: [
+      ["meta", { name: "theme-color", content: "#2f5d8a" }],
+      ["link", { rel: "icon", type: "image/svg+xml", href: "/thinpost/favicon.svg" }],
+    ],
+    sitemap: { hostname: siteUrl },
+    // Open Graph and Twitter card tags for link previews. Each page's title and
+    // `description` frontmatter feed them; the site description is the fallback.
+    transformHead: ({ pageData, title, description }) => {
+      const url = pageUrl(pageData.relativePath);
+      return [
+        ["link", { rel: "canonical", href: url }],
+        ["meta", { property: "og:type", content: "website" }],
+        ["meta", { property: "og:site_name", content: "Thinpost" }],
+        ["meta", { property: "og:title", content: title }],
+        ["meta", { property: "og:description", content: description }],
+        ["meta", { property: "og:url", content: url }],
+        ["meta", { property: "og:image", content: ogImage }],
+        ["meta", { property: "og:image:width", content: "1200" }],
+        ["meta", { property: "og:image:height", content: "630" }],
+        [
+          "meta",
+          {
+            property: "og:image:alt",
+            content: "Thinpost: self-hosted transactional email with provider-compatible APIs",
+          },
+        ],
+        ["meta", { name: "twitter:card", content: "summary_large_image" }],
+        ["meta", { name: "twitter:title", content: title }],
+        ["meta", { name: "twitter:description", content: description }],
+        ["meta", { name: "twitter:image", content: ogImage }],
+      ];
+    },
     themeConfig: {
       nav: [
         { text: "Guide", link: "/guide/what-is-thinpost", activeMatch: "/guide/" },

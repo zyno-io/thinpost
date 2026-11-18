@@ -1,6 +1,6 @@
 ---
 title: Key and certificate rotation
-description: How to rotate DKIM keys, the bounce keyring, the idempotency fingerprint key, tracking link keys, the object keyring and the control mTLS credentials without breaking in-flight mail.
+description: Rotate Thinpost DKIM keys, the bounce, idempotency, tracking and object keyrings, and the control mTLS credentials without breaking in-flight mail.
 ---
 
 # Key and certificate rotation

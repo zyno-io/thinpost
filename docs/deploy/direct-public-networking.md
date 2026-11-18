@@ -1,6 +1,6 @@
 ---
 title: Direct public networking
-description: Give the edge worker its own public IPv4 addresses with Multus, ipvlan, Whereabouts and source-based routing, keep it working when it moves between nodes, and configure the upstream router.
+description: Give the Thinpost edge worker its own public IPv4 addresses with Multus, ipvlan and Whereabouts, keep them across node moves and configure the router.
 ---
 
 # Direct public networking

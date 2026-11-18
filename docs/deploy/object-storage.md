@@ -1,6 +1,6 @@
 ---
 title: Object storage
-description: Provision the S3-compatible bucket, grant the control credential, generate the object keyring, apply the inbound lifecycle rule, and understand the HEAD and lock semantics Thinpost depends on.
+description: Provision the S3-compatible bucket for Thinpost, grant the control credential, generate the object keyring, set the lifecycle rule and learn lock semantics.
 ---
 
 # Object storage

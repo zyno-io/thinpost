@@ -11,6 +11,8 @@
     "docs:dev": "vitepress dev",
     "predocs:build": "npm run prebuild",
     "docs:build": "vitepress build",
+    "postdocs:build": "node scripts/check-seo.mjs",
+    "og-image": "node scripts/og-image.mjs",
     "docs:preview": "vitepress preview"
   },
   "devDependencies": {

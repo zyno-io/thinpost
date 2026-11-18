@@ -1,6 +1,6 @@
 ---
 title: "Helm: Edge"
-description: "Deploy the edge worker with the Thinpost chart (workload=edge): the journal volume, certificates, the edge binding, additional sending addresses and the optional node pin."
+description: "Deploy the Thinpost edge worker with the Helm chart (workload=edge): journal volume, certificates, edge binding, sending addresses and optional node pin."
 ---
 
 # Helm: Edge
