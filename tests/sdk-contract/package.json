@@ -11,7 +11,7 @@
   "devDependencies": {
     "@sendgrid/mail": "8.1.6",
     "form-data": "4.0.6",
-    "mailgun.js": "14.1.0",
+    "mailgun.js": "14.1.1",
     "postmark": "5.1.0",
     "resend": "6.37.0"
   }
