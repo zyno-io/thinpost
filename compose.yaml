@@ -180,7 +180,7 @@ services:
 
   # ---- local mail destination, DNS, sign-in and HTTPS --------------------
   mailpit:
-    image: axllent/mailpit:v1.27@sha256:e22dce5b36f93c77082e204a3942fb6b283b7896e057458400a4c88344c3df68 # mailpit v1.27
+    image: axllent/mailpit:v1.33@sha256:aef2aacc11f075ec0fb6874275ee4a421e688e11a96ebb296134d1735c7761ce # mailpit v1.27
     environment:
       MP_SMTP_BIND_ADDR: 0.0.0.0:25
       MP_UI_BIND_ADDR: 0.0.0.0:8025
