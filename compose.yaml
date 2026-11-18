@@ -110,7 +110,7 @@ services:
     restart: unless-stopped
 
   s3:
-    image: ministackorg/ministack:1.5.7@sha256:43be2fd128817f3f5f49d28b1ccb0b697fdfc972a8fed7c37007b3a59635acd2 # ministack 1.5.7
+    image: ministackorg/ministack:1.5.42@sha256:f215f6e18f314a772301a7bb64819d26d2b736739cce99ccc7b53048ffbb4b1f # ministack 1.5.42
     network_mode: service:ctlnet
     environment:
       SERVICES: s3
@@ -180,7 +180,7 @@ services:
 
   # ---- local mail destination, DNS, sign-in and HTTPS --------------------
   mailpit:
-    image: axllent/mailpit:v1.27@sha256:e22dce5b36f93c77082e204a3942fb6b283b7896e057458400a4c88344c3df68 # mailpit v1.27
+    image: axllent/mailpit:v1.34@sha256:23a2ef85bc50853ab3093645d1d64679afd8887e89da5e48a88940c172591a4e # mailpit v1.34
     environment:
       MP_SMTP_BIND_ADDR: 0.0.0.0:25
       MP_UI_BIND_ADDR: 0.0.0.0:8025
@@ -204,7 +204,7 @@ services:
     restart: unless-stopped
 
   coredns:
-    image: coredns/coredns:1.12.1@sha256:e8c262566636e6bc340ece6473b0eed193cad045384401529721ddbe6463d31c # coredns 1.12.1
+    image: coredns/coredns:1.15.0@sha256:0a9d8c8ddf34347eb59aad9a8784f0710de88d6d112726d11d271f9bc6daca26 # coredns 1.15.0
     command: ["-conf", "/qs/Corefile"]
     networks:
       front: { ipv4_address: 10.99.50.53 }
@@ -243,7 +243,7 @@ services:
     restart: unless-stopped
 
   caddy:
-    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d # caddy 2.10-alpine
+    image: caddy:2.11-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0 # caddy 2.11-alpine
     # Caddy keeps its local CA private (mode 0700), so the wrapper publishes
     # the public root certificate into the caddy-root volume; the control plane
     # mounts that volume read-only. Users can copy it out with

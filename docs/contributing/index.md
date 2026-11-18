@@ -11,7 +11,7 @@ Thanks for helping. This page covers the toolchain, the build and test commands,
 
 | Tool | Version | Needed for |
 | --- | --- | --- |
-| Go | The version in `go.mod` (1.26 or newer). CI and the container images build with Go 1.27 | The control plane, the edge worker, tests |
+| Go | The version in `go.mod` (1.27.4 or newer). CI and the container images build with Go 1.27 | The control plane, the edge worker, tests |
 | Node.js | The version in `ui/.node-version` (26) | The operator console, the SDK contract tests |
 | Docker | Recent | Container images, the local pipeline and Edge image tests |
 | Helm 3 | Recent | Chart lint and chart tests |

@@ -5,7 +5,7 @@ description: The Resend send and batch routes Thinpost implements, supported fie
 
 # Resend compatibility
 
-Tested with `resend` 6.37.0 (`emails.send`, `batch.send`). See the [overview](/reference/compatibility/) for shared limits and behavior, and [Sending with SDKs](/guide/sending-with-sdks) for setup.
+Tested with `resend` 6.38.1 (`emails.send`, `batch.send`). See the [overview](/reference/compatibility/) for shared limits and behavior, and [Sending with SDKs](/guide/sending-with-sdks) for setup.
 
 ## Authentication
 

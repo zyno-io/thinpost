@@ -5,7 +5,7 @@ description: The Postmark send, batch and suppression routes Thinpost implements
 
 # Postmark compatibility
 
-Tested with `postmark` 5.1.0 (`sendEmail`, `sendEmailBatch`, `getSuppressions`). See the [overview](/reference/compatibility/) for shared limits and behavior, and [Sending with SDKs](/guide/sending-with-sdks) for setup.
+Tested with `postmark` 5.1.1 (`sendEmail`, `sendEmailBatch`, `getSuppressions`). See the [overview](/reference/compatibility/) for shared limits and behavior, and [Sending with SDKs](/guide/sending-with-sdks) for setup.
 
 ## Authentication
 

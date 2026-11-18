@@ -5,7 +5,7 @@ description: The Mailgun messages route Thinpost implements, supported form fiel
 
 # Mailgun compatibility
 
-Tested with `mailgun.js` 14.1.0 (`messages.create`, with `form-data`). See the [overview](/reference/compatibility/) for shared limits and behavior, and [Sending with SDKs](/guide/sending-with-sdks) for setup.
+Tested with `mailgun.js` 14.1.1 (`messages.create`, with `form-data`). See the [overview](/reference/compatibility/) for shared limits and behavior, and [Sending with SDKs](/guide/sending-with-sdks) for setup.
 
 ## Authentication
 

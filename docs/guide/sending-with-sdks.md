@@ -26,10 +26,10 @@ An automated contract suite runs the official Node SDKs against the real HTTP ad
 
 | Provider | Package and tested version | Operations tested | Route |
 | --- | --- | --- | --- |
-| Postmark | `postmark` 5.1.0 | `sendEmail`, `sendEmailBatch` | `POST /email`, `POST /email/batch` |
-| Resend | `resend` 6.37.0 | `emails.send`, `batch.send` | `POST /emails`, `POST /emails/batch` |
+| Postmark | `postmark` 5.1.1 | `sendEmail`, `sendEmailBatch` | `POST /email`, `POST /email/batch` |
+| Resend | `resend` 6.38.1 | `emails.send`, `batch.send` | `POST /emails`, `POST /emails/batch` |
 | SendGrid | `@sendgrid/mail` 8.1.6 | `send` with one or more personalizations, `sendMultiple` | `POST /v3/mail/send` |
-| Mailgun | `mailgun.js` 14.1.0 | `messages.create` | `POST /v3/{domain}/messages` |
+| Mailgun | `mailgun.js` 14.1.1 | `messages.create` | `POST /v3/{domain}/messages` |
 
 Other languages and versions that speak the same HTTP shapes should work for the supported fields, but they are not part of the suite.
 
