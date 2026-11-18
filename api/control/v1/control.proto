@@ -1,0 +1,218 @@
+syntax = "proto3";
+
+package thinpost.control.v1;
+option go_package = "github.com/zyno-io/thinpost/api/control/v1;controlv1";
+
+// Only the trusted control plane opens this stream to the edge worker, over
+// mutually authenticated TLS. No RPC in this service is initiated by edge.
+service EdgeControl {
+  rpc Connect(stream ControlFrame) returns (stream EdgeFrame);
+}
+
+message ControlFrame {
+  oneof body {
+    Open open = 1;
+    Wake wake = 2;
+    DeliveryStart delivery = 3;
+    DataChunk mime_chunk = 4;
+    ResultAcknowledgement result_ack = 5;
+    BounceAcknowledgement bounce_ack = 6;
+    LeaseRenewal lease_renewal = 7;
+    StartPermit start_permit = 8;
+    ReconciliationComplete reconciliation_complete = 9;
+    // Inbound mail (capability "inbound/1"), additive at protocol 7. Sent only
+    // when the worker reported the capability in Ready.
+    InboundRoutes routes = 10;
+    InboundAcknowledgement inbound_ack = 11;
+  }
+}
+message EdgeFrame {
+  oneof body {
+    Ready ready = 1;
+    Pull pull = 2;
+    DeliveryResult result = 3;
+    BounceStart bounce = 4;
+    DataChunk bounce_chunk = 5;
+    LeaseAccepted lease_accepted = 6;
+    ReplayComplete replay_complete = 7;
+    StartRequest start_request = 8;
+    // Sent only when control advertised "inbound/1" in Open.
+    InboundStart inbound = 9;
+    DataChunk inbound_chunk = 10;
+  }
+}
+
+// First frame. The worker verifies the mTLS controller identity, worker ID,
+// and monotonic epoch before admitting work. Epochs are allocated by the
+// control-plane database. The control plane signs that lease with its mTLS
+// key; the worker trusts the authenticated controller to sign only DB leases.
+// capabilities is additive (inbound mail): optional features this controller
+// supports, such as "inbound/1". A worker that does not know the field ignores
+// it and never sees an inbound frame.
+message Open { string worker_id = 1; string controller_id = 2; uint64 epoch = 3; bytes lease_payload = 4; bytes lease_signature = 5; string session_id = 6; uint32 protocol_version = 7; string journal_id = 8; repeated string capabilities = 9; }
+// Same controller and epoch; the worker verifies each renewal locally against
+// the authenticated controller certificate and its conservative expiry bound.
+message LeaseRenewal { bytes lease_payload = 1; bytes lease_signature = 2; }
+message LeaseAccepted { uint64 epoch = 1; bytes payload_sha256 = 2; }
+// source_addresses and bounce_domains are additive (schema 40). A non-empty
+// source_addresses means the worker supports a per-delivery source address; the
+// primary (its listener address) is first. An absent list means a legacy worker
+// that sends only from its primary address and its own hostname.
+message Ready {
+  string worker_id = 1;
+  uint64 epoch = 2;
+  string session_id = 3;
+  uint32 protocol_version = 4;
+  string journal_id = 5;
+  repeated string source_addresses = 6;
+  repeated string bounce_domains = 7;
+  // Additive (inbound mail): optional features this worker supports, such as
+  // "inbound/1". An older control plane ignores the field and sends no inbound
+  // frames; a worker without it never receives them.
+  repeated string capabilities = 8;
+  // Additive: the SMTP name each source address greets and sends HELO with, one
+  // per source_addresses entry in the same order. Absent from an older worker;
+  // control then uses the name it has stored for the address.
+  repeated string source_hostnames = 9;
+}
+// Sent after all replayed results have been durably acknowledged.
+message ReplayComplete {}
+// Sent only after trusted has committed its bounded reconciliation of older
+// attempts. The worker enables delivery pulls and bounce forwarding afterward.
+message ReconciliationComplete { string worker_id = 1; string journal_id = 2; string session_id = 3; uint64 epoch = 4; }
+message Wake {}
+// Edge requests work; wake messages are hints and are not durable queue items.
+message Pull { uint32 available_slots = 1; }
+
+// DeliveryStart follows Pull. Signed MIME follows as strictly ordered chunks;
+// expected_size and sha256 are checked before sending. MX resolution and policy
+// decisions occur in trusted; edge independently filters the numeric IP.
+message DeliveryStart {
+  string attempt_id = 1;
+  string delivery_id = 2;
+  uint64 epoch = 3;
+  string mx_name = 4;
+  string destination_ip = 5;
+  string envelope_from = 6;
+  string recipient = 7;
+  bool enhanced_protection = 8;
+  uint64 expected_size = 9;
+  bytes sha256 = 10;
+  // Zero for untracked or indefinite signed links; otherwise the database-derived
+  // deadline that preserves a legacy finite mapping's post-send lifetime.
+  int64 tracking_send_cutoff_unix_ms = 11;
+  // Schema 40, additive. Both empty: the worker's primary address and its own
+  // hostname. Otherwise both are set, source_address is one the worker reported
+  // in Ready, and both are part of the descriptor hash that the permit binds.
+  string source_address = 12;
+  string helo_name = 13;
+}
+// Chunks for an individual item are contiguous and offset from zero. The
+// receiver enforces configured chunk, item and total in-flight limits.
+message DataChunk { string id = 1; uint64 offset = 2; bytes data = 3; bool last = 4; }
+
+// Edge sends this only after durably recording Begin. Trusted commits the
+// exact start authorization under its current database lease before permitting
+// SMTP. Both sides bind it to the full deterministic DeliveryStart digest.
+message StartRequest { string worker_id = 1; string session_id = 2; string attempt_id = 3; string delivery_id = 4; uint64 epoch = 5; bytes descriptor_sha256 = 6; string journal_id = 7; }
+message StartPermit { StartRequest request = 1; }
+
+enum DeliveryOutcome {
+  DELIVERY_OUTCOME_UNSPECIFIED = 0;
+  DELIVERY_OUTCOME_ACCEPTED = 1;
+  DELIVERY_OUTCOME_REJECTED = 2;
+  DELIVERY_OUTCOME_UNCERTAIN = 3;
+  // This SMTP endpoint rejected the connection or setup before MAIL FROM.
+  // The code belongs to this route; another MX may still accept the message.
+  DELIVERY_OUTCOME_ROUTE_REJECTED = 4;
+  // The worker's recipient policy denied the address before any SMTP permit.
+  DELIVERY_OUTCOME_RECIPIENT_POLICY_DENIED = 5;
+}
+// The worker persists the result before reporting it. After a disconnect,
+// unacknowledged results are replayed, including legitimate older epochs.
+message DeliveryResult {
+  string attempt_id = 1;
+  string delivery_id = 2;
+  uint64 epoch = 3;
+  DeliveryOutcome outcome = 4;
+  uint32 smtp_code = 5;
+  // Additive (schema 34): the SMTP command that drew smtp_code, and the
+  // enhanced status code (digits only, matching ^[245]\.\d{1,3}\.\d{1,3}$)
+  // parsed from the start of the reply text. Reply text is never carried.
+  // Absent from older workers; unknown to older control planes, which echo
+  // them unchanged in the acknowledgement.
+  SmtpStage smtp_stage = 6;
+  string smtp_enhanced = 7;
+}
+enum SmtpStage {
+  SMTP_STAGE_UNSPECIFIED = 0;
+  SMTP_STAGE_MAIL = 1;
+  SMTP_STAGE_RCPT = 2;
+  SMTP_STAGE_DATA = 3;
+}
+// Acknowledgement is sent only after trusted commits the exact result. The
+// worker compares all identity and outcome fields before deleting its journal.
+message ResultAcknowledgement { DeliveryResult result = 1; }
+
+// Edge streams an inbound bounce through the existing connection. Its public
+// SMTP receiver must not return 250 until a durable trusted acknowledgement;
+// disconnect, overload or failed commit instead require a temporary failure.
+message BounceStart {
+  string bounce_id = 1;
+  uint64 expected_size = 2;
+  // Opaque SMTP recipient token, carried only over the authenticated stream.
+  string recipient_token = 3;
+  bytes sha256 = 4;
+}
+message BounceAcknowledgement { string bounce_id = 1; bool durably_accepted = 2; }
+
+// Inbound mail (capability "inbound/1"). Both sides send inbound frames only
+// after the peer advertised the capability, and the worker only after
+// ReconciliationComplete. The worker never spools a body: it returns SMTP 250
+// only after an ACCEPTED acknowledgement that control sends after its durable
+// commit and while its lease is valid, and 451 for anything else.
+
+// InboundRoutes is a page of the routing snapshot control pushes: the receiving
+// domains and what to answer at RCPT. Pages arrive in order (offset counts the
+// routes already sent, zero starts a new snapshot) and the worker swaps the
+// snapshot in atomically on the page with last set. A domain's group is an
+// opaque number, stable only within one snapshot, that stands in for its app so
+// the worker can keep one app's recipients in one transaction.
+message InboundRoutes { uint32 offset = 1; bool last = 2; repeated InboundRoute routes = 3; }
+message InboundRoute { string domain = 1; uint32 group = 2; InboundRouteState state = 3; }
+enum InboundRouteState {
+  INBOUND_ROUTE_STATE_UNSPECIFIED = 0;
+  // Accept recipients at this domain.
+  INBOUND_ROUTE_STATE_ACCEPT = 1;
+  // Answer 451 at RCPT: the sender queues and retries.
+  INBOUND_ROUTE_STATE_TEMPFAIL = 2;
+}
+// InboundStart precedes the raw message as ordered DataChunks carrying the same
+// id. The envelope and connection facts are what the SMTP receiver observed;
+// they are untrusted input to control, which re-resolves every recipient.
+message InboundStart {
+  string inbound_id = 1;
+  uint64 expected_size = 2;
+  bytes sha256 = 3;
+  // Empty for the null reverse path.
+  string mail_from = 4;
+  repeated string rcpt_to = 5;
+  string client_ip = 6;
+  string helo = 7;
+  string tls_version = 8;
+  string tls_cipher = 9;
+  int64 received_unix_ms = 10;
+  // The worker's SMTP host name, used as the authentication-results identifier.
+  string receiver = 11;
+  uint32 group = 12;
+}
+message InboundAcknowledgement { string inbound_id = 1; InboundVerdict verdict = 2; }
+enum InboundVerdict {
+  INBOUND_VERDICT_UNSPECIFIED = 0;
+  // Durably committed (or an exact duplicate of a committed message): 250.
+  INBOUND_VERDICT_ACCEPTED = 1;
+  // Not committed; the sender should retry: 451.
+  INBOUND_VERDICT_TEMPFAIL = 2;
+  // Permanently refused: 554.
+  INBOUND_VERDICT_REJECTED = 3;
+}

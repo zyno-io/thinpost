@@ -1,0 +1,2 @@
+# recipient            MX host                  address (inside the infrastructure CIDR)
+demo@quickstart.example mx.quickstart.example 11.42.51.25

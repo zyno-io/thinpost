@@ -1,0 +1,19 @@
+.git
+ui/node_modules
+ui/dist
+ui/coverage
+tests/sdk-contract/node_modules
+tests/sdk-contract/fixture-server*
+# The image build regenerates the client from the checked-in OpenAPI spec;
+# never use a local client or a local spec override.
+ui/src/openapi-client-generated
+ui/openapi-specs.dev.json
+**/*.tsbuildinfo
+**/.DS_Store
+**/*.local
+# Environment files never enter the build context (Vite would load them).
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.db

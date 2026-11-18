@@ -1,0 +1,13 @@
+{
+    "extends": "@tsconfig/node26/tsconfig.json",
+    "include": ["vite.config.*", "vitest.config.*"],
+    "compilerOptions": {
+        "composite": true,
+        "module": "ESNext",
+        "moduleResolution": "Bundler",
+        "types": ["node"],
+        "paths": {
+            "@zyno-io/vue-foundation/vite-plugins": ["./node_modules/@zyno-io/vue-foundation/dist/src/vite-plugins/index.d.ts"]
+        }
+    }
+}

@@ -1,0 +1,1 @@
+{"id":"evt_bounce","message_id":"0123456789abcdef0123456789abcdef","delivery_id":"delivery-1","bounce_receipt_id":"receipt-1","outcome":"bounce_received_unverified","smtp_code":0,"occurred_at":"2026-11-05T12:00:00.123456Z"}

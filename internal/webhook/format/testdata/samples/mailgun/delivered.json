@@ -1,0 +1,61 @@
+{
+  "event": "delivered",
+  "id": "YAnbnnknbqYbSAAhhnShnh",
+  "timestamp": 1772000000.658528,
+  "flags": {
+    "is-authenticated": true,
+    "is-routed": false,
+    "is-big": false,
+    "is-system-test": false,
+    "is-test-mode": false
+  },
+  "message": {
+    "attachments": [],
+    "headers": {
+      "message-id": "20260313192030.305bd4c1b0a531b7@mail.example.com",
+      "from": "Example Sender <sender@mail.example.com>",
+      "to": "recipient@mail.example.net",
+      "subject": "Example webhook payload"
+    },
+    "size": 341
+  },
+  "storage": {
+    "key": "EXAMPLEKEYexamplekeyEXAMPLEKEYexamp",
+    "url": "https://storage.example.com/v3/domains/mail.example.com/messages/MDSPqSMPeYYnMPhSMnSDPVqbtkhVPnhbMV"
+  },
+  "log-level": "info",
+  "recipient": "recipient@mail.example.com",
+  "recipient-domain": "mail.example.com",
+  "primary-dkim": "smtp._domainkey.mail.example.com",
+  "tags": [
+    "webhook_payload"
+  ],
+  "recipient-provider": "Other",
+  "campaigns": [],
+  "account": {
+    "id": "0123456789abcdef01234567"
+  },
+  "delivery-status": {
+    "attempt-no": 1,
+    "code": 250,
+    "message": "OK",
+    "description": null,
+    "session-seconds": 1.276,
+    "enhanced-code": null,
+    "mx-host": "mx.example.net",
+    "certificate-verified": true,
+    "tls": true,
+    "utf8": true,
+    "first-delivery-attempt-seconds": 0.062
+  },
+  "domain": {
+    "name": "mail.example.com"
+  },
+  "envelope": {
+    "sender": "sender@mail.example.com",
+    "targets": "recipient@mail.example.com",
+    "transport": "smtp",
+    "sending-ip": "203.0.113.10"
+  },
+  "user-variables": []
+}

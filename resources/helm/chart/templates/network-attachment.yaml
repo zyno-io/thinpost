@@ -1,0 +1,87 @@
+{{- if eq .Values.workload "edge" }}
+{{- /*
+One attachment per outbound address: the primary (thinpost-public, net1) and
+one per additionalSources entry (thinpost-public-N, net{N+1}). Each has its own
+single-address Whereabouts range, its own gateway and its own source-based
+routing table (publicNetwork.table + N), so addresses in different networks
+leave through their own gateways. Entries may override range, gateway, master
+and mtu; the defaults are the publicNetwork values.
+*/ -}}
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: thinpost-public
+  namespace: {{ .Release.Namespace }}
+{{- with .Values.publicNetwork.attachmentLabels }}
+  labels:
+{{ toYaml . | indent 4 }}
+{{- end }}
+spec:
+  config: |-
+    {
+      "cniVersion": "1.1.0",
+      "name": "thinpost-public",
+      "plugins": [
+        {
+          "type": {{ .Values.publicNetwork.cniTypes.ipvlan | quote }},
+          "master": {{ .Values.publicNetwork.master | quote }},
+          "mode": "l2",
+          "mtu": {{ int .Values.publicNetwork.mtu }},
+          "ipam": {
+            "type": "whereabouts",
+            "range": {{ .Values.publicNetwork.range | quote }},
+            "range_start": {{ .Values.sourceAddress | quote }},
+            "range_end": {{ .Values.sourceAddress | quote }},
+            "gateway": {{ .Values.publicNetwork.gateway | quote }},
+            "routes": [
+              {"dst": {{ printf "%s/32" .Values.publicNetwork.gateway | quote }}, "gw": "0.0.0.0", "table": {{ int .Values.publicNetwork.table }}, "scope": 253},
+              {"dst": "0.0.0.0/0", "gw": {{ .Values.publicNetwork.gateway | quote }}, "table": {{ int .Values.publicNetwork.table }} }
+            ]
+          }
+        },
+        {"type": {{ .Values.publicNetwork.cniTypes.sbr | quote }}, "table": {{ int .Values.publicNetwork.table }} }
+      ]
+    }
+{{- range $i, $extra := .Values.additionalSources }}
+{{- $n := add1 $i }}
+{{- $table := add (int $.Values.publicNetwork.table) $n }}
+{{- $gateway := default $.Values.publicNetwork.gateway $extra.gateway }}
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ printf "thinpost-public-%d" $n }}
+  namespace: {{ $.Release.Namespace }}
+{{- with $.Values.publicNetwork.attachmentLabels }}
+  labels:
+{{ toYaml . | indent 4 }}
+{{- end }}
+spec:
+  config: |-
+    {
+      "cniVersion": "1.1.0",
+      "name": {{ printf "thinpost-public-%d" $n | quote }},
+      "plugins": [
+        {
+          "type": {{ $.Values.publicNetwork.cniTypes.ipvlan | quote }},
+          "master": {{ default $.Values.publicNetwork.master $extra.master | quote }},
+          "mode": "l2",
+          "mtu": {{ int (default $.Values.publicNetwork.mtu $extra.mtu) }},
+          "ipam": {
+            "type": "whereabouts",
+            "range": {{ default $.Values.publicNetwork.range $extra.range | quote }},
+            "range_start": {{ $extra.address | quote }},
+            "range_end": {{ $extra.address | quote }},
+            "gateway": {{ $gateway | quote }},
+            "routes": [
+              {"dst": {{ printf "%s/32" $gateway | quote }}, "gw": "0.0.0.0", "table": {{ $table }}, "scope": 253},
+              {"dst": "0.0.0.0/0", "gw": {{ $gateway | quote }}, "table": {{ $table }} }
+            ]
+          }
+        },
+        {"type": {{ $.Values.publicNetwork.cniTypes.sbr | quote }}, "table": {{ $table }} }
+      ]
+    }
+{{- end }}
+
+{{- end }}

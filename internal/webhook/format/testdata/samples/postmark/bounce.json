@@ -1,0 +1,25 @@
+{
+  "RecordType": "Bounce",
+  "MessageStream": "outbound",
+  "ID": 5031122,
+  "Type": "HardBounce",
+  "TypeCode": 1,
+  "Name": "Hard bounce",
+  "Tag": "Test",
+  "MessageID": "b670adbd-0705-4442-a638-183a3000db83",
+  "Metadata": {
+    "PropA": "value",
+    "PropB": "value"
+  },
+  "ServerID": 4101,
+  "Description": "The receiving server rejected the message because the mailbox does not exist.",
+  "Details": "Synthetic bounce details",
+  "Email": "recipient@example.net",
+  "From": "sender@example.org",
+  "BouncedAt": "2026-03-14T16:33:54.9070259Z",
+  "DumpAvailable": true,
+  "Inactive": true,
+  "CanActivate": true,
+  "Subject": "Welcome aboard",
+  "Content": "<bounce dump omitted>"
+}

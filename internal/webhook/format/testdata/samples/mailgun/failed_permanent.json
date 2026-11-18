@@ -1,0 +1,64 @@
+{
+  "event": "failed",
+  "id": "ADPYntSqMkVJDPJAMVnSbh",
+  "timestamp": 1772000300.592369,
+  "flags": {
+    "is-authenticated": true,
+    "is-routed": false,
+    "is-big": false,
+    "is-system-test": false,
+    "is-test-mode": false
+  },
+  "message": {
+    "attachments": [],
+    "headers": {
+      "message-id": "20260312174255.1abef87ee20a5745@mail.example.com",
+      "from": "Example Sender <sender@mail.example.com>",
+      "to": "badrecipient@mail.example.com",
+      "subject": "Example webhook payload"
+    },
+    "size": 384
+  },
+  "storage": {
+    "key": "EXAMPLEKEYexamplekeyEXAMPLEKEYexamp",
+    "url": "https://storage.example.com/v3/domains/mail.example.com/messages/VthnPqqSkbeAbhSVeAVAbhDkbtADYJeMDA"
+  },
+  "log-level": "error",
+  "recipient": "badrecipient@mail.example.com",
+  "recipient-domain": "mail.example.com",
+  "primary-dkim": "new._domainkey.mail.example.com",
+  "tags": [
+    "webhook_payload"
+  ],
+  "reason": "bounce",
+  "recipient-provider": "Other",
+  "severity": "permanent",
+  "campaigns": [],
+  "account": {
+    "id": "0123456789abcdef01234567"
+  },
+  "delivery-status": {
+    "attempt-no": 1,
+    "code": 550,
+    "message": "5.1.1 Mailbox unavailable. [mx2.example.net 2026-03-12T17:42:55.527Z 00000000000000AB]",
+    "description": null,
+    "session-seconds": 0.208,
+    "enhanced-code": "5.1.1",
+    "mx-host": "mx2.example.net",
+    "certificate-verified": true,
+    "tls": true,
+    "utf8": true,
+    "first-delivery-attempt-seconds": 0.066,
+    "bounce-type": "hard"
+  },
+  "domain": {
+    "name": "mail.example.com"
+  },
+  "envelope": {
+    "sender": "sender@mail.example.com",
+    "targets": "badrecipient@mail.example.com",
+    "transport": "smtp",
+    "sending-ip": "203.0.113.10"
+  },
+  "user-variables": []
+}

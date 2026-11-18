@@ -1,0 +1,384 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "workload",
+    "control",
+    "replicas"
+  ],
+  "properties": {
+    "workload": {
+      "enum": [
+        "control",
+        "edge"
+      ],
+      "description": "Which workload to render: the control plane or the Edge."
+    },
+    "database": {
+      "type": "object",
+      "required": [
+        "caConfigMap"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "caConfigMap": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+          "description": "ConfigMap in the release namespace holding the Postgres CA bundle (key ca.crt)."
+        }
+      },
+      "description": "Database connection settings for the control plane."
+    },
+    "replicas": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Edge replicas (0 or 1; the journal volume is single-writer)."
+    },
+    "image": {
+      "type": "string",
+      "description": "Edge worker image; falls back to bootstrapImage when empty."
+    },
+    "bootstrapImage": {
+      "type": "string",
+      "description": "Placeholder image used until image is set."
+    },
+    "sourceAddress": {
+      "type": "string",
+      "format": "ipv4",
+      "description": "Primary outbound and SMTP listener address."
+    },
+    "additionalSources": {
+      "type": "array",
+      "maxItems": 15,
+      "items": {
+        "type": "object",
+        "required": [
+          "address",
+          "hostname"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": "string",
+            "format": "ipv4",
+            "description": "Source IPv4 address."
+          },
+          "hostname": {
+            "type": "string",
+            "maxLength": 219,
+            "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+            "description": "Hostname for the greeting, certificate and reverse DNS."
+          },
+          "certificateSecret": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253,
+            "description": "kubernetes.io/tls Secret covering the hostname."
+          },
+          "range": {
+            "type": "string",
+            "pattern": "^[0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2}$",
+            "description": "Network CIDR; defaults to publicNetwork.range."
+          },
+          "gateway": {
+            "type": "string",
+            "format": "ipv4",
+            "description": "Gateway; defaults to publicNetwork.gateway."
+          },
+          "master": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Parent interface; defaults to publicNetwork.master."
+          },
+          "mtu": {
+            "type": "integer",
+            "minimum": 576,
+            "maximum": 9000,
+            "description": "MTU; defaults to publicNetwork.mtu."
+          }
+        }
+      },
+      "description": "Further outbound addresses, one network attachment each."
+    },
+    "additionalBounceDomains": {
+      "type": "array",
+      "maxItems": 7,
+      "items": {
+        "type": "string",
+        "maxLength": 219,
+        "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+      },
+      "description": "Extra bounce domains the Edge accepts beyond its own."
+    },
+    "control": {
+      "type": "object",
+      "required": [
+        "replicas",
+        "image",
+        "bootstrapImage"
+      ],
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "minimum": 2
+            }
+          ],
+          "description": "Operator replicas: 0, or at least 2."
+        },
+        "image": {
+          "type": "string",
+          "description": "Control image; used by the operator and the hook Jobs."
+        },
+        "bootstrapImage": {
+          "type": "string",
+          "description": "Placeholder control image."
+        },
+        "tls": {
+          "type": "object",
+          "required": [
+            "enabled",
+            "secretName",
+            "port"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable the HTTPS listener."
+            },
+            "secretName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$",
+              "description": "Secret (tls.crt, tls.key) mounted for the listener."
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 65535,
+              "not": {
+                "const": 8080
+              },
+              "description": "HTTPS listener port (not 8080)."
+            }
+          },
+          "description": "Optional HTTPS listener beside the plain :8080 one."
+        },
+        "webhookInternalDestinations": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "description": "Exact internal webhook URLs the operator may deliver to."
+        },
+        "serviceCidrs": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Cluster Service CIDRs that internal destinations must resolve inside."
+        },
+        "migrations": {
+          "type": "object",
+          "required": [
+            "enabled",
+            "serviceAccount",
+            "activeDeadlineSeconds"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Render the hook Jobs."
+            },
+            "serviceAccount": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+              "description": "ServiceAccount the Jobs run as (managed outside this chart)."
+            },
+            "activeDeadlineSeconds": {
+              "type": "integer",
+              "minimum": 60,
+              "maximum": 3600,
+              "description": "Hook Job deadline in seconds."
+            }
+          },
+          "description": "Helm hook Jobs that migrate the schema and reopen the admission gate."
+        },
+        "inboundMxHost": {
+          "type": "string",
+          "description": "Mail host that inbound domains point their MX record at; empty leaves it unset."
+        },
+        "deploymentAnnotations": {
+          "type": "object",
+          "description": "Extra annotations for the operator Deployment metadata.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "reloader": {
+          "type": "object",
+          "description": "Restart-on-secret-renewal annotation for the operator.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Add the Stakater Reloader annotation for thinpost-control-client."
+            }
+          }
+        }
+      },
+      "description": "Control plane settings."
+    },
+    "node": {
+      "type": "string",
+      "description": "Optional node name to pin the Edge to; empty or \"unconfigured\" lets it float."
+    },
+    "workerId": {
+      "type": "string",
+      "description": "Edge worker identifier."
+    },
+    "smtpHostname": {
+      "type": "string",
+      "description": "Primary SMTP hostname the Edge greets with."
+    },
+    "bounceDomain": {
+      "type": "string",
+      "description": "Primary bounce domain."
+    },
+    "controllerIdentity": {
+      "type": "string",
+      "description": "SPIFFE identity of the control plane the Edge trusts."
+    },
+    "controlClientCidrs": {
+      "type": "array",
+      "description": "CIDRs the control client may connect from.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "journalCapacity": {
+      "type": "integer",
+      "description": "Journal capacity (messages).",
+      "minimum": 0
+    },
+    "journalReserveBytes": {
+      "type": "integer",
+      "description": "Journal bytes held in reserve.",
+      "minimum": 0
+    },
+    "clockMargin": {
+      "type": "string",
+      "description": "Allowed clock skew, as a duration (for example 5s)."
+    },
+    "smtpRate": {
+      "type": "object",
+      "description": "SMTP rate limits.",
+      "properties": {
+        "globalInterval": {
+          "type": "string",
+          "description": "Interval between globally rate-limited sends (duration)."
+        },
+        "globalBurst": {
+          "type": "integer",
+          "description": "Global burst size.",
+          "minimum": 0
+        },
+        "sourceInterval": {
+          "type": "string",
+          "description": "Interval between rate-limited sends per source (duration)."
+        },
+        "sourceBurst": {
+          "type": "integer",
+          "description": "Per-source burst size.",
+          "minimum": 0
+        }
+      }
+    },
+    "publicNetwork": {
+      "type": "object",
+      "description": "Public network attachment settings; each additionalSources entry may override range, gateway, master and mtu.",
+      "properties": {
+        "master": {
+          "type": "string",
+          "description": "Parent interface for the attachment."
+        },
+        "range": {
+          "type": "string",
+          "description": "Network CIDR of the primary address."
+        },
+        "gateway": {
+          "type": "string",
+          "description": "Default gateway."
+        },
+        "mtu": {
+          "type": "integer",
+          "description": "Interface MTU.",
+          "minimum": 576,
+          "maximum": 9000
+        },
+        "table": {
+          "type": "integer",
+          "description": "First source-based routing table; entry N uses table+N.",
+          "minimum": 1
+        },
+        "attachmentLabels": {
+          "type": "object",
+          "description": "Labels added to every NetworkAttachmentDefinition.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "cniTypes": {
+          "type": "object",
+          "description": "CNI plugin binary names.",
+          "properties": {
+            "ipvlan": {
+              "type": "string",
+              "description": "ipvlan plugin type.",
+              "minLength": 1
+            },
+            "sbr": {
+              "type": "string",
+              "description": "source-based-routing plugin type.",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "ipvlan",
+            "sbr"
+          ]
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "description": "Image pull Secrets for every pod spec, as {name: ...} entries.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Secret name.",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

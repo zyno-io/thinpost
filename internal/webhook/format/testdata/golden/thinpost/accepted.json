@@ -1,0 +1,1 @@
+{"id":"evt_accepted","message_id":"0123456789abcdef0123456789abcdef","delivery_id":"delivery-1","attempt_id":"attempt-1","outcome":"accepted","smtp_code":250,"occurred_at":"2026-11-05T12:00:00.123456Z"}

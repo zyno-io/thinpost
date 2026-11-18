@@ -1,0 +1,1 @@
+{"RecordType":"Delivery","MessageStream":"outbound","MessageID":"00000000-0000-0000-0000-000000000000","Recipient":"test@example.com","Tag":"","DeliveredAt":"2026-11-05T12:00:07.0000000Z","Details":"Accepted by the recipient's mail server (SMTP 250).","Metadata":{}}

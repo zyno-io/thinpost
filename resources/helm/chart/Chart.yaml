@@ -1,0 +1,12 @@
+apiVersion: v2
+name: thinpost
+description: Thinpost control or Edge workload on existing cluster infrastructure.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/zyno-io/thinpost
+sources:
+  - https://github.com/zyno-io/thinpost
+maintainers:
+  - name: Zyno Consulting
+    email: oss@zyno.io

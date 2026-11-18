@@ -1,0 +1,130 @@
+openapi: 3.1.0
+info:
+  title: Thinpost app read API
+  version: 0.1.0
+  description: >-
+    Read-only message routes for the submission API key of an app. They are
+    served by the control process on the same listener as the submission routes
+    and only when submission is configured. The key identifies the app; a
+    message of another app is reported as not found. Responses use the admin
+    API's schemas and security headers. Intended for in-cluster callers, so
+    deployments need not expose /app/ on the public ingress. GET only; a query
+    string is rejected. Errors are {"error": "<status text>"}.
+servers:
+  - url: /app/v1
+security:
+  - appKey: []
+paths:
+  /messages/{messageId}:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+    get:
+      operationId: getMessage
+      description: >-
+        Same body as the operator API's getAppMessage: metadata, all recorded
+        recipients and delivery states, no bodies. Not audited; the subject of an
+        Enhanced Protection message is withheld.
+      responses:
+        '200':
+          description: Message detail
+          headers: { Cache-Control: { schema: { type: string, const: no-store } } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, deliveries]
+                properties:
+                  message: { $ref: '../admin/openapi.yaml#/components/schemas/MessageSummary' }
+                  deliveries:
+                    type: array
+                    items: { $ref: '../admin/openapi.yaml#/components/schemas/DeliverySummary' }
+                  preparation_failure:
+                    type: object
+                    description: Present when preparation is held; the reason never contains message content.
+                    required: [attempts, reason]
+                    properties:
+                      attempts: { type: integer, minimum: 1, maximum: 12 }
+                      reason: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /messages/{messageId}/body:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+    get:
+      operationId: getMessageBody
+      description: >-
+        Source message contents with attachment metadata, as the operator API's
+        getAppMessageBody. An Enhanced Protection message commits a
+        message.body.read audit record (actor key:<keyId>) before the object is
+        read. Outbound content is readable until Thinpost's content expiry.
+      responses:
+        '200':
+          description: Source message contents; sensitive and not cacheable
+          headers: { Cache-Control: { schema: { type: string, const: no-store } } }
+          content:
+            application/json:
+              schema: { $ref: '../admin/openapi.yaml#/components/schemas/MessageBody' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '409': { description: The content cannot be read for this message }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /messages/{messageId}/attachments/{index}:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+      - name: index
+        in: path
+        required: true
+        schema: { type: integer, minimum: 0, maximum: 19 }
+    get:
+      operationId: downloadMessageAttachment
+      description: >-
+        Submitted attachment bytes, always application/octet-stream, with the
+        operator API's downloadAppMessageAttachment headers. Audited
+        (message.attachment.read) before bytes are sent for Enhanced Protection
+        messages. A non-canonical index (sign, leading zero) is 404.
+      responses:
+        '200':
+          description: Attachment bytes
+          headers:
+            Content-Disposition: { schema: { type: string }, description: attachment with an RFC 2231 filename }
+            Cache-Control: { schema: { type: string, const: no-store } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
+            Cross-Origin-Resource-Policy: { schema: { type: string, const: same-origin } }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+components:
+  securitySchemes:
+    appKey:
+      type: http
+      scheme: bearer
+      description: A submission API key of the app, as for POST /emails (Authorization header only).
+  parameters:
+    MessageId:
+      name: messageId
+      in: path
+      required: true
+      description: The 32-hex message ID, or a provider rendering of it that needs no percent-encoding (UUID text, id@domain); `<id@domain>` would need encoding and is rejected.
+      schema: { type: string }
+  responses:
+    BadRequest: { description: A query string was supplied, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Unauthorized: { description: Missing, malformed, wrong or revoked app key, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    NotFound: { description: Unknown message, another app's message, malformed ID or path, or non-canonical attachment index, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    MethodNotAllowed: { description: Only GET is served, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    Unavailable: { description: 'Submission, authentication, database or object storage unavailable, or (body and attachment) the read budget is busy; Retry-After 5 accompanies the busy case', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }

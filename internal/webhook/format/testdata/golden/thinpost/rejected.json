@@ -1,0 +1,1 @@
+{"id":"evt_rejected","message_id":"0123456789abcdef0123456789abcdef","delivery_id":"delivery-1","attempt_id":"attempt-2","outcome":"rejected","smtp_code":550,"occurred_at":"2026-11-05T12:00:00.123456Z"}

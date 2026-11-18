@@ -1,0 +1,41 @@
+{
+  "event": "opened",
+  "id": "knYGbDSAAMDVkMqhkPVSbS",
+  "timestamp": 1772000900.554932,
+  "log-level": "info",
+  "account": {
+    "id": "0123456789abcdef01234567"
+  },
+  "domain": {
+    "name": "mail.example.com"
+  },
+  "message": {
+    "headers": {
+      "message-id": "20260315213049.8e37f473fbc14c71@mail.example.com"
+    }
+  },
+  "campaigns": [],
+  "delivered-at": 1772000880,
+  "recipient": "recipient@mail.example.com",
+  "recipient-domain": "mail.example.com",
+  "recipient-provider": "Other",
+  "tags": [
+    "webhook_payload"
+  ],
+  "ip": "198.51.100.62",
+  "client-info": {
+    "client-name": "Chrome",
+    "client-os": "OS X",
+    "client-type": "browser",
+    "device-type": "desktop",
+    "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.7559.97 Safari/537.36",
+    "bot": null
+  },
+  "geolocation": {
+    "city": "Austin",
+    "country": "US",
+    "region": "TX",
+    "timezone": "America/Chicago"
+  },
+  "user-variables": []
+}

@@ -1,0 +1,19 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+*.local
+.DS_Store
+
+# Generated from ../api/admin/openapi.yaml by `yarn gen`
+src/openapi-client-generated/
+openapi-specs.dev.json
+
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+
+# Playwright (dev-only e2e)
+playwright-report/
+test-results/

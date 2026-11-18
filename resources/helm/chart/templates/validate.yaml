@@ -1,0 +1,92 @@
+{{- if not (has .Values.workload (list "control" "edge")) }}
+{{- fail "workload must be control or edge" }}
+{{- end }}
+{{- if and (eq .Values.workload "control") (and (ne (int .Values.control.replicas) 0) (lt (int .Values.control.replicas) 2)) }}
+{{- fail "control requires zero or at least two replicas" }}
+{{- end }}
+{{- if and (eq .Values.workload "control") .Values.control.reloader.enabled (hasKey (default dict .Values.control.deploymentAnnotations) "secret.reloader.stakater.com/reload") }}
+{{- fail "set control.reloader.enabled=false to supply secret.reloader.stakater.com/reload in control.deploymentAnnotations" }}
+{{- end }}
+{{- if and (eq .Values.workload "control") (not (toString .Values.database.caConfigMap)) }}
+{{- fail "database.caConfigMap is required for control" }}
+{{- end }}
+{{- if and (eq .Values.workload "control") .Values.control.tls.enabled }}
+{{- if not (toString .Values.control.tls.secretName) }}
+{{- fail "control.tls.secretName is required when control.tls.enabled" }}
+{{- end }}
+{{- if eq (int .Values.control.tls.port) 8080 }}
+{{- fail "control.tls.port must differ from the plain HTTP port 8080" }}
+{{- end }}
+{{- end }}
+{{- if eq .Values.workload "control" }}
+{{- /* Internal webhook exceptions: canonical http(s) URLs (no commas, spaces or credentials) that the control binary re-validates, and Service CIDRs that must accompany them. */ -}}
+{{- if and .Values.control.webhookInternalDestinations (not .Values.control.serviceCidrs) }}
+{{- fail "control.webhookInternalDestinations requires control.serviceCidrs" }}
+{{- end }}
+{{- range .Values.control.webhookInternalDestinations }}
+{{- if not (regexMatch "^https?://[a-z0-9-]+\\.[a-z0-9.-]+\\.svc\\.cluster\\.local(:[0-9]{1,5})?(/[^,#\\s]*)?(\\?[^,#\\s]*)?$" (toString .)) }}
+{{- fail "control.webhookInternalDestinations entries must be http(s) URLs with a lowercase <service>.<namespace>.svc.cluster.local host, no credentials, fragment, comma or space" }}
+{{- end }}
+{{- end }}
+{{- range .Values.control.serviceCidrs }}
+{{- if not (regexMatch "^([0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2}|[0-9a-f:]+/[0-9]{1,3})$" (toString .)) }}
+{{- fail "control.serviceCidrs entries must be CIDRs" }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if eq .Values.workload "edge" }}
+{{- /* Additional addresses: unique IPv4 literals including the primary, at most 15 extra, one routing table per attachment. Each listens for SMTP under its own unique hostname with its own certificate Secret. */ -}}
+{{- $ipv4 := "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$" }}
+{{- if gt (len .Values.additionalSources) 15 }}
+{{- fail "additionalSources supports at most 15 addresses" }}
+{{- end }}
+{{- if gt (len .Values.additionalBounceDomains) 7 }}
+{{- fail "additionalBounceDomains supports at most 7 domains" }}
+{{- end }}
+{{- if gt (add (int .Values.publicNetwork.table) (len .Values.additionalSources)) 252 }}
+{{- fail "publicNetwork.table plus the number of additionalSources must be at most 252" }}
+{{- end }}
+{{- if not (regexMatch $ipv4 (toString .Values.sourceAddress)) }}
+{{- fail "sourceAddress must be an IPv4 literal" }}
+{{- end }}
+{{- $dnsName := "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" }}
+{{- $secretName := "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?)*$" }}
+{{- $seen := dict (toString .Values.sourceAddress) true }}
+{{- $names := dict (toString .Values.smtpHostname) true }}
+{{- range .Values.additionalSources }}
+{{- if not (kindIs "map" .) }}
+{{- fail "each additionalSources entry must be a map with an address" }}
+{{- end }}
+{{- $address := toString (default "" .address) }}
+{{- if not (regexMatch $ipv4 $address) }}
+{{- fail "each additionalSources address must be an IPv4 literal" }}
+{{- end }}
+{{- if hasKey $seen $address }}
+{{- fail "additionalSources addresses must be unique and different from sourceAddress" }}
+{{- end }}
+{{- $_ := set $seen $address true }}
+{{- $hostname := toString (default "" .hostname) }}
+{{- if or (not (regexMatch $dnsName $hostname)) (gt (len $hostname) 219) }}
+{{- fail "each additionalSources entry needs a hostname: a lowercase DNS name of at most 219 characters" }}
+{{- end }}
+{{- if hasKey $names $hostname }}
+{{- fail "additionalSources hostnames must be unique and different from smtpHostname" }}
+{{- end }}
+{{- $_ := set $names $hostname true }}
+{{- $secret := toString (default "thinpost-smtp-public" .certificateSecret) }}
+{{- if or (not (regexMatch $secretName $secret)) (gt (len $secret) 253) }}
+{{- fail "additionalSources certificateSecret must be a Kubernetes Secret name" }}
+{{- end }}
+{{- end }}
+{{- $domains := dict (toString .Values.bounceDomain) true }}
+{{- range .Values.additionalBounceDomains }}
+{{- $domain := toString . }}
+{{- if or (not (regexMatch "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" $domain)) (gt (len $domain) 219) }}
+{{- fail "additionalBounceDomains must be lowercase DNS names of at most 219 characters" }}
+{{- end }}
+{{- if or (hasKey $domains $domain) (hasKey $names $domain) }}
+{{- fail "additionalBounceDomains must be unique and different from bounceDomain and every additionalSources hostname" }}
+{{- end }}
+{{- $_ := set $domains $domain true }}
+{{- end }}
+{{- end }}

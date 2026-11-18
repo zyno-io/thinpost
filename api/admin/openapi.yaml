@@ -1,0 +1,2345 @@
+openapi: 3.1.0
+info:
+  title: Thinpost operator API
+  version: 0.1.0
+  description: >-
+    Preliminary operator API with delegated OIDC authentication. Apart from
+    public configuration, operations require an authenticated administrator.
+    API-key secrets are returned only when created and must not be logged or cached.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+paths:
+  /config:
+    get:
+      operationId: getPublicConfig
+      security: []
+      responses:
+        '200':
+          description: Public OIDC client configuration; contains no client secret
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [oidc]
+                properties:
+                  oidc:
+                    type: object
+                    required: [issuer, client_id, scopes]
+                    properties:
+                      issuer: { type: string, format: uri }
+                      client_id: { type: string }
+                      scopes: { type: array, items: { type: string } }
+        default: { $ref: '#/components/responses/Error' }
+  /runtime:
+    get:
+      operationId: getRuntime
+      responses:
+        '200':
+          description: >-
+            Startup configuration of the replica that served this request. A different
+            replica may differ during a rollout. Never contains a secret or key path.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RuntimeInfo' }
+        '503': { description: Runtime information is not configured }
+        default: { $ref: '#/components/responses/Error' }
+  /operations:
+    get:
+      operationId: getOperations
+      description: >-
+        Read-only snapshot of the gate, the Edge worker lease, the message, delivery and
+        webhook backlogs, today's inbound counters and the retry policy. It works while the runtime gate is closed.
+        Counts and identifiers only: no address, subject or content.
+      responses:
+        '200':
+          description: Snapshot taken in one read-only transaction
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operations' }
+        '503': { description: Snapshot unavailable, for example the database is slow or down }
+        default: { $ref: '#/components/responses/Error' }
+  /operations/attention:
+    get:
+      operationId: listOperationsAttention
+      description: >-
+        Messages that need an operator, across all apps, oldest first. Each item links to
+        message detail, where the audited actions live. Uncertain deliveries are list-only.
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+      responses:
+        '200':
+          description: One page; next_cursor is present when more items exist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttentionPage' }
+        '503': { description: Unavailable }
+        default: { $ref: '#/components/responses/Error' }
+  /feedback-loops:
+    get:
+      operationId: getFeedbackLoops
+      description: >-
+        Spam-complaint intake: the global feedback mailbox address (when created), the
+        reporter DKIM domain allowlist and the last 14 days of result counters. It reads
+        in a read-only transaction and works while the runtime gate is closed. The
+        address is b+<token>@<bounce domain>; the token is not a credential, because a
+        report counts only through an allowlisted reporter signature and its correlation
+        to an accepted delivery. No report content, address or reporter text is stored or
+        returned.
+      responses:
+        '200':
+          description: Current state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FeedbackLoops' }
+        '503': { description: Unavailable }
+        default: { $ref: '#/components/responses/Error' }
+  /feedback-loops/mailbox:
+    post:
+      operationId: createFeedbackMailbox
+      description: >-
+        Creates the single feedback mailbox. When one exists, rotate must be true (409
+        otherwise); rotating makes the previous address stop receiving at once, and every
+        feedback loop must be re-registered with the new address. 409 also when this
+        replica has no bounce domain. Needs the open gate. Audited as
+        feedback.mailbox.created or feedback.mailbox.rotated with no app and never the token.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                rotate: { type: boolean }
+      responses:
+        '200':
+          description: The new address
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [address]
+                properties:
+                  address: { type: string }
+        '409': { description: A mailbox exists and rotate was not set, or no bounce domain is configured }
+        default: { $ref: '#/components/responses/Error' }
+  /feedback-loops/reporters:
+    put:
+      operationId: setFeedbackReporters
+      description: >-
+        Replaces the reporter DKIM domain allowlist (at most 32 ASCII domains, normalized,
+        duplicates removed). A report is accepted only with a valid DKIM signature whose d=
+        equals or is a subdomain of a listed domain; an empty list accepts nothing. Needs
+        the open gate. Audited as feedback.reporters.updated with no app; an identical list
+        changes and audits nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [domains]
+              properties:
+                domains: { type: array, maxItems: 32, items: { type: string, maxLength: 253 } }
+      responses:
+        '200':
+          description: The stored list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [domains]
+                properties:
+                  domains: { type: array, items: { type: string } }
+        default: { $ref: '#/components/responses/Error' }
+  /retry-policy:
+    put:
+      operationId: setRetryPolicy
+      description: >-
+        Replaces the delivery retry policy. It applies to future scheduling only; retry times
+        already set are unchanged. Needs the open gate (503 while it is closed). A stale
+        expected_revision returns 409. Identical values change nothing and write no audit row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [max_attempts, initial_delay_ms, max_delay_ms, max_age_ms, expected_revision]
+              properties:
+                max_attempts: { type: integer, minimum: 1, maximum: 1000 }
+                initial_delay_ms: { type: integer, minimum: 60000, maximum: 86400000 }
+                max_delay_ms: { type: integer, minimum: 60000, maximum: 86400000, description: At least initial_delay_ms. }
+                max_age_ms: { type: integer, minimum: 3600000, maximum: 2592000000, description: At least initial_delay_ms. }
+                expected_revision: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: The stored policy after the update
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RetryPolicy' }
+        '409': { description: expected_revision is stale }
+        '503': { description: The runtime gate is closed or the store is unavailable }
+        default: { $ref: '#/components/responses/Error' }
+  /apps:
+    get:
+      operationId: listApps
+      responses:
+        '200':
+          description: Applications
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [apps]
+                properties:
+                  apps:
+                    type: array
+                    items: { $ref: '#/components/schemas/App' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createApp
+      description: >-
+        Creates an app. sending_ip_id optionally pins it to a sending IP (404 when the
+        IP does not exist); without it the app uses the Edge's primary address. The
+        pin is audited as app.sending_ip.updated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 128, description: At most 128 UTF-8 bytes; no surrounding whitespace or control characters. }
+                sending_ip_id: { $ref: '#/components/schemas/Id' }
+      responses:
+        '201':
+          description: Application created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/App' }
+        default: { $ref: '#/components/responses/Error' }
+  /sending-ips:
+    get:
+      operationId: listSendingIps
+      description: >-
+        The named sending IPs and what the Edge reported at its last session start. The
+        Edge's first reported address (its primary) is every app's default, and apps with
+        no assignment send from it. on_edge and bounce_on_edge are null (unknown) when the
+        Edge reported no sources, for example an older Edge or no report yet. Reads in a
+        read-only transaction and works while the runtime gate is closed.
+      responses:
+        '200':
+          description: The pool
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SendingIps' }
+        '503': { description: Unavailable }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createSendingIp
+      description: >-
+        Names an outbound address. The address must be a public IPv4 literal; the name a
+        lowercase slug (it appears in logs, the address never does). A row names an
+        address, it does not make the Edge able to send from it: the address must also be
+        declared in the Edge's configuration. 409 for a duplicate name or address or a pool
+        of 64. Needs the open gate. Audited as sending_ip.created with no app and no address.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, address, helo_name, bounce_domain]
+              properties:
+                name: { type: string, pattern: '^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$' }
+                address: { type: string, description: Public IPv4 literal. }
+                helo_name: { type: string, minLength: 3, maxLength: 253, description: Lowercase DNS name the Edge greets with from this address; its reverse DNS should match. }
+                bounce_domain: { type: string, minLength: 3, maxLength: 219, description: Lowercase domain of the return path for mail sent from this address; its SPF record must list the address. Must be the helo_name or a domain it belongs to, which the Edge accepts as a bounce domain. }
+      responses:
+        '201':
+          description: The new row
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SendingIp' }
+        '409': { description: Duplicate name or address, or the pool is full }
+        default: { $ref: '#/components/responses/Error' }
+  /sending-ips/{sendingIpId}:
+    parameters:
+      - { $ref: '#/components/parameters/SendingIpId' }
+    patch:
+      operationId: updateSendingIp
+      description: >-
+        Edits the name, HELO name or bounce domain; at least one is required. The address
+        never changes: a different address is a new row. The new HELO name and bounce
+        domain apply from the next delivery claimed. Keep a retired bounce domain's MX
+        record until late bounces stop arriving. An identical request changes and audits
+        nothing. Needs the open gate. Audited as sending_ip.updated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                name: { type: string, pattern: '^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$' }
+                helo_name: { type: string, minLength: 3, maxLength: 253 }
+                bounce_domain: { type: string, minLength: 3, maxLength: 219 }
+      responses:
+        '200':
+          description: The updated row
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SendingIp' }
+        '404': { description: No such sending IP }
+        '409': { description: The name is already used }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteSendingIp
+      description: >-
+        Removes an unused row. 409 while any app is assigned the IP (including a race with a
+        concurrent assignment). Delivery history keeps the address. Needs the open gate.
+        Audited as sending_ip.deleted.
+      responses:
+        '204': { description: Deleted }
+        '404': { description: No such sending IP }
+        '409': { description: An app uses this IP }
+        default: { $ref: '#/components/responses/Error' }
+  /sending-ips/{sendingIpId}/check-dns:
+    parameters:
+      - { $ref: '#/components/parameters/SendingIpId' }
+    post:
+      operationId: checkSendingIpDns
+      description: >-
+        An advisory DNS check, read from public DNS under an 8 second limit. Nothing is
+        stored or logged. bounce_spf looks for an ip4: entry (single address or range) or
+        an a entry (bare a or a:name, optional /bits; at most two names resolved) in the
+        bounce domain's SPF record; includes and redirects are not followed,
+        so "mismatch" can be a false alarm for a record that lists the address through an include.
+      responses:
+        '200':
+          description: The result of each check
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SendingIpDnsCheck' }
+        '404': { description: No such sending IP }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/sending-ip:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: getAppSendingIp
+      responses:
+        '200':
+          description: The app's sending IP; null means the Edge's primary address
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppSendingIp' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: setAppSendingIp
+      description: >-
+        Assigns the app's sending IP, or null for the Edge's primary address. Queued and
+        retried deliveries use the new IP at their next claim; an attempt already with the
+        Edge finishes on the old one. A delivery whose IP the Edge did not report stays
+        queued; it is never sent from another address. Needs the open gate. Audited as
+        app.sending_ip.updated (an identical assignment changes and audits nothing).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [sending_ip_id]
+              properties:
+                sending_ip_id:
+                  oneOf:
+                    - { $ref: '#/components/schemas/Id' }
+                    - { type: 'null' }
+      responses:
+        '200':
+          description: The stored assignment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppSendingIp' }
+        '404': { description: No such app or sending IP }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/deactivate:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    post:
+      operationId: deactivateApp
+      description: >-
+        Pause new submissions, new preparation and delivery claims, new SMTP
+        authorizations, and new webhook claims for this app. A claim already
+        in progress, an SMTP attempt authorized before the pause, or an
+        in-flight webhook may still complete. A previously authorized permit
+        may reach Edge after the pause. Existing keys remain valid on
+        reactivation; queued work is retained.
+      responses:
+        '204': { description: App deactivated or already inactive; transitions are audited }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/activate:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    post:
+      operationId: activateApp
+      description: >-
+        Reactivate an app. Existing unrevoked keys and queued work become
+        eligible again, subject to all other runtime and recipient controls.
+      responses:
+        '204': { description: App activated or already active; transitions are audited }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/recipient-quota:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: getRecipientQuota
+      responses:
+        '200':
+          description: Current UTC day recipient limit and usage
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecipientQuota' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: setRecipientQuota
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [daily_limit]
+              properties:
+                daily_limit: { type: integer, minimum: 0, maximum: 1000000, description: Zero disables new submissions. }
+      responses:
+        '200':
+          description: Updated quota; changing the limit does not reset usage
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecipientQuota' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/tracking-quota:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: getTrackingQuota
+      responses:
+        '200':
+          description: Per-app tracking event budget and aggregate suppressed visits
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrackingQuota' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: setTrackingQuota
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [daily_limit]
+              properties:
+                daily_limit: { type: integer, minimum: 0, maximum: 1000000, description: Zero disables event recording; links still resolve. }
+      responses:
+        '200':
+          description: Audited limit change; it does not reset current usage
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrackingQuota' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/list-unsubscribe:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: getListUnsubscribe
+      responses:
+        '200':
+          description: The app's Thinpost-managed one-click unsubscribe opt-in (off by default)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListUnsubscribe' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: setListUnsubscribe
+      description: >-
+        Audited as app.list_unsubscribe.updated (an identical value changes and
+        audits nothing). While enabled, preparation adds an RFC 8058
+        List-Unsubscribe and List-Unsubscribe-Post header with a signed
+        one-click URL on the tracking origin to every message, and a request that
+        carries its own List-Unsubscribe headers is rejected (400). Enabling
+        returns 409 when the serving replica has no tracking runtime (keys and
+        origin) or its tracking origin is not ASCII (a non-ASCII host cannot appear
+        in a List-Unsubscribe header); disabling is always allowed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200':
+          description: The stored opt-in
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListUnsubscribe' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/tracking-defaults:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: getTrackingDefaults
+      responses:
+        '200':
+          description: The app's open and click tracking defaults (both off by default)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrackingDefaults' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: setTrackingDefaults
+      description: >-
+        Audited as app.tracking_defaults.updated with the previous and new
+        values (an identical value changes and audits nothing). A default
+        applies to messages accepted afterwards, only to HTML messages, and only
+        for a kind the request left unset: an explicit per-message value, on or
+        off, always wins (Postmark TrackOpens/TrackLinks, SendGrid
+        tracking_settings, Mailgun o:tracking-opens/o:tracking-clicks, Resend
+        X-Thinpost-Track-Opens/X-Thinpost-Track-Clicks). A default never rejects
+        a message: a message without HTML is sent untracked, and if the message is
+        too large or has too many links to rewrite, the clicks default is dropped
+        first, then the opens default. The message's own choices always stand. Defaults are ignored when the tracking runtime is
+        not configured. Turning a default on returns 409 when the serving replica
+        has no tracking runtime; turning one off, or resending an unchanged value,
+        is always allowed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [opens, clicks]
+              properties:
+                opens: { type: boolean }
+                clicks: { type: boolean }
+      responses:
+        '200':
+          description: The stored defaults
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrackingDefaults' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/pending-quota:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: getPendingQuota
+      responses:
+        '200':
+          description: Pending-message limit and approximate current count
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PendingQuota' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: setPendingQuota
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [limit]
+              properties:
+                limit: { type: integer, minimum: 0, maximum: 100000, description: Zero disables new submissions. }
+      responses:
+        '200':
+          description: Updated limit and approximate pending count
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PendingQuota' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/submission-rate:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: getSubmissionRate
+      responses:
+        '200':
+          description: Per-app shared upload rate and burst capacity
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubmissionRate' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: setSubmissionRate
+      description: >-
+        Both fields zero disable uploads. Otherwise both must be positive.
+        A reservation is charged before upload, including retries and requests
+        that later fail. Batch requests are charged for every message.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmissionRate' }
+      responses:
+        '200':
+          description: Audited submission rate update
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubmissionRate' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/keys:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: listAppKeys
+      responses:
+        '200':
+          description: Key metadata without secrets
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys:
+                    type: array
+                    items: { $ref: '#/components/schemas/Key' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: issueAppKey
+      requestBody: { $ref: '#/components/requestBodies/Name' }
+      responses:
+        '201':
+          description: Key created; secret is shown only in this response
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [key, secret]
+                properties:
+                  key: { $ref: '#/components/schemas/Key' }
+                  secret: { type: string, readOnly: true }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/domains:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: listAppDomains
+      responses:
+        '200':
+          description: Sender domains and ownership-verification status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [domains]
+                properties:
+                  domains:
+                    type: array
+                    items: { $ref: '#/components/schemas/Domain' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: requestAppDomain
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [domain]
+              properties:
+                domain: { type: string, description: ASCII DNS domain; use punycode for IDNs. }
+      responses:
+        '201':
+          description: Publish this TXT challenge; a pending challenge can be reissued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [domain, dns_name, dns_value]
+                properties:
+                  domain: { $ref: '#/components/schemas/Domain' }
+                  dns_name: { type: string }
+                  dns_value: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/domains/{domain}/verify:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: domain
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: verifyAppDomain
+      responses:
+        '200':
+          description: TXT challenge observed and domain activated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Domain' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/inbound-limits:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: getInboundLimits
+      responses:
+        '200':
+          description: The app's inbound limits (defaults 2000 per day and 500 pending)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboundLimits' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: setInboundLimits
+      description: >-
+        Replaces both limits; a rejected request changes nothing. Audited as
+        app.inbound_limits.updated with the previous and new values.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InboundLimits' }
+      responses:
+        '200':
+          description: The stored limits
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboundLimits' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/inbound-domains:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: listInboundDomains
+      responses:
+        '200':
+          description: The app's receiving domains, and the mail host their MX record should name
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [domains]
+                properties:
+                  domains:
+                    type: array
+                    items: { $ref: '#/components/schemas/InboundDomain' }
+                  mx_host:
+                    type: string
+                    description: Absent when this deployment has no inbound mail host configured.
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: requestInboundDomain
+      description: >-
+        Starts (or restarts, while pending) a claim. Several apps may hold a pending
+        claim on one domain; the first to verify owns it. The bounce domain, the
+        Thinpost mail host and their subdomains are refused with 400. The challenge
+        value is shown only in this response. Audited as inbound_domain.requested.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [domain]
+              properties:
+                domain: { type: string, description: ASCII DNS domain; use punycode for IDNs. }
+      responses:
+        '201':
+          description: Publish this TXT record, and point the domain's MX record at mx_host
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [domain, dns_name, dns_value]
+                properties:
+                  domain: { $ref: '#/components/schemas/InboundDomain' }
+                  dns_name: { type: string, description: Shared with the sender-domain challenge (_thinpost.<domain>). }
+                  dns_value: { type: string, description: 'thinpost-inbound-verification=...' }
+                  mx_host: { type: string }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/inbound-domains/{domain}:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - { name: domain, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: deleteInboundDomain
+      description: Removes a claim or an owned domain, freeing the name. Audited as inbound_domain.deleted.
+      responses:
+        '204': { description: Domain removed }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/inbound-domains/{domain}/verify:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - { name: domain, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: verifyInboundDomain
+      description: >-
+        Looks up the TXT challenge and activates the domain. 409 when the record
+        does not match or another app already owns the domain (the first
+        verification wins). Idempotent for a verified domain. Audited as
+        inbound_domain.verified.
+      responses:
+        '200':
+          description: The domain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboundDomain' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/inbound-domains/{domain}/check-mx:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - { name: domain, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: checkInboundDomainMx
+      description: >-
+        Looks up the domain's MX records and stores the result with the check time.
+        Informational: it never changes whether the domain receives mail. 503 when
+        this deployment has no inbound mail host configured. Audited as
+        inbound_domain.mx_checked.
+      responses:
+        '200':
+          description: The domain with its stored MX status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboundDomain' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/inbound-domains/{domain}/disable:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - { name: domain, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: disableInboundDomain
+      description: Idempotent. A pending claim returns 409. Audited as inbound_domain.disabled when it changes state.
+      responses:
+        '200':
+          description: The domain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboundDomain' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/inbound-domains/{domain}/enable:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - { name: domain, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: enableInboundDomain
+      description: Idempotent. A pending claim returns 409. Audited as inbound_domain.enabled when it changes state.
+      responses:
+        '200':
+          description: The domain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboundDomain' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/inbound-messages:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      - name: cursor
+        in: query
+        schema: { type: string, maxLength: 512 }
+    get:
+      operationId: listInboundMessages
+      description: >-
+        Newest-first metadata of mail the app received. Not audited. The subject of an
+        Enhanced Protection message is withheld in the database query. Only limit and cursor
+        are accepted: there is no search and no filter (addresses and terms never belong in a
+        URL). next_cursor encodes only a timestamp and a message ID.
+      responses:
+        '200':
+          description: Page of inbound message metadata; no bodies
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboundMessagePage' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/inbound-messages/{inboundId}:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - { $ref: '#/components/parameters/InboundId' }
+    get:
+      operationId: getInboundMessage
+      description: >-
+        Envelope, recorded header fields, authentication results and correlation. Reads no
+        object and is not audited; the subject of an Enhanced Protection message is withheld.
+        404 for another app's ID.
+      responses:
+        '200':
+          description: Metadata only
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboundMessageDetail' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/inbound-messages/{inboundId}/content:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - { $ref: '#/components/parameters/InboundId' }
+    get:
+      operationId: getInboundMessageContent
+      description: >-
+        Decoded headers and the first text and HTML parts, in the MessageBody shape, from the
+        same bounded decoding the inbound webhook uses (bodies over 1 MiB or in an unknown
+        charset are left out and named in omitted). Attachments are not listed. For an
+        Enhanced Protection message an inbound.body.read audit record commits before the object
+        is read. After content_expires_at (database clock), or when the stored object is gone,
+        the answer is 409 with the constant body {"error":"content_expired"}.
+      responses:
+        '200':
+          description: Message contents; sensitive and not cacheable
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageBody' }
+        '409':
+          description: Content expired (retention) or removed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string, const: content_expired }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/inbound-messages/{inboundId}/raw:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - { $ref: '#/components/parameters/InboundId' }
+    get:
+      operationId: downloadInboundMessageRaw
+      description: >-
+        The message as an .eml download: exactly the bytes of the webhook's raw field before
+        base64 (Thinpost's Authentication-Results and Received fields prepended, any field of
+        the incoming message that claims Thinpost's authserv-id removed). Served with
+        Content-Disposition attachment, filename inbound-{id}.eml, and Cache-Control no-store.
+        For an Enhanced Protection message an inbound.raw.read audit record commits first.
+        Expired content is refused with 409 as for content.
+      responses:
+        '200':
+          description: Raw message
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '409':
+          description: Content expired (retention) or removed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error: { type: string, const: content_expired }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/inbound-messages/{inboundId}/webhook-deliveries:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - { $ref: '#/components/parameters/InboundId' }
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      - name: cursor
+        in: query
+        schema: { type: string, maxLength: 512 }
+    get:
+      operationId: listInboundMessageWebhookDeliveries
+      description: >-
+        The webhook event history of one received message: the same rows and the same audit
+        record (webhook.delivery.list) as the app-wide history, narrowed to this message.
+        Attempts and replay use the app-wide routes.
+      responses:
+        '200':
+          description: Page of delivery metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deliveries]
+                properties:
+                  deliveries: { type: array, items: { $ref: '#/components/schemas/WebhookDelivery' } }
+                  next_cursor: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/keys/{keyId}:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: keyId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    delete:
+      operationId: revokeAppKey
+      responses:
+        '204': { description: Key revoked }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/suppressions:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: listAppSuppressions
+      description: >-
+        The app's suppression list, newest first. Only reason, limit and cursor are
+        accepted as query keys. The cursor is opaque and encodes a timestamp and
+        suppression ID. Not audited. Requires the open gate.
+      parameters:
+        - { name: reason, in: query, schema: { $ref: '#/components/schemas/SuppressionReason' } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 512 } }
+      responses:
+        '200':
+          description: One page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuppressionPage' }
+        '400': { description: Unknown or malformed query key }
+        '503': { description: Gate closed or database unavailable }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: addAppSuppressions
+      description: >-
+        Adds addresses as manual entries with origin console, in one transaction.
+        Addresses are accepted only in the body. Any invalid entry fails the whole
+        request with 400. One row per app and case-insensitive address: an address
+        already on the list is reported as exists and keeps its first reason.
+        Audited as suppression.added with the suppression ID, reason and origin;
+        the address is never recorded.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [addresses]
+              properties:
+                addresses:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { type: string, minLength: 3, maxLength: 998, description: A bare mailbox; display names are rejected. }
+      responses:
+        '200':
+          description: One result per submitted address, in order
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: '#/components/schemas/SuppressionResult' }
+        '400': { description: Invalid request }
+        '404': { description: Unknown app }
+        '503': { description: Gate closed or database unavailable }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/suppressions/search:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    post:
+      operationId: searchAppSuppressions
+      description: >-
+        Newest-first search. The term is accepted only in the body so it never
+        reaches access logs; a query string is rejected. field address matches an
+        address prefix, field domain matches the exact recipient domain; both are
+        case-insensitive. Not audited.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [q]
+              properties:
+                q: { type: string, minLength: 1, maxLength: 254 }
+                field: { type: string, enum: [address, domain], default: address }
+                reason: { $ref: '#/components/schemas/SuppressionReason' }
+                cursor: { type: string, maxLength: 512 }
+                limit: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        '200':
+          description: One page
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SuppressionPage' }
+        '400': { description: Invalid request }
+        '503': { description: Gate closed, database unavailable or timed out }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/suppressions/delete:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    post:
+      operationId: deleteAppSuppressions
+      description: >-
+        Removes entries by suppression ID, so no address appears in a URL. Unknown
+        IDs and IDs of other apps are ignored. Removal does not resend deliveries
+        already dropped. Audited as suppression.removed per removed entry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { $ref: '#/components/schemas/Id' }
+      responses:
+        '200':
+          description: Number of entries removed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted: { type: integer, minimum: 0, maximum: 100 }
+        '400': { description: Invalid request }
+        '404': { description: Unknown app }
+        '503': { description: Gate closed or database unavailable }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/webhooks:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: listAppWebhooks
+      description: Lists the app's non-deleted webhook endpoints ordered by creation. Secrets, passwords and header values are never returned. Returns 503 when webhook secret encryption is not configured.
+      responses:
+        '200':
+          description: App webhook endpoints without secrets
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [webhooks]
+                properties:
+                  webhooks: { type: array, items: { $ref: '#/components/schemas/Webhook' } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createAppWebhook
+      description: >-
+        Creates an enabled endpoint in the chosen format (default thinpost; fixed
+        for the endpoint's life) and generates the format's signing secret, returned
+        only in this response; postmark endpoints are unsigned and have none.
+        A lost response is recovered by rotating the secret.
+        At most ten endpoints may be enabled for an app (409). The URL must be HTTPS
+        on port 443 with a public DNS name; a query string is allowed. The one
+        exception is a URL that exactly matches an entry of the operator's
+        internal destination list (THINPOST_WEBHOOK_INTERNAL_DESTINATIONS): it
+        may use http and any port, and is delivered only to an address inside the
+        configured Service CIDRs. Any other URL is 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookCreate' }
+      responses:
+        '201':
+          description: Endpoint created; configuration and audit committed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IssuedWebhook' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/webhooks/{webhookId}:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - { $ref: '#/components/parameters/WebhookId' }
+    patch:
+      operationId: updateAppWebhook
+      description: >-
+        Changes the endpoint, description, event filter, HTTP authentication or enabled
+        state; the format cannot be changed (400). A changed URL or authentication
+        applies to queued and retrying deliveries at their next attempt. An empty
+        events list means every event of the format; events must belong to the
+        endpoint's format (400). An auth object replaces the authentication and
+        an empty object removes it. Enabling is refused (409) beyond ten enabled endpoints.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookUpdate' }
+      responses:
+        '200':
+          description: Endpoint updated; configuration and audit committed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Webhook' }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteAppWebhook
+      description: >-
+        Permanently deletes the endpoint and destroys its secret. Queued and retrying
+        deliveries become cancelled, an in-flight attempt is recorded as unknown and may
+        still have reached the receiver, and history is kept. Deleted endpoints cannot be replayed.
+      responses:
+        '204': { description: Endpoint deleted; configuration and audit committed }
+        '404': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/webhooks/{webhookId}/rotate-secret:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - { $ref: '#/components/parameters/WebhookId' }
+    post:
+      operationId: rotateAppWebhookSecret
+      description: >-
+        Replaces the signing secret with no overlap and returns the new secret once.
+        Queued and retrying deliveries are signed with the new secret at their next
+        attempt, so the receiver must be updated promptly. Refused (409) for postmark
+        endpoints, which have no secret.
+      responses:
+        '200':
+          description: Secret rotated; configuration and audit committed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IssuedWebhook' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/webhooks/{webhookId}/test:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - { $ref: '#/components/parameters/WebhookId' }
+    post:
+      operationId: testAppWebhook
+      description: >-
+        Sends one test event in the endpoint's format and reports the result. A thinpost
+        endpoint receives outcome "test"; provider formats receive their primary
+        delivered event with all-zero IDs, the recipient test@example.com and an
+        X-Thinpost-Test header. It is never queued, retried or added to delivery
+        history; only an audit record is written.
+      responses:
+        '200':
+          description: The test was attempted; success reflects the receiver's response
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebhookTestResult' }
+        '404': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/webhook-deliveries:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      - name: cursor
+        in: query
+        schema: { type: string, maxLength: 512 }
+    get:
+      operationId: listWebhookDeliveries
+      responses:
+        '200':
+          description: Audited page of app-scoped delivery metadata without endpoints, secrets, payloads or claim tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deliveries]
+                properties:
+                  deliveries: { type: array, items: { $ref: '#/components/schemas/WebhookDelivery' } }
+                  next_cursor: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/webhook-deliveries/{eventId}/{subscriptionId}/attempts:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: eventId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+      - name: subscriptionId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    get:
+      operationId: listWebhookDeliveryAttempts
+      responses:
+        '200':
+          description: Audited latest 50 attempts; attempt IDs and claim tokens are omitted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [attempts, truncated]
+                properties:
+                  attempts: { type: array, items: { $ref: '#/components/schemas/WebhookAttempt' } }
+                  truncated: { type: boolean }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/webhook-deliveries/{eventId}/{subscriptionId}/replay:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: eventId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+      - name: subscriptionId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    post:
+      operationId: replayWebhookDelivery
+      description: >-
+        Requeue a failed delivery to its enabled, undeleted endpoint.
+        The event ID stays the same; a prior attempt may already have reached
+        the receiver, which must deduplicate. A repeat while queued or in flight
+        returns a conflict. This is not an idempotency guarantee after a later failure.
+      responses:
+        '204': { description: Replay and audit record committed }
+        '409': { description: Delivery is not failed, or its app is inactive or its endpoint is disabled or deleted }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/messages:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: limit
+        in: query
+        schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      - name: cursor
+        in: query
+        schema: { type: string, maxLength: 512 }
+    get:
+      operationId: listAppMessages
+      description: >-
+        Newest-first message metadata with recorded recipients (first 3) and sender
+        domain. Not audited. The subject of an Enhanced Protection message is withheld
+        in the database query and flagged with subject_masked. Unknown query keys are rejected.
+      responses:
+        '200':
+          description: Page of message metadata; no bodies
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessagePage' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/messages/search:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    post:
+      operationId: searchAppMessages
+      description: >-
+        Filtered newest-first history. Search terms are accepted only in the body so
+        they never reach access logs; a query string is rejected. Not audited.
+        Enhanced Protection messages never match by subject. Domain fields match the
+        exact domain or any subdomain. next_cursor encodes only a timestamp and message ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MessageSearch' }
+      responses:
+        '200':
+          description: Matching messages
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessagePage' }
+        '400': { description: Invalid request or no searchable form of q for the field }
+        '503': { description: Database unavailable or timed out }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/messages/{messageId}:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: messageId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    get:
+      operationId: getAppMessage
+      responses:
+        '200':
+          description: >-
+            Metadata, all recorded recipients and delivery states; no bodies. Not audited;
+            the subject of an Enhanced Protection message is withheld.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, deliveries]
+                properties:
+                  message: { $ref: '#/components/schemas/MessageSummary' }
+                  deliveries:
+                    type: array
+                    items: { $ref: '#/components/schemas/DeliverySummary' }
+                  preparation_failure:
+                    type: object
+                    description: Present when preparation is held; the reason never contains message content.
+                    required: [attempts, reason]
+                    properties:
+                      attempts: { type: integer, minimum: 1, maximum: 12 }
+                      reason: { type: string, enum: [source_read, source_invalid, signing_key, mime_build, object_write, queue_commit, internal, lease_expired] }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/messages/{messageId}/subject:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: messageId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    get:
+      operationId: getAppMessageSubject
+      description: Recorded subject. For Enhanced Protection an audit record (message ID only) commits first.
+      responses:
+        '200':
+          description: Subject
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [subject]
+                properties:
+                  subject: { type: string, maxLength: 998 }
+        '404': { description: Message not found for this app }
+        '409': { description: No subject was recorded for this message }
+        '503': { description: Database unavailable or timed out }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/messages/{messageId}/deliveries/{deliveryId}/retry-policy-hold:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: messageId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+      - name: deliveryId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    post:
+      operationId: retryDeliveryPolicyHold
+      description: >-
+        Requeue an app-scoped delivery held by recipient policy. Trusted and
+        Edge independently recheck policy before SMTP; if either still denies
+        the recipient the delivery returns to the hold. This is not an SMTP
+        retry and does not override the allowlist.
+      responses:
+        '204': { description: Delivery requeued and audit record committed }
+        '409': { description: The app is inactive or the delivery is not held by recipient policy }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/messages/{messageId}/deliveries/{deliveryId}/abandon-tracking-hold:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: messageId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+      - name: deliveryId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    post:
+      operationId: abandonDeliveryTrackingHold
+      description: >-
+        Mark a delivery held before SMTP because tracking is unavailable as
+        failed. This does not resend its MIME and cannot resolve an uncertain
+        SMTP attempt. The decision, audit and application event are atomic.
+      responses:
+        '204': { description: Delivery marked failed and audit and application event committed }
+        '409': { description: The delivery is not held for unavailable tracking }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/messages/{messageId}/retry-preparation:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: messageId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    post:
+      operationId: retryMessagePreparation
+      responses:
+        '204': { description: Audited retry of a message held after preparation failures }
+        '409': { description: The message is not held for preparation failure }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/messages/{messageId}/body:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: messageId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    get:
+      operationId: getAppMessageBody
+      description: >-
+        Source message contents with attachment metadata. Audited (message.body.read)
+        before the object is read when the message uses Enhanced Protection; not audited otherwise.
+      responses:
+        '200':
+          description: Source message contents; sensitive and not cacheable
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageBody' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/messages/{messageId}/attachments/{index}:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: messageId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+      - name: index
+        in: path
+        required: true
+        schema: { type: integer, minimum: 0, maximum: 19 }
+    get:
+      operationId: downloadAppMessageAttachment
+      description: >-
+        Submitted attachment bytes, always application/octet-stream (the submitted
+        content type is never used). Audited (message.attachment.read) before bytes
+        are sent when the message uses Enhanced Protection. A non-canonical index
+        (sign, leading zero) is 404.
+      responses:
+        '200':
+          description: Attachment bytes
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: attachment with an RFC 2231 filename
+            Cache-Control:
+              schema: { type: string, const: no-store }
+            X-Content-Type-Options:
+              schema: { type: string, const: nosniff }
+            Cross-Origin-Resource-Policy:
+              schema: { type: string, const: same-origin }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '404': { description: Message or attachment index not found }
+        '503': { description: Object storage unavailable or not configured }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/messages/{messageId}/deliveries/{deliveryId}/headers:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: messageId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+      - name: deliveryId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    get:
+      operationId: getAppDeliveryHeaders
+      description: >-
+        Header fields of the signed per-recipient MIME object (final object) in stored
+        order, unfolded. Deliveries exist only after preparation. Audited
+        (message.delivery.headers.read) for Enhanced Protection messages.
+      responses:
+        '200':
+          description: Headers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [headers]
+                properties:
+                  headers:
+                    type: array
+                    maxItems: 100
+                    items: { $ref: '#/components/schemas/HeaderField' }
+        '404': { description: Message or delivery not found for this app, including not yet prepared }
+        '503': { description: Object storage unavailable or not configured, or object unreadable }
+        default: { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+  parameters:
+    AppId:
+      name: appId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Id' }
+    InboundId:
+      name: inboundId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Id' }
+    SendingIpId:
+      name: sendingIpId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Id' }
+    WebhookId:
+      name: webhookId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Id' }
+  requestBodies:
+    Name:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [name]
+            properties:
+              name: { type: string, minLength: 1, maxLength: 128, description: At most 128 UTF-8 bytes; no surrounding whitespace or control characters. }
+  responses:
+    Error:
+      description: Request failed; no internal error details are exposed
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: { type: string }
+  schemas:
+    RuntimeInfo:
+      type: object
+      required: [features]
+      properties:
+        features:
+          type: object
+          required: [submission, tracking]
+          properties:
+            submission: { type: boolean }
+            tracking: { type: boolean }
+        tracking:
+          type: object
+          required: [origin, link_event_limit]
+          description: Present only when tracking is enabled.
+          properties:
+            origin: { type: string }
+            link_event_limit: { type: integer, minimum: 1, maximum: 1000, description: Events recorded per tracking link. }
+    RetryPolicy:
+      type: object
+      required: [max_attempts, initial_delay_ms, max_delay_ms, max_age_ms, revision, changed_at]
+      properties:
+        max_attempts: { type: integer }
+        initial_delay_ms: { type: integer }
+        max_delay_ms: { type: integer }
+        max_age_ms: { type: integer }
+        revision: { type: integer, minimum: 1 }
+        changed_at: { type: string, format: date-time }
+        changed_by: { type: string, description: 'Operator subject, or migration:033 for the migrated value.' }
+    Operations:
+      type: object
+      required: [generated_at, gate, workers, messages, deliveries, webhooks, inbound, retry_policy]
+      properties:
+        generated_at: { type: string, format: date-time, description: Database clock. }
+        gate:
+          type: object
+          required: [mode, revision, changed_at, generation_matches, quarantine_complete]
+          properties:
+            mode: { type: string, enum: [open, closed, recovery] }
+            revision: { type: integer }
+            changed_at: { type: string, format: date-time }
+            changed_by: { type: string, description: 'Actor label such as deploy:ns/release:rN or an operator name.' }
+            generation_matches: { type: boolean, description: Whether the stored generation equals this replica's. The generation is never returned. }
+            quarantine_complete: { type: boolean }
+        workers:
+          type: array
+          items:
+            type: object
+            required: [worker_id, controller_id, epoch, expires_at, live]
+            properties:
+              worker_id: { type: string }
+              controller_id: { type: string }
+              epoch: { type: integer }
+              expires_at: { type: string, format: date-time }
+              live: { type: boolean, description: 'Lease not expired by the database clock. This does not prove SMTP reachability.' }
+        messages:
+          type: object
+          required: [queued_due, queued_waiting, preparing, preparation_failed, recovery_hold]
+          properties:
+            queued_due: { type: integer }
+            queued_waiting: { type: integer }
+            preparing: { type: integer }
+            preparation_failed: { type: integer }
+            recovery_hold: { type: integer }
+            oldest_due_at: { type: string, format: date-time }
+        deliveries:
+          type: object
+          required: [queued_due, queued_waiting, in_flight, uncertain, recipient_policy_held, tracking_held, recovery_hold]
+          properties:
+            queued_due: { type: integer }
+            queued_waiting: { type: integer }
+            in_flight: { type: integer }
+            uncertain: { type: integer }
+            recipient_policy_held: { type: integer }
+            tracking_held: { type: integer }
+            recovery_hold: { type: integer }
+            oldest_due_at: { type: string, format: date-time }
+        webhooks:
+          type: object
+          required: [queued_due, queued_waiting, in_flight, recovery_hold]
+          properties:
+            queued_due: { type: integer }
+            queued_waiting: { type: integer }
+            in_flight: { type: integer }
+            recovery_hold: { type: integer }
+            oldest_due_at: { type: string, format: date-time }
+        inbound:
+          type: object
+          description: Received mail for the current UTC day across all apps, from the daily counters the per-app cap uses. correlated is a subset of accepted.
+          required: [day, accepted, correlated, duplicate, tempfail_routing, tempfail_limit, tempfail_internal]
+          properties:
+            day: { type: string, format: date, description: The UTC day counted (database clock). }
+            accepted: { type: integer }
+            correlated: { type: integer }
+            duplicate: { type: integer }
+            tempfail_routing: { type: integer }
+            tempfail_limit: { type: integer }
+            tempfail_internal: { type: integer }
+        retry_policy: { $ref: '#/components/schemas/RetryPolicy' }
+    AttentionPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [app_id, app_name, message_id, kind, since]
+            properties:
+              app_id: { $ref: '#/components/schemas/Id' }
+              app_name: { type: string }
+              message_id: { $ref: '#/components/schemas/Id' }
+              delivery_id: { $ref: '#/components/schemas/Id' }
+              kind: { type: string, enum: [uncertain, recipient_policy_held, tracking_held, preparation_failed, recovery_hold] }
+              since: { type: string, format: date-time, description: When the message was accepted. }
+        next_cursor: { type: string }
+    DeliveryTracking:
+      type: object
+      required: [opens, clicks]
+      description: >-
+        Recorded engagement. Counts are events kept after the per-link and daily caps, so they can
+        undercount, and they include scanner and proxy fetches.
+      properties:
+        opens: { type: integer, minimum: 0 }
+        clicks: { type: integer, minimum: 0 }
+        last_event_at: { type: string, format: date-time }
+    Id: { type: string, pattern: '^[0-9a-f]{32}$' }
+    WebhookDelivery:
+      type: object
+      required: [event_id, subscription_id, outcome, state, attempts, occurred_at]
+      properties:
+        event_id: { $ref: '#/components/schemas/Id' }
+        subscription_id: { $ref: '#/components/schemas/Id' }
+        message_id: { $ref: '#/components/schemas/Id', description: The outbound message; absent for an inbound_received event. }
+        inbound_id: { $ref: '#/components/schemas/Id', description: The inbound message of an inbound_received event; absent for outbound events. }
+        delivery_id: { $ref: '#/components/schemas/Id' }
+        outcome: { type: string }
+        state: { type: string, enum: [queued, in_flight, delivered, failed, cancelled, recovery_hold] }
+        attempts: { type: integer, minimum: 0, maximum: 12, description: Attempts in the current automatic retry cycle; reset on replay }
+        occurred_at: { type: string, format: date-time }
+        next_attempt_at: { type: string, format: date-time }
+        delivered_at: { type: string, format: date-time }
+    WebhookAttempt:
+      type: object
+      required: [state, started_at]
+      properties:
+        state: { type: string, enum: [in_flight, succeeded, failed, unknown, content_unavailable, deferred], description: 'content_unavailable ends an inbound delivery whose stored message is gone or past its retention; it is not retried and cannot be replayed. deferred means an inbound delivery was put back in the queue without being sent (the server was busy); it does not count as an attempt.' }
+        http_status: { type: integer, minimum: 0, maximum: 599, description: Zero indicates a transport failure; absent for an unfinished or unknown attempt }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+    WebhookOutcome:
+      type: string
+      enum: [accepted, rejected, route_rejected, uncertain, null_mx, domain_not_found, retry_expired, recipient_policy_denied, tracking_unavailable, tracking_abandoned, preparation_failed, bounce_received_unverified, opened, clicked, suppressed, unsubscribed, complained]
+    WebhookFormat:
+      type: string
+      enum: [thinpost, postmark, resend, mailgun, thinpost_inbound]
+      description: >-
+        Payload and signature format, fixed at creation. thinpost_inbound delivers received mail
+        (inbound_received, the only event of the format; see the inbound documentation), signs like thinpost,
+        and is the only format that receives it.
+    WebhookEventType:
+      type: string
+      description: >-
+        An event name of the endpoint's format. thinpost: the outcome names
+        (accepted, rejected, route_rejected, uncertain, null_mx, domain_not_found,
+        retry_expired, recipient_policy_denied, tracking_unavailable,
+        tracking_abandoned, preparation_failed, bounce_received_unverified, opened,
+        clicked, suppressed, unsubscribed, complained). postmark: Delivery, Bounce, Open, SubscriptionChange,
+        SpamComplaint. resend: email.delivered,
+        email.delivery_delayed, email.bounced, email.failed, email.opened,
+        email.suppressed, email.complained. mailgun:
+        delivered, temporary_fail, permanent_fail, opened, unsubscribed, complained. thinpost_inbound:
+        inbound_received. The server validates the names against the format.
+      enum: [accepted, rejected, route_rejected, uncertain, null_mx, domain_not_found, retry_expired, recipient_policy_denied, tracking_unavailable, tracking_abandoned, preparation_failed, bounce_received_unverified, opened, clicked, suppressed, unsubscribed, complained, inbound_received, Delivery, Bounce, Open, SubscriptionChange, SpamComplaint, email.delivered, email.delivery_delayed, email.bounced, email.failed, email.opened, email.suppressed, email.complained, delivered, temporary_fail, permanent_fail, unsubscribed]
+    WebhookHeaderInput:
+      type: object
+      additionalProperties: false
+      required: [name, value]
+      properties:
+        name: { type: string, maxLength: 64, description: An HTTP token without underscores; not a reserved or signature header. }
+        value: { type: string, minLength: 1, maxLength: 1024, writeOnly: true, description: Printable ASCII. }
+    WebhookAuthInput:
+      type: object
+      additionalProperties: false
+      description: >-
+        Write-only HTTP authentication for deliveries. Replaces any existing value;
+        an empty object removes it. Basic credentials are given together or not at all.
+      properties:
+        username: { type: string, minLength: 1, maxLength: 256, description: Must not contain a colon. }
+        password: { type: string, minLength: 1, maxLength: 256, writeOnly: true }
+        headers:
+          type: array
+          maxItems: 5
+          items: { $ref: '#/components/schemas/WebhookHeaderInput' }
+    WebhookAuth:
+      type: object
+      description: The names of an endpoint's HTTP authentication. Passwords and header values are never returned.
+      properties:
+        username: { type: string }
+        header_names: { type: array, items: { type: string } }
+    Webhook:
+      type: object
+      required: [id, format, endpoint, description, active, created_at]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        format: { $ref: '#/components/schemas/WebhookFormat' }
+        endpoint: { type: string, format: uri, maxLength: 2048 }
+        description: { type: string, maxLength: 256, description: At most 256 UTF-8 bytes; no surrounding whitespace or control characters. }
+        events:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/WebhookEventType' }
+          description: Events delivered to this endpoint; absent means every event of its format.
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        secret_created_at: { type: string, format: date-time, description: Absent for formats without a signing secret (postmark). }
+        auth: { $ref: '#/components/schemas/WebhookAuth' }
+    WebhookCreate:
+      type: object
+      additionalProperties: false
+      required: [endpoint]
+      properties:
+        format: { $ref: '#/components/schemas/WebhookFormat' }
+        endpoint: { type: string, format: uri, maxLength: 2048 }
+        description: { type: string, maxLength: 256, description: At most 256 UTF-8 bytes; no surrounding whitespace or control characters. }
+        events:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/WebhookEventType' }
+          description: Absent or empty means every event of the format.
+        auth: { $ref: '#/components/schemas/WebhookAuthInput' }
+    WebhookUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        endpoint: { type: string, format: uri, maxLength: 2048 }
+        description: { type: string, maxLength: 256, description: At most 256 UTF-8 bytes; no surrounding whitespace or control characters. }
+        events:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/WebhookEventType' }
+          description: An empty list means every event of the format; absent leaves the filter unchanged.
+        active: { type: boolean }
+        auth: { $ref: '#/components/schemas/WebhookAuthInput' }
+    IssuedWebhook:
+      type: object
+      required: [webhook]
+      properties:
+        webhook: { $ref: '#/components/schemas/Webhook' }
+        secret: { type: string, readOnly: true, description: Signing secret shown once; it cannot be retrieved later. Absent for postmark endpoints. }
+    WebhookTestResult:
+      type: object
+      required: [success, http_status]
+      properties:
+        success: { type: boolean }
+        http_status: { type: integer, minimum: 0, maximum: 599, description: Zero when no response arrived }
+        failure:
+          type: string
+          enum: [blocked_destination, resolution_failed, connection_failed, tls_failed, timeout]
+    Domain:
+      type: object
+      required: [name, active, created_at]
+      properties:
+        name: { type: string }
+        active: { type: boolean, description: Ownership TXT was observed; DKIM and deliverability may still be unconfigured. }
+        created_at: { type: string, format: date-time }
+        verified_at: { type: string, format: date-time }
+    InboundDomain:
+      type: object
+      required: [name, state, created_at]
+      properties:
+        name: { type: string }
+        state:
+          type: string
+          enum: [pending, active, disabled]
+          description: pending is unverified; active receives mail; disabled keeps its owner but is deferred.
+        created_at: { type: string, format: date-time }
+        verified_at: { type: string, format: date-time }
+        mx_status:
+          type: string
+          enum: [thinpost, mixed, other, none, null_mx, error]
+          description: Absent until a check has run. Informational, never a gate.
+        mx_checked_at: { type: string, format: date-time }
+    InboundMessageSummary:
+      type: object
+      required: [id, received_at, recipient_count, enhanced_protection, size_bytes, spf, dkim, dmarc, correlation, webhook, content_expired]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        received_at: { type: string, format: date-time }
+        from:
+          type: object
+          description: The recorded header From address. The display name is not recorded; the content read shows it.
+          required: [address]
+          properties:
+            address: { type: string, minLength: 1, maxLength: 320 }
+        recipient: { type: string, description: The first envelope recipient. }
+        recipient_count: { type: integer, minimum: 0, description: Envelope recipients of the message. }
+        subject: { type: string, maxLength: 1024, description: Absent for Enhanced Protection and when the message has none. }
+        enhanced_protection: { type: boolean, description: True when the message correlates to an Enhanced Protection outbound message. }
+        size_bytes: { type: integer, minimum: 0 }
+        spf: { type: string, enum: [none, pass, fail, softfail, neutral, temperror, permerror] }
+        dkim: { type: string, enum: [none, pass, fail, temperror, permerror] }
+        dmarc: { type: string, enum: [none, pass, fail, temperror, permerror] }
+        correlation:
+          type: object
+          required: [matched]
+          description: A header claim that this is a reply to one of the app's messages; not authentication.
+          properties:
+            matched: { type: boolean }
+            message_id: { $ref: '#/components/schemas/Id' }
+        webhook:
+          type: object
+          required: [status, total, delivered, pending, failed]
+          description: Inbound-lane webhook deliveries of this message (one per envelope recipient and enabled endpoint). Cancelled deliveries are not counted.
+          properties:
+            status: { type: string, enum: [none, pending, delivered, failed, partial] }
+            total: { type: integer, minimum: 0 }
+            delivered: { type: integer, minimum: 0 }
+            pending: { type: integer, minimum: 0 }
+            failed: { type: integer, minimum: 0 }
+        content_expired: { type: boolean, description: Past content_expires_at by the database clock; content reads answer 409. }
+    InboundMessagePage:
+      type: object
+      required: [messages]
+      properties:
+        messages: { type: array, items: { $ref: '#/components/schemas/InboundMessageSummary' } }
+        next_cursor: { type: string }
+    InboundAuthMethod:
+      type: object
+      required: [result]
+      properties:
+        result: { type: string }
+        domain: { type: string }
+        identity: { type: string, enum: [mailfrom, helo], description: SPF only. }
+        policy: { type: string, description: DMARC only. }
+    InboundMessageDetail:
+      type: object
+      required: [message, content_expires_at, envelope, authentication, correlation]
+      properties:
+        message: { $ref: '#/components/schemas/InboundMessageSummary' }
+        content_expires_at: { type: string, format: date-time, description: 30 days after receipt; readers refuse content after this time by the database clock. }
+        message_id_header: { type: string, description: The recorded Message-ID header. }
+        envelope:
+          type: object
+          required: [recipients]
+          properties:
+            mail_from: { type: string, description: Absent for the null reverse path. }
+            recipients: { type: array, items: { type: string } }
+            client_ip: { type: string }
+            helo: { type: string }
+            tls_version: { type: string, description: Absent when the message did not arrive over TLS. }
+            tls_cipher: { type: string }
+        authentication:
+          type: object
+          required: [spf, dkim, dmarc, arc]
+          properties:
+            spf: { $ref: '#/components/schemas/InboundAuthMethod' }
+            dkim: { type: array, maxItems: 5, items: { $ref: '#/components/schemas/InboundAuthMethod' } }
+            dmarc: { $ref: '#/components/schemas/InboundAuthMethod' }
+            arc:
+              type: object
+              required: [present, evaluated]
+              properties:
+                present: { type: boolean }
+                evaluated: { type: boolean, description: Always false; ARC chains are never evaluated. }
+        correlation:
+          type: object
+          required: [matched]
+          properties:
+            matched: { type: boolean }
+            message_id: { $ref: '#/components/schemas/Id' }
+            delivery_id: { $ref: '#/components/schemas/Id', description: Absent for a message-level match. }
+            header: { type: string, enum: [in_reply_to, references] }
+            from_matches_recipient: { type: boolean, description: Absent when it could not be determined. }
+    InboundLimits:
+      type: object
+      additionalProperties: false
+      required: [daily_limit, pending_limit]
+      properties:
+        daily_limit: { type: integer, minimum: 1, maximum: 1000000, description: Inbound messages accepted per UTC day. }
+        pending_limit: { type: integer, minimum: 1, maximum: 100000, description: Inbound webhook deliveries waiting at once. }
+    SubmissionRate:
+      type: object
+      additionalProperties: false
+      required: [per_minute, burst]
+      description: Both fields must be zero or both must be positive.
+      properties:
+        per_minute: { type: integer, minimum: 0, maximum: 60000 }
+        burst: { type: integer, minimum: 0, maximum: 10000 }
+    PendingQuota:
+      type: object
+      required: [limit, pending, truncated]
+      properties:
+        limit: { type: integer, minimum: 0, maximum: 100000 }
+        pending: { type: integer, minimum: 0, maximum: 100000, description: Snapshot count or lower bound if truncated. }
+        truncated: { type: boolean, description: True when more than 100000 messages are pending. }
+    TrackingQuota:
+      type: object
+      required: [daily_limit, used, suppressed, day]
+      properties:
+        daily_limit: { type: integer, minimum: 0, maximum: 1000000 }
+        used: { type: integer, minimum: 0, maximum: 1000000 }
+        suppressed: { type: integer, minimum: 0, maximum: 1000000000, description: Visits omitted at a per-link or per-app cap or due to excess active subscriptions; saturates at one billion. }
+        day: { type: string, format: date, description: UTC counter day; may be later than today after a backward clock change. }
+    RecipientQuota:
+      type: object
+      required: [daily_limit, used, day]
+      properties:
+        daily_limit: { type: integer, minimum: 0, maximum: 1000000 }
+        used: { type: integer, minimum: 0 }
+        day: { type: string, format: date, description: Current UTC day }
+    App:
+      type: object
+      required: [id, name, active, created_at, sending_ip_id]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        sending_ip_id:
+          description: The app's sending IP; null means the Edge's primary address.
+          oneOf:
+            - { $ref: '#/components/schemas/Id' }
+            - { type: 'null' }
+    AppSendingIp:
+      type: object
+      required: [sending_ip_id, name]
+      properties:
+        sending_ip_id:
+          oneOf:
+            - { $ref: '#/components/schemas/Id' }
+            - { type: 'null' }
+        name:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
+    SendingIp:
+      type: object
+      required: [id, name, address, helo_name, bounce_domain, created_at, app_count, is_primary, on_edge, bounce_on_edge]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        address: { type: string }
+        helo_name: { type: string }
+        bounce_domain: { type: string }
+        created_at: { type: string, format: date-time }
+        app_count: { type: integer, minimum: 0, description: Apps pinned to this IP. For the primary's row, apps with no assignment send from it too (unpinned_app_count). }
+        is_primary: { type: boolean, description: True when the Edge's last report lists this address first. }
+        on_edge:
+          description: Whether the Edge reported this address. Null when unknown.
+          oneOf:
+            - { type: boolean }
+            - { type: 'null' }
+        bounce_on_edge:
+          description: Whether the Edge reported accepting this bounce domain. Null when unknown.
+          oneOf:
+            - { type: boolean }
+            - { type: 'null' }
+    SendingIps:
+      type: object
+      required: [ips, unpinned_app_count, edge_reported_at, edge_reports_sources, edge_primary_address, unnamed_edge_addresses]
+      properties:
+        ips: { type: array, maxItems: 64, items: { $ref: '#/components/schemas/SendingIp' } }
+        unpinned_app_count: { type: integer, minimum: 0, description: Apps with no assignment; they use the Edge's primary address. }
+        edge_reported_at:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: 'null' }
+        edge_reports_sources: { type: boolean, description: False when the Edge's last report listed no sources. }
+        edge_primary_address:
+          description: The address the Edge reported first, which unassigned apps send from. Null when it reported no sources.
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
+        unnamed_edge_addresses: { type: array, items: { type: string }, description: Addresses the Edge reported that have no row yet, in the Edge's order. }
+        global_bounce_domain: { type: string, description: The bounce domain the primary uses when it has no row. Absent when this replica does not know it. }
+    SendingIpDnsCheck:
+      type: object
+      required: [reverse, reverse_names, forward, helo_spf, bounce_spf]
+      properties:
+        reverse: { $ref: '#/components/schemas/DnsCheckStatus' }
+        reverse_names: { type: array, maxItems: 8, items: { type: string } }
+        forward: { $ref: '#/components/schemas/DnsCheckStatus' }
+        helo_spf: { $ref: '#/components/schemas/DnsCheckStatus' }
+        bounce_spf: { $ref: '#/components/schemas/DnsCheckStatus' }
+    DnsCheckStatus:
+      type: string
+      enum: [ok, mismatch, missing, unavailable]
+    Key:
+      type: object
+      required: [id, name, active, created_at]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+    MessageSearch:
+      type: object
+      additionalProperties: false
+      required: [q]
+      properties:
+        q:
+          type: string
+          minLength: 1
+          maxLength: 254
+          description: >-
+            Search text. maxLength counts characters, but the server limit is 254 UTF-8
+            bytes; multibyte text can be rejected below 254 characters.
+        field:
+          type: string
+          enum: [any, id, recipient, recipient_domain, sender_domain, subject]
+          default: any
+          description: >-
+            recipient_domain and sender_domain match the exact domain or any subdomain
+            (example.com matches mail.example.com, not badexample.com); a leading @ is ignored.
+            any includes both domain branches when q looks like a domain.
+        cursor: { type: string, maxLength: 512 }
+        limit: { type: integer, minimum: 1, maximum: 100, default: 50 }
+    MessagePage:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/MessageSummary' }
+        next_cursor: { type: string }
+    SuppressionReason:
+      type: string
+      enum: [hard_bounce, spam_complaint, unsubscribe, manual]
+    Suppression:
+      type: object
+      required: [id, address, reason, origin, created_at]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        address: { type: string, minLength: 3, maxLength: 998, description: Case preserved as added. Plaintext; present in backups. }
+        reason: { $ref: '#/components/schemas/SuppressionReason' }
+        origin: { type: string, enum: [recipient, api, console], description: Only console is created by this API; recipient is created automatically (hard_bounce from an RCPT-stage 5.1.1 or 5.1.10 rejection). }
+        created_at: { type: string, format: date-time }
+        source_message_id: { $ref: '#/components/schemas/Id' }
+    SuppressionPage:
+      type: object
+      required: [suppressions]
+      properties:
+        suppressions:
+          type: array
+          items: { $ref: '#/components/schemas/Suppression' }
+        next_cursor: { type: string }
+    SuppressionResult:
+      type: object
+      required: [address, status, suppression]
+      properties:
+        address: { type: string }
+        status: { type: string, enum: [added, exists] }
+        suppression: { $ref: '#/components/schemas/Suppression' }
+    MessageSummary:
+      type: object
+      required: [id, state, status, enhanced_protection, subject_masked, accepted_at, delivery_count, accepted_count, failed_count, uncertain_count, suppressed_count]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        state: { type: string, description: Preparation state; not proof of delivery. }
+        status:
+          type: string
+          enum: [queued, preparing, sending, retrying, delivered, partially_delivered, failed, suppressed, held, attention, unknown]
+          description: Overall status derived from the preparation state and delivery states; delivered means accepted by every recipient's remote SMTP server; suppressed means every recipient was on the suppression list when delivery was attempted.
+        enhanced_protection: { type: boolean, description: Requires validated STARTTLS on every attempt; subject withheld; content reads audited. }
+        subject: { type: string, maxLength: 998, description: Present only when recorded and not Enhanced Protection. }
+        subject_masked: { type: boolean, description: A subject was recorded but is withheld; use getAppMessageSubject. }
+        sender_domain: { type: string, maxLength: 253, description: Lowercased domain of the From address; shown for Enhanced Protection too. Absent when not recorded. }
+        sender:
+          type: object
+          description: Recorded From address and decoded display name; shown for Enhanced Protection too. Absent when not recorded (accepted before schema 31).
+          required: [address]
+          properties:
+            address: { type: string, minLength: 3, maxLength: 998, description: Bare address, case preserved. }
+            name: { type: string, minLength: 1, maxLength: 998, description: Display name; absent when none. }
+        recipients: { type: array, maxItems: 100, items: { type: string }, description: Envelope addresses in submission order (To, then Cc, then Bcc); first 3 in list and search, all in detail. Absent when not recorded. }
+        recipient_kinds: { type: array, maxItems: 100, items: { type: string, enum: [to, cc, bcc] }, description: The kind of each entry in recipients, in the same order. Absent when recipients is. }
+        recipient_count: { type: integer, minimum: 1, maximum: 100, description: Absent when not recorded. }
+        accepted_at: { type: string, format: date-time }
+        delivery_count: { type: integer, minimum: 0 }
+        accepted_count: { type: integer, minimum: 0, description: Accepted by the remote SMTP server. }
+        failed_count: { type: integer, minimum: 0 }
+        uncertain_count: { type: integer, minimum: 0 }
+        suppressed_count: { type: integer, minimum: 0, description: Failed deliveries dropped because the recipient was suppressed; also counted in failed_count. }
+    DeliverySummary:
+      type: object
+      required: [id, recipient_index, state]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        recipient_index: { type: integer, minimum: 0 }
+        recipient: { type: string, description: Envelope address for recipient_index; absent when not recorded. }
+        recipient_kind: { type: string, enum: [to, cc, bcc], description: Whether this delivery is for a To, Cc or Bcc recipient; absent with recipient. }
+        state: { type: string, description: Delivery state; recipient_policy_held requires an explicit operator retry; tracking_held has no automatic release; accepted means accepted by the remote SMTP server. }
+        retry_attempts:
+          type: integer
+          minimum: 0
+          description: Attempts counted by the retry policy, including an in-flight attempt and excluding recipient policy denials.
+        next_attempt_at:
+          type: string
+          format: date-time
+          description: Earliest eligibility for a queued delivery; app status, the gate, tracking and worker availability can delay dispatch.
+        last_completed_outcome:
+          type: string
+          description: Outcome of the latest completed attempt by start time, including local outcomes; this contains no SMTP response text.
+        last_smtp_code:
+          type: integer
+          minimum: 0
+          maximum: 599
+          description: SMTP response code for that attempt; zero means no SMTP response was recorded.
+        tracking:
+          $ref: '#/components/schemas/DeliveryTracking'
+        feedback:
+          type: array
+          description: Recipient feedback recorded for this delivery (for example a one-click unsubscribe), oldest first. Kind, channel and time only.
+          items: { $ref: '#/components/schemas/DeliveryFeedback' }
+        message_id_header:
+          type: string
+          pattern: '^<[0-9a-f]{32}@[a-z0-9.-]{1,253}>$'
+          description: >-
+            The delivery's RFC 5322 Message-ID with angle brackets. The same for every delivery of a message prepared at
+            schema 38 or later (the message ID and the lowercased sender domain); per delivery for earlier messages. Absent
+            when the sender domain was not recorded. Not audited, even for Enhanced Protection: it is a random ID plus the
+            sender domain.
+    DeliveryFeedback:
+      type: object
+      required: [kind, channel, received_at]
+      properties:
+        kind: { type: string, enum: [spam_complaint, unsubscribe] }
+        channel: { type: string, enum: [arf, one_click] }
+        received_at: { type: string, format: date-time }
+    FeedbackLoops:
+      type: object
+      required: [receiving, reporters, counts]
+      properties:
+        receiving: { type: boolean, description: True when this replica knows the bounce domain and can show the address. }
+        mailbox:
+          type: object
+          required: [created_at]
+          properties:
+            address: { type: string, description: Absent when this replica has no bounce domain. }
+            created_at: { type: string, format: date-time }
+        reporters: { type: array, items: { type: string } }
+        counts:
+          type: array
+          description: Per UTC day, channel and result over the last 14 days; counts only.
+          items:
+            type: object
+            required: [day, channel, result, count]
+            properties:
+              day: { type: string, format: date }
+              channel: { type: string, enum: [arf, one_click] }
+              result: { type: string, enum: [accepted, duplicate, ignored, unauthenticated, unparsable, uncorrelated, not_delivered] }
+              count: { type: integer, minimum: 0 }
+    ListUnsubscribe:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+    TrackingDefaults:
+      type: object
+      required: [opens, clicks]
+      properties:
+        opens: { type: boolean }
+        clicks: { type: boolean }
+    MessageBody:
+      type: object
+      required: [from, to, subject, text, html, enhanced_protection, attachments]
+      properties:
+        from: { type: string }
+        reply_to:
+          type: array
+          maxItems: 100
+          items: { type: string }
+          description: Response only. Outbound messages hold at most 10; a received message can list up to 100.
+        to: { type: array, items: { type: string } }
+        cc: { type: array, maxItems: 100, items: { type: string }, description: 'Cc recipients; absent when none. Messages accepted before Cc and Bcc were supported never have any. Outbound messages hold at most 99; a received message can list up to 100.' }
+        bcc: { type: array, maxItems: 99, items: { type: string }, description: Bcc recipients, visible to operators only; absent when none. }
+        subject: { type: string }
+        text: { type: string }
+        html: { type: string }
+        enhanced_protection: { type: boolean }
+        attachments:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/AttachmentMetadata' }
+        omitted:
+          type: array
+          items: { type: string, enum: [text, html, headers] }
+          description: Inbound content reads only. What could not be shown (a body over 1 MiB once decoded, an unknown charset or an oversized header block); absent when nothing was left out.
+    AttachmentMetadata:
+      type: object
+      required: [index, filename, content_type, size, inline]
+      properties:
+        index: { type: integer, minimum: 0, maximum: 19 }
+        filename: { type: string, maxLength: 200 }
+        content_type: { type: string, maxLength: 128, description: Submitted type, informational only. }
+        size: { type: integer, minimum: 0, maximum: 1048576 }
+        inline: { type: boolean }
+        content_id: { type: string, maxLength: 128, description: Inline parts only; HTML references cid:<content_id>. }
+    HeaderField:
+      type: object
+      required: [name, value]
+      properties:
+        name: { type: string }
+        value: { type: string, description: Unfolded raw value; RFC 2047 words not decoded. }
+        decoded_value: { type: string, description: Present when RFC 2047 decoding changes the value. }

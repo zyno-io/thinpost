@@ -1,0 +1,23 @@
+{
+  "name": "@zyno-io/thinpost-docs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Thinpost documentation site (VitePress). Not published.",
+  "license": "MIT",
+  "scripts": {
+    "prebuild": "node scripts/openapi.mjs",
+    "predocs:dev": "npm run prebuild",
+    "docs:dev": "vitepress dev",
+    "predocs:build": "npm run prebuild",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "mermaid": "^11.4.0",
+    "vitepress": "1.6.4",
+    "vitepress-openapi": "^0.2.16",
+    "vitepress-plugin-mermaid": "^2.0.17",
+    "yaml": "^2.8.1"
+  }
+}

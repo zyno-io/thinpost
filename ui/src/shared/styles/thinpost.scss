@@ -1,0 +1,508 @@
+@use './base';
+
+// Thinpost layouts on the tokens and primitives in base.scss.
+
+// Element resets formerly provided by the Tailwind preflight.
+ul,
+ol {
+    margin: 0;
+    padding-left: 1.25em;
+}
+
+// Shared primitives
+.header {
+    position: sticky;
+    top: var(--header-h);
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding: 12px 0;
+    background: var(--bg);
+
+    h1 {
+        font-size: 19px;
+        font-weight: 650;
+        letter-spacing: -0.01em;
+    }
+}
+
+// A heading beside its "?" help button; the button stays outside the heading so it is not part of the heading's name.
+.heading-with-help {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.back {
+    width: 32px;
+    padding: 0;
+}
+.input-wrapper,
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.field .field-value {
+    flex: 1;
+}
+label:has(input[type='checkbox']) {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--text-2);
+    font-size: 13px;
+}
+
+.empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    min-height: 240px;
+    padding: 32px 20px;
+    color: var(--text-3);
+    text-align: center;
+
+    > i {
+        font-size: 26px;
+    }
+    h2 {
+        color: var(--text-2);
+        font-size: 15px;
+        font-weight: 600;
+    }
+}
+
+pre {
+    margin: 0;
+    padding: 14px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+
+    code {
+        font-size: 12px;
+    }
+}
+
+.auth-page {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 24px;
+    padding: 64px 16px 32px;
+    isolation: isolate;
+
+    &::before {
+        position: absolute;
+        inset: 0;
+        z-index: -1;
+        content: '';
+        pointer-events: none;
+        background:
+            radial-gradient(circle at 50% -10%, var(--accent-soft), transparent 55%),
+            linear-gradient(var(--border) 1px, transparent 1px) 0 0 / 32px 32px,
+            linear-gradient(90deg, var(--border) 1px, transparent 1px) 0 0 / 32px 32px;
+        mask-image: radial-gradient(ellipse at 50% 35%, #000 20%, transparent 70%);
+        opacity: 0.7;
+    }
+
+    .theme-corner {
+        position: absolute;
+        top: 14px;
+        right: 16px;
+    }
+    .theme-corner .icon-trigger {
+        justify-content: center;
+        width: 32px;
+        padding: 0;
+    }
+    .auth-card {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        width: 100%;
+        max-width: 400px;
+        padding: 32px 30px 28px;
+        box-shadow: var(--shadow-lg);
+    }
+    .auth-mark {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        margin: 0 auto;
+        border-radius: 12px;
+        background: var(--text);
+        color: var(--bg);
+        font-size: 19px;
+    }
+    h1 {
+        font-size: 20px;
+        font-weight: 650;
+        letter-spacing: -0.015em;
+        text-align: center;
+    }
+    .subtitle {
+        color: var(--text-2);
+        font-size: 13px;
+        text-align: center;
+    }
+    form {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    label {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 500;
+    }
+}
+
+.admin-list {
+    overflow: hidden;
+
+    .item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 16px;
+        padding: 16px 18px;
+    }
+    .item + .item {
+        border-top: 1px solid var(--border);
+    }
+    .item-info,
+    .item-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .item-info {
+        flex-wrap: wrap;
+    }
+    .name {
+        font-weight: 600;
+    }
+    .meta {
+        color: var(--text-3);
+        font-size: 12px;
+    }
+}
+
+// Modal and toast overrides
+.vf-modal {
+    max-width: calc(100vw - 24px);
+    min-width: min(400px, calc(100vw - 24px));
+
+    &.vf-masked {
+        .vf-modal-content,
+        .vf-modal-footer {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+    }
+
+    .vf-modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+
+        .close {
+            color: var(--text-3);
+            cursor: pointer;
+        }
+    }
+
+    // base.scss uses pre-line for alert text; complex modals need normal wrapping.
+    .vf-modal-content {
+        white-space: normal;
+    }
+}
+
+.vf-modal-wrap.vf-alert .vf-modal-content {
+    white-space: pre-line;
+}
+
+.vf-modal-wrap.vf-alert.destructive .vf-modal-footer button.primary {
+    background: var(--danger-soft);
+    border-color: var(--danger-border);
+    color: var(--danger-strong);
+
+    &:hover:not(:disabled) {
+        background: var(--danger-border);
+    }
+}
+
+.vf-toast {
+    // Vue Foundation's modal container uses a higher stacking level than the shell.
+    z-index: 100000;
+    .message {
+        overflow-wrap: anywhere;
+    }
+}
+
+// Tables
+.table-wrap {
+    // Containing block for absolutely positioned screen-reader text, which would otherwise escape the scroller.
+    position: relative;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+}
+
+table.data {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 13px;
+
+    th {
+        height: 32px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface-2);
+        color: var(--text-3);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        text-align: left;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+
+    td,
+    th[scope='row'] {
+        height: 40px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+        vertical-align: middle;
+    }
+
+    th[scope='row'] {
+        background: transparent;
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 400;
+        letter-spacing: normal;
+        text-align: left;
+        text-transform: none;
+        white-space: normal;
+    }
+
+    tbody tr:last-child td,
+    tbody tr:last-child th[scope='row'] {
+        border-bottom: 0;
+    }
+
+    tbody tr:hover td,
+    tbody tr:hover th[scope='row'] {
+        background: var(--surface-hover);
+    }
+
+    .num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+    }
+}
+
+.card > .table-wrap {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+// Detail tab bar
+.tabs {
+    display: flex;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--border);
+}
+
+.tab {
+    flex: none;
+    padding: 8px 12px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: none;
+    color: var(--text-3);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+
+    &:hover {
+        color: var(--text);
+        text-decoration: none;
+    }
+
+    &.active,
+    &[aria-current],
+    &[aria-selected='true'] {
+        border-bottom-color: var(--accent);
+        color: var(--accent);
+    }
+
+    &:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+    }
+}
+
+// Thinpost
+.page {
+    width: 100%;
+    max-width: 1120px;
+    min-width: 0;
+    margin: 0 auto;
+    padding: 28px 20px 48px;
+}
+
+.section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 28px;
+}
+
+.section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+
+    h2 {
+        font-size: 15px;
+        font-weight: 600;
+    }
+}
+
+.hint {
+    color: var(--text-3);
+    font-size: 12.5px;
+}
+
+.sub {
+    display: block;
+    color: var(--text-3);
+    font-size: 12px;
+}
+
+.facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+    margin: 0;
+
+    dt {
+        color: var(--text-3);
+        font-size: 11px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+
+    dd {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin: 0;
+    }
+}
+
+.fact-hint {
+    margin-top: 4px;
+    color: var(--text-3);
+    font-size: 12px;
+}
+
+.pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: min(560px, calc(100vw - 72px));
+    color: var(--text-2);
+    font-size: 13px;
+}
+
+.target {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+    margin: 0;
+
+    dd {
+        margin: 0;
+    }
+}
+
+.acknowledge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+}
+
+.blocker {
+    color: var(--text-3);
+    font-size: 12px;
+}
+
+.mono-block {
+    max-height: 480px;
+    overflow: auto;
+    font-size: 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.btn.primary.danger {
+    border-color: var(--danger-border);
+    background: var(--danger-soft);
+    color: var(--danger-strong);
+
+    &:hover:not(:disabled) {
+        background: var(--danger-border);
+    }
+}
+
+@media (max-width: 640px) {
+    .page {
+        padding: 16px 12px 32px;
+    }
+    .header {
+        margin-bottom: 12px;
+    }
+    .auth-page .auth-card {
+        padding: 24px 20px;
+    }
+}

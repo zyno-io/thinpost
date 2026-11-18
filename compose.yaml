@@ -1,0 +1,306 @@
+# Thinpost quickstart: a complete local stack for evaluation.
+#
+#   docker compose up -d --build --wait
+#   examples/quickstart/smoke.sh
+#
+# Console: https://localhost:8443 (accept the local certificate warning once).
+# Mail catcher: http://localhost:8025. See examples/quickstart/README.md.
+#
+# NOT FOR PRODUCTION. The development sign-in service has no password, the
+# database and object store use unauthenticated-transport loopback connections,
+# and all secrets live in a Docker volume readable by every service.
+name: thinpost-quickstart
+
+x-tools: &tools
+  build:
+    context: .
+    dockerfile: examples/quickstart/Dockerfile
+    target: tools
+    additional_contexts:
+      control: service:control
+      edge: service:edge
+  image: thinpost-quickstart-tools:local
+
+# Only pki-init builds the shared tools image; the others reuse it.
+x-tools-image: &tools-image
+  image: thinpost-quickstart-tools:local
+  pull_policy: never
+
+x-qs: &qs ./examples/quickstart:/qs:ro
+
+services:
+  # ---- one-shot initialisation ------------------------------------------
+  pki-init:
+    <<: *tools
+    entrypoint: ["sh", "/qs/pki-init.sh"]
+    network_mode: none
+    volumes: [pki:/pki, journal:/journal, zone:/zone, *qs]
+    restart: "no"
+
+  db-init:
+    <<: *tools-image
+    entrypoint: ["sh", "/qs/db-init.sh"]
+    network_mode: service:ctlnet
+    volumes: [pki:/pki:ro, *qs]
+    depends_on:
+      pki-init: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+      s3: { condition: service_started }
+    restart: "no"
+
+  # ---- the control plane's shared network namespace ---------------------
+  # PostgreSQL, the S3 emulator and the control plane share this namespace so
+  # the control plane reaches them on 127.0.0.1: it accepts insecure database
+  # and object-store connections only to a numeric loopback address.
+  #
+  # The control plane dials the Edge; the Edge never needs to open a
+  # connection into this namespace. Docker cannot express per-port rules
+  # between two containers on one network, so the namespace owner drops new
+  # connections arriving from the Edge's network (10.99.51.0/24) with a
+  # firewall rule. That keeps the Edge away from the S3 emulator (:4566) and
+  # the control plane's plain HTTP (:8080); replies on the control stream
+  # still pass as established traffic. NET_ADMIN is held by this pause
+  # container only.
+  ctlnet:
+    <<: *tools-image
+    entrypoint: ["sh", "-c", "iptables -A INPUT -s 10.99.51.0/24 -m conntrack --ctstate NEW -j DROP && exec sleep infinity"]
+    init: true
+    cap_add: [NET_ADMIN]
+    dns: [10.99.50.53]
+    networks:
+      front: {}
+      edgectl: { ipv4_address: 10.99.51.2 }
+    healthcheck:
+      test: ["CMD-SHELL", "iptables -C INPUT -s 10.99.51.0/24 -m conntrack --ctstate NEW -j DROP"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      coredns: { condition: service_started }
+    restart: unless-stopped
+
+  # DKIM verification helper for smoke.sh: resolves through the local DNS.
+  tools-dns:
+    <<: *tools-image
+    entrypoint: ["sleep", "infinity"]
+    dns: [10.99.50.53]
+    networks: [front]
+    profiles: [tools]
+
+  postgres:
+    image: postgres:18-alpine@sha256:b6972e1115a4ff8eba5d7f7d19184926d1e16d7d1136ae1e1a7ebf286da0f015 # postgres:18-alpine
+    network_mode: service:ctlnet
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "log_parameter_max_length=0", "-c", "log_parameter_max_length_on_error=0"]
+    environment:
+      POSTGRES_PASSWORD_FILE: /pki/pg-admin-password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - pki:/pki:ro
+      - ./examples/quickstart:/qs:ro
+      - ./examples/quickstart/initdb.sh:/docker-entrypoint-initdb.d/10-quickstart.sh:ro
+    depends_on:
+      pki-init: { condition: service_completed_successfully }
+      ctlnet: { condition: service_healthy, restart: true }
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -h 127.0.0.1 -U thinpost_owner -d thinpost"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    restart: unless-stopped
+
+  s3:
+    image: ministackorg/ministack:1.5.7@sha256:43be2fd128817f3f5f49d28b1ccb0b697fdfc972a8fed7c37007b3a59635acd2 # ministack 1.5.7
+    network_mode: service:ctlnet
+    environment:
+      SERVICES: s3
+      # Both are needed for buckets and objects to survive a restart.
+      S3_PERSIST: "1"
+      PERSIST_STATE: "1"
+    volumes:
+      - s3data:/tmp/ministack-data
+      - s3state:/tmp/ministack-state
+    depends_on:
+      pki-init: { condition: service_completed_successfully }
+      ctlnet: { condition: service_healthy, restart: true }
+    restart: unless-stopped
+
+  control:
+    build:
+      context: .
+      target: control
+    image: thinpost-quickstart-control:local
+    network_mode: service:ctlnet
+    entrypoint: ["/pki/busybox", "sh", "/qs/run-control.sh"]
+    env_file: examples/quickstart/control.env
+    volumes: [pki:/pki:ro, "caddy-root:/caddy-root:ro", *qs]
+    depends_on:
+      ctlnet: { condition: service_healthy, restart: true }
+      db-init: { condition: service_completed_successfully }
+      caddy: { condition: service_healthy }
+      devidp: { condition: service_healthy }
+      edge: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/pki/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/operator-readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+      start_period: 5s
+    restart: on-failure
+
+  # ---- the Edge worker ---------------------------------------------------
+  # Control listener on a private network; SMTP source on a second, internal
+  # network whose range stands in for operator-owned public addresses. Both
+  # networks are internal: no packet from this worker leaves the host.
+  edge:
+    build:
+      context: .
+      target: edge
+    image: thinpost-quickstart-edge:local
+    env_file: examples/quickstart/edge.env
+    networks:
+      edgectl: { ipv4_address: 10.99.51.10 }
+      edgepub: { ipv4_address: 11.42.51.10 }
+    volumes: [pki:/pki:ro, journal:/journal, *qs]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      pki-init: { condition: service_completed_successfully }
+      mailpit: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/thinpost-edge", "healthcheck"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+      start_period: 3s
+    restart: on-failure
+
+  # ---- local mail destination, DNS, sign-in and HTTPS --------------------
+  mailpit:
+    image: axllent/mailpit:v1.27@sha256:e22dce5b36f93c77082e204a3942fb6b283b7896e057458400a4c88344c3df68 # mailpit v1.27
+    environment:
+      MP_SMTP_BIND_ADDR: 0.0.0.0:25
+      MP_UI_BIND_ADDR: 0.0.0.0:8025
+      MP_SMTP_TLS_CERT: /pki/mx.crt
+      MP_SMTP_TLS_KEY: /pki/mx.key
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    # `publish` is the only route out; it exists so the UI port can be published.
+    networks:
+      edgepub: { ipv4_address: 11.42.51.25 }
+      publish: {}
+    ports: ["127.0.0.1:8025:8025"]
+    volumes: [pki:/pki:ro]
+    depends_on:
+      pki-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  coredns:
+    image: coredns/coredns:1.12.1@sha256:e8c262566636e6bc340ece6473b0eed193cad045384401529721ddbe6463d31c # coredns 1.12.1
+    command: ["-conf", "/qs/Corefile"]
+    networks:
+      front: { ipv4_address: 10.99.50.53 }
+    volumes: [zone:/zone:ro, *qs]
+    depends_on:
+      pki-init: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  devidp:
+    build:
+      context: .
+      dockerfile: examples/quickstart/Dockerfile
+      target: devidp
+    image: thinpost-quickstart-devidp:local
+    command:
+      - --insecure-dev-only
+      - --listen=:9000
+      - --issuer=https://localhost:8443/idp
+      - --audience=thinpost-api
+      - --client-id=thinpost-console
+      - --redirect-uri=https://localhost:8443/auth/callback
+      - --post-logout-redirect-uri=https://localhost:8443/
+      - --admin-scope=thinpost-admin
+      - --admin-role=Thinpost.Admin
+      - --signing-key=/pki/idp-signing.pem
+      - --automation-secret-file=/pki/automation-secret
+    networks: [front]
+    volumes: [pki:/pki:ro]
+    depends_on:
+      pki-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/devidp", "--healthcheck", "--listen=:9000", "--issuer=https://localhost:8443/idp"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d # caddy 2.10-alpine
+    # Caddy keeps its local CA private (mode 0700), so the wrapper publishes
+    # the public root certificate into the caddy-root volume; the control plane
+    # mounts that volume read-only. Users can copy it out with
+    # `docker compose cp caddy:/caddy-root/caddy-root.crt ./quickstart-ca.pem`.
+    command:
+      - sh
+      - -c
+      - |
+        caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
+        pid=$$!
+        trap 'kill -TERM $$pid' TERM INT
+        root=/data/caddy/pki/authorities/local/root.crt
+        until [ -f "$$root" ]; do sleep 0.5; done
+        cp "$$root" /caddy-root/caddy-root.crt && chmod 644 /caddy-root/caddy-root.crt
+        wait $$pid
+    networks: [front, publish]
+    ports: ["127.0.0.1:8443:8443"]
+    volumes:
+      - ./examples/quickstart/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+      - caddy-root:/caddy-root
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /caddy-root/caddy-root.crt && wget -q -O /dev/null --no-check-certificate https://localhost:8443/idp/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 40
+    restart: unless-stopped
+
+networks:
+  # Internal: control, postgres, s3, devidp and coredns have no Internet route.
+  front:
+    internal: true
+    ipam:
+      config: [{ subnet: 10.99.50.0/24 }]
+  # Non-internal, and carries only caddy and mailpit, so their ports can be
+  # published on 127.0.0.1.
+  publish: {}
+  edgectl:
+    internal: true
+    ipam:
+      config: [{ subnet: 10.99.51.0/24 }]
+  # Treated as operator-owned public space by the Edge policy (public,
+  # non-documentation, inside the infrastructure CIDRs); internal, so nothing
+  # is routed anywhere.
+  edgepub:
+    internal: true
+    ipam:
+      config: [{ subnet: 11.42.51.0/24 }]
+
+volumes:
+  pki:
+  journal:
+  zone:
+  pgdata:
+  caddy-data:
+  caddy-config:
+  caddy-root:
+  s3data:
+  s3state:

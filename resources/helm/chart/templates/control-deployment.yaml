@@ -1,0 +1,267 @@
+{{- if eq .Values.workload "control" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thinpost-operator
+  namespace: {{ .Release.Namespace }}
+{{- if or .Values.control.deploymentAnnotations .Values.control.reloader.enabled }}
+  annotations:
+{{- with .Values.control.deploymentAnnotations }}
+{{ toYaml . | indent 4 }}
+{{- end }}
+{{- if .Values.control.reloader.enabled }}
+    # The operator loads its control client certificate once at start
+    # (internal/controlbridge/environment.go), and the same key signs leases,
+    # so a renewed certificate is applied by a rolling restart.
+    secret.reloader.stakater.com/reload: thinpost-control-client
+{{- end }}
+{{- end }}
+spec:
+  replicas: {{ .Values.control.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: thinpost-operator
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: thinpost-operator
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: thinpost-operator
+            topologyKey: kubernetes.io/hostname
+      automountServiceAccountToken: false
+      containers:
+      - env:
+        # About 90% of the 512Mi memory limit below, so the collector works
+        # harder before the pod is OOM-killed. Keep in step with the limit.
+        - name: GOMEMLIMIT
+          value: 460MiB
+        # The mail host receiving domains point their MX at; set only when
+        # control.inboundMxHost is. No fallback to smtpHostname.
+        {{- if .Values.control.inboundMxHost }}
+        - name: THINPOST_INBOUND_MX_HOST
+          value: {{ .Values.control.inboundMxHost | quote }}
+        {{- end }}
+        # Internal webhook exceptions; each set only when its value is non-empty.
+        # validate.yaml requires serviceCidrs whenever destinations are listed.
+        {{- if .Values.control.webhookInternalDestinations }}
+        - name: THINPOST_WEBHOOK_INTERNAL_DESTINATIONS
+          value: {{ join "," .Values.control.webhookInternalDestinations | quote }}
+        {{- end }}
+        {{- if .Values.control.serviceCidrs }}
+        - name: THINPOST_SERVICE_CIDRS
+          value: {{ join "," .Values.control.serviceCidrs | quote }}
+        {{- end }}
+        - name: THINPOST_CONTROL_INSTANCE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: THINPOST_CONTROL_INFRASTRUCTURE_CIDRS
+          valueFrom:
+            configMapKeyRef:
+              key: infrastructure-cidrs
+              name: thinpost-recipient-allowlist
+        - name: THINPOST_CONTROL_ROUTE_EXCEPTIONS_FILE
+          valueFrom:
+            configMapKeyRef:
+              key: route-exceptions-file
+              name: thinpost-recipient-allowlist
+        - name: THINPOST_CONTROL_WORKER_ID
+          valueFrom:
+            configMapKeyRef:
+              key: worker-id
+              name: thinpost-edge-binding
+        - name: THINPOST_CONTROL_JOURNAL_ID
+          valueFrom:
+            configMapKeyRef:
+              key: journal-id
+              name: thinpost-edge-binding
+        - name: THINPOST_S3_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              key: access-key
+              name: thinpost-object-storage
+        - name: THINPOST_S3_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              key: secret-key
+              name: thinpost-object-storage
+        {{- if .Values.control.tls.enabled }}
+        # Second, HTTPS listener for in-cluster clients. The server re-reads the
+        # files when the Secret volume is updated, so no restart on renewal.
+        - name: THINPOST_CONTROL_TLS_LISTEN
+          value: {{ printf ":%d" (int .Values.control.tls.port) | quote }}
+        - name: THINPOST_CONTROL_TLS_CERT
+          value: /run/thinpost/control-tls/tls.crt
+        - name: THINPOST_CONTROL_TLS_KEY
+          value: /run/thinpost/control-tls/tls.key
+        {{- end }}
+        - name: THINPOST_DATABASE_USERNAME_FILE
+          value: /run/thinpost/db/username
+        - name: THINPOST_DATABASE_PASSWORD_FILE
+          value: /run/thinpost/db/password
+        - name: THINPOST_RECIPIENT_POLICY
+          valueFrom:
+            configMapKeyRef:
+              key: policy
+              name: thinpost-recipient-allowlist
+        - name: THINPOST_RECIPIENT_ALLOWLIST_FILE
+          valueFrom:
+            configMapKeyRef:
+              key: allowlist-file
+              name: thinpost-recipient-allowlist
+        envFrom:
+        - configMapRef:
+            name: thinpost-operator-config
+        - configMapRef:
+            name: thinpost-mail-runtime
+        image: {{ include "thinpost.controlImage" . | quote }}
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          httpGet:
+            path: /livez
+            port: http
+          periodSeconds: 10
+        name: control
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        {{- if .Values.control.tls.enabled }}
+        - containerPort: {{ int .Values.control.tls.port }}
+          name: https
+          protocol: TCP
+        {{- end }}
+        readinessProbe:
+          failureThreshold: 2
+          httpGet:
+            path: /operator-readyz
+            port: http
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 500m
+            ephemeral-storage: 128Mi
+            memory: 512Mi
+          requests:
+            cpu: 50m
+            ephemeral-storage: 32Mi
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        startupProbe:
+          failureThreshold: 30
+          httpGet:
+            path: /livez
+            port: http
+          periodSeconds: 5
+        volumeMounts:
+        - mountPath: /run/thinpost/fingerprint
+          name: mail-fingerprint
+          readOnly: true
+        - mountPath: /run/thinpost/object-keys
+          name: mail-object-keys
+          readOnly: true
+        - mountPath: /run/thinpost/bounce
+          name: mail-bounce
+          readOnly: true
+        - mountPath: /run/thinpost/control
+          name: mail-control
+          readOnly: true
+        - mountPath: /run/thinpost/signing
+          name: mail-signing
+          readOnly: true
+        - mountPath: /run/thinpost/dkim
+          name: mail-dkim
+          readOnly: true
+        - mountPath: /run/thinpost/tracking
+          name: mail-tracking
+          readOnly: true
+        - mountPath: /run/thinpost/db
+          name: database-credentials
+          readOnly: true
+        - mountPath: /run/thinpost/db-ca
+          name: database-ca
+          readOnly: true
+        - mountPath: /run/thinpost/recipients
+          name: recipients
+          readOnly: true
+        {{- if .Values.control.tls.enabled }}
+        # Whole-directory mount so a renewed Secret propagates.
+        - mountPath: /run/thinpost/control-tls
+          name: control-tls
+          readOnly: true
+        {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | indent 6 }}
+      {{- end }}
+      securityContext:
+        fsGroup: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 20
+      volumes:
+      - name: mail-fingerprint
+        secret:
+          defaultMode: 288
+          secretName: thinpost-fingerprint-key
+      - name: mail-object-keys
+        secret:
+          defaultMode: 288
+          secretName: thinpost-object-keyring
+      - name: mail-bounce
+        secret:
+          defaultMode: 288
+          secretName: thinpost-bounce-keyring
+      - name: mail-control
+        secret:
+          defaultMode: 288
+          secretName: thinpost-control-client
+      - configMap:
+          defaultMode: 288
+          name: thinpost-signing-catalog
+        name: mail-signing
+      - name: mail-dkim
+        secret:
+          defaultMode: 288
+          secretName: thinpost-dkim
+      - name: mail-tracking
+        secret:
+          defaultMode: 288
+          secretName: thinpost-tracking-link-keys
+      - name: database-credentials
+        secret:
+          secretName: thinpost-db-runtime
+      - name: database-ca
+        configMap:
+          name: {{ .Values.database.caConfigMap | quote }}
+          items:
+          - key: ca.crt
+            path: ca.crt
+      - configMap:
+          name: thinpost-recipient-allowlist
+        name: recipients
+      {{- if .Values.control.tls.enabled }}
+      - name: control-tls
+        secret:
+          defaultMode: 288
+          secretName: {{ .Values.control.tls.secretName | quote }}
+      {{- end }}
+{{- end }}

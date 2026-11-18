@@ -1,0 +1,1 @@
+{"RecordType":"SubscriptionChange","MessageID":"01234567-89ab-cdef-0123-456789abcdef","MessageStream":"outbound","ChangedAt":"2026-11-05T12:00:00.1234560Z","Recipient":"Recipient@Example.NET","Origin":"Recipient","SuppressSending":true,"SuppressionReason":"ManualSuppression","Tag":"","Metadata":{}}

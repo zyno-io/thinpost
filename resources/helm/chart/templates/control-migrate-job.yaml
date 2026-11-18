@@ -1,0 +1,8 @@
+{{- if include "thinpost.migrationHooksEnabled" . }}
+{{- /*
+Pre-install/pre-upgrade: migrate the schema before the Deployment changes. A
+failure aborts the release before any pod is replaced. Never roll back with
+Helm: schema-N pods cannot run on a newer schema.
+*/ -}}
+{{- include "thinpost.hookJob" (dict "ctx" . "name" "thinpost-control-migrate" "hooks" "pre-install,pre-upgrade" "kube" false "args" (list "deploy-migrate" (printf "--actor=%s" (include "thinpost.deployActor" .)) "--drain-timeout=2m" "--timeout=8m")) }}
+{{- end }}

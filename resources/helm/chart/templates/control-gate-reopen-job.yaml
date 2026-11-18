@@ -1,0 +1,8 @@
+{{- if include "thinpost.migrationHooksEnabled" . }}
+{{- /*
+Post-install/post-upgrade: Helm runs this only after its wait succeeded. It
+reopens the admission gate this release closed, once every pod runs the new
+image.
+*/ -}}
+{{- include "thinpost.hookJob" (dict "ctx" . "name" "thinpost-control-gate-reopen" "hooks" "post-install,post-upgrade" "kube" true "args" (list "deploy-reopen" (printf "--actor=%s" (include "thinpost.deployActor" .)) (printf "--namespace=%s" .Release.Namespace) "--selector=app.kubernetes.io/name=thinpost-operator" "--container=control" (printf "--image=%s" (include "thinpost.controlImage" .)) (printf "--replicas=%d" (int .Values.control.replicas)) "--rollout-timeout=5m" "--kube-dir=/run/thinpost/kube" "--timeout=8m")) }}
+{{- end }}

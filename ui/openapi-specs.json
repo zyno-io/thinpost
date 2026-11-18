@@ -1,0 +1,3 @@
+{
+    "../api/admin/openapi.yaml": "./src/openapi-client-generated"
+}

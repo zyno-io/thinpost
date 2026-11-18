@@ -1,0 +1,14 @@
+{
+  "RecordType": "Delivery",
+  "MessageStream": "outbound",
+  "ServerID": 4101,
+  "MessageID": "b670adbd-0705-4442-a638-183a3000db83",
+  "Recipient": "recipient@example.net",
+  "Tag": "welcome-email",
+  "DeliveredAt": "2026-03-14T16:33:54.9070259Z",
+  "Details": "250 2.0.0 OK queued as 7F3A91C2",
+  "Metadata": {
+    "PropA": "value",
+    "PropB": "value"
+  }
+}

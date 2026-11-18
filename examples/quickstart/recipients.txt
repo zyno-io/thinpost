@@ -1,0 +1,2 @@
+# Exact envelope recipients the quickstart may send to.
+demo@quickstart.example

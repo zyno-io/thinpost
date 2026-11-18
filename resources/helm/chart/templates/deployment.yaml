@@ -1,0 +1,212 @@
+{{- if eq .Values.workload "edge" }}
+{{- if not (has (toString .Values.replicas) (list "0" "1")) }}
+{{- fail "Thinpost release 1 supports zero or one Edge worker" }}
+{{- end }}
+{{- if and (eq (int .Values.replicas) 1) (empty .Values.controlClientCidrs) }}
+{{- fail "Thinpost Edge requires explicit control client CIDRs before activation" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thinpost-edge-worker
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ int .Values.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: thinpost-edge-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: thinpost-edge-worker
+      annotations:
+        # A change to any attachment (address, gateway, table) restarts the pod.
+        checksum/public-network: {{ include (print $.Template.BasePath "/network-attachment.yaml") . | sha256sum }}
+        k8s.v1.cni.cncf.io/networks: '[{"name":"thinpost-public","interface":"net1"}{{ range $i, $_ := .Values.additionalSources }},{"name":"thinpost-public-{{ add1 $i }}","interface":"net{{ add 2 $i }}"}{{ end }}]'
+    spec:
+      automountServiceAccountToken: false
+{{- if and .Values.node (ne (toString .Values.node) "unconfigured") }}
+      nodeSelector:
+        kubernetes.io/hostname: {{ .Values.node | quote }}
+{{- end }}
+{{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | indent 8 }}
+{{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        # Preserve private journal modes after the volume root is provisioned.
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+        sysctls:
+          - name: net.ipv4.ip_unprivileged_port_start
+            value: '0'
+      containers:
+        - name: worker
+          image: {{ default .Values.bootstrapImage .Values.image | quote }}
+          ports:
+            - name: control
+              containerPort: 7443
+              protocol: TCP
+            - name: smtp
+              containerPort: 25
+              protocol: TCP
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: THINPOST_EDGE_CONTROL_LISTEN
+              value: $(POD_IP):7443
+            - name: THINPOST_EDGE_SMTP_LISTEN
+              value: {{ printf "%s:25" .Values.sourceAddress | quote }}
+            - name: THINPOST_EDGE_WORKER_ID
+              value: {{ .Values.workerId | quote }}
+            - name: THINPOST_EDGE_SMTP_HOSTNAME
+              value: {{ .Values.smtpHostname | quote }}
+            - name: THINPOST_EDGE_BOUNCE_DOMAIN
+              value: {{ .Values.bounceDomain | quote }}
+            # One gateway per source, primary first, as the routing config derives them.
+            - name: THINPOST_EDGE_SOURCE_GATEWAYS
+              value: {{ $gateways := list .Values.publicNetwork.gateway }}{{ range .Values.additionalSources }}{{ $gateways = append $gateways (default $.Values.publicNetwork.gateway .gateway) }}{{ end }}{{ join "," $gateways | quote }}
+{{- if .Values.additionalSources }}
+            - name: THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES
+              value: {{ $addresses := list }}{{ range .Values.additionalSources }}{{ $addresses = append $addresses .address }}{{ end }}{{ join "," $addresses | quote }}
+            - name: THINPOST_EDGE_SMTP_ADDITIONAL_HOSTNAMES
+              value: {{ $hostnames := list }}{{ range .Values.additionalSources }}{{ $hostnames = append $hostnames .hostname }}{{ end }}{{ join "," $hostnames | quote }}
+            - name: THINPOST_EDGE_SMTP_ADDITIONAL_CERT_ROOT
+              value: /run/thinpost/smtp-sources
+{{- end }}
+{{- if .Values.additionalBounceDomains }}
+            - name: THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS
+              value: {{ join "," .Values.additionalBounceDomains | quote }}
+{{- end }}
+            - name: THINPOST_EDGE_INFRASTRUCTURE_CIDRS
+              valueFrom:
+                configMapKeyRef:
+                  name: thinpost-recipient-allowlist
+                  key: infrastructure-cidrs
+            - name: THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE
+              valueFrom:
+                configMapKeyRef:
+                  name: thinpost-recipient-allowlist
+                  key: route-exceptions-file
+            - name: THINPOST_EDGE_CONTROLLER_IDENTITIES
+              value: {{ .Values.controllerIdentity | quote }}
+            - name: THINPOST_EDGE_CONTROL_CA
+              value: /run/thinpost/control/ca.crt
+            - name: THINPOST_EDGE_CONTROL_CERT
+              value: /run/thinpost/control/tls.crt
+            - name: THINPOST_EDGE_CONTROL_KEY
+              value: /run/thinpost/control/tls.key
+            - name: THINPOST_EDGE_SMTP_CERT
+              value: /run/thinpost/smtp/tls.crt
+            - name: THINPOST_EDGE_SMTP_KEY
+              value: /run/thinpost/smtp/tls.key
+            - name: THINPOST_EDGE_JOURNAL_PATH
+              value: /journal/attempts.db
+            - name: THINPOST_EDGE_JOURNAL_CAPACITY
+              value: {{ .Values.journalCapacity | quote }}
+            - name: THINPOST_EDGE_JOURNAL_RESERVE_BYTES
+              value: {{ printf "%d" (int64 .Values.journalReserveBytes) | quote }}
+            - name: THINPOST_EDGE_CLOCK_MARGIN
+              value: {{ .Values.clockMargin | quote }}
+            - name: THINPOST_EDGE_SMTP_GLOBAL_INTERVAL
+              value: {{ .Values.smtpRate.globalInterval | quote }}
+            - name: THINPOST_EDGE_SMTP_GLOBAL_BURST
+              value: {{ .Values.smtpRate.globalBurst | quote }}
+            - name: THINPOST_EDGE_SMTP_SOURCE_INTERVAL
+              value: {{ .Values.smtpRate.sourceInterval | quote }}
+            - name: THINPOST_EDGE_SMTP_SOURCE_BURST
+              value: {{ .Values.smtpRate.sourceBurst | quote }}
+            - name: THINPOST_RECIPIENT_POLICY
+              valueFrom:
+                configMapKeyRef:
+                  name: thinpost-recipient-allowlist
+                  key: policy
+            - name: THINPOST_RECIPIENT_ALLOWLIST_FILE
+              valueFrom:
+                configMapKeyRef:
+                  name: thinpost-recipient-allowlist
+                  key: allowlist-file
+          volumeMounts:
+            - name: control-tls
+              mountPath: /run/thinpost/control
+              readOnly: true
+            - name: smtp-tls
+              mountPath: /run/thinpost/smtp
+              readOnly: true
+{{- range $i, $_ := .Values.additionalSources }}
+            # A whole-directory mount, so a renewed certificate reaches the Edge.
+            - name: {{ printf "smtp-source-%d" $i }}
+              mountPath: {{ printf "/run/thinpost/smtp-sources/%d" $i }}
+              readOnly: true
+{{- end }}
+            - name: recipients
+              mountPath: /run/thinpost/recipients
+              readOnly: true
+            - name: journal
+              mountPath: /journal
+          startupProbe:
+            exec:
+              command: [/usr/local/bin/thinpost-edge, healthcheck, liveness]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: [/usr/local/bin/thinpost-edge, healthcheck]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          # Liveness checks the journal only: unresolved source neighbours delay
+          # readiness but must never restart the worker.
+          livenessProbe:
+            exec:
+              command: [/usr/local/bin/thinpost-edge, healthcheck, liveness]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+              ephemeral-storage: 32Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              ephemeral-storage: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: control-tls
+          secret:
+            secretName: thinpost-edge-control
+            defaultMode: 0440
+        - name: smtp-tls
+          secret:
+            secretName: thinpost-smtp-public
+            defaultMode: 0440
+{{- range $i, $extra := .Values.additionalSources }}
+        - name: {{ printf "smtp-source-%d" $i }}
+          secret:
+            secretName: {{ default "thinpost-smtp-public" $extra.certificateSecret | quote }}
+            defaultMode: 0440
+{{- end }}
+        - name: recipients
+          configMap:
+            name: thinpost-recipient-allowlist
+        - name: journal
+          persistentVolumeClaim:
+            claimName: thinpost-journal
+
+{{- end }}

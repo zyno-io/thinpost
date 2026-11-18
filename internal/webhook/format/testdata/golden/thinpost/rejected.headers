@@ -1,0 +1,4 @@
+Content-Type: application/json
+X-Thinpost-Event-Id: evt_rejected
+X-Thinpost-Signature: v1=1c2d3577679627343410ad000efdb7a9ed829e39e96a38352ac7be37d8918f1a
+X-Thinpost-Timestamp: 1793880007

@@ -1,0 +1,36 @@
+{
+  "RecordType": "Open",
+  "MessageStream": "outbound",
+  "FirstOpen": true,
+  "Client": {
+    "Name": "Chrome 140.0.7339.80",
+    "Company": "Google",
+    "Family": "Chrome"
+  },
+  "OS": {
+    "Name": "macOS 26 Tahoe",
+    "Company": "Apple Computer, Inc.",
+    "Family": "macOS"
+  },
+  "Platform": "WebMail",
+  "UserAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.7339.80 Safari/537.36",
+  "ReadSeconds": 5,
+  "Geo": {
+    "CountryISOCode": "US",
+    "Country": "United States",
+    "RegionISOCode": "TX",
+    "Region": "Texas",
+    "City": "Austin",
+    "Zip": "78701",
+    "Coords": "30.2672,-97.7431",
+    "IP": "203.0.113.42"
+  },
+  "MessageID": "b670adbd-0705-4442-a638-183a3000db83",
+  "Metadata": {
+    "PropA": "value",
+    "PropB": "value"
+  },
+  "ReceivedAt": "2026-03-14T16:33:54.9070259Z",
+  "Tag": "welcome-email",
+  "Recipient": "recipient@example.net"
+}

@@ -1,0 +1,108 @@
+replicas: 0
+image: ''
+# Optional. Leave empty to let the Edge float between nodes. Set it only while
+# the routers still check a source MAC for these addresses (older node-mode
+# guard). (The old placeholder "unconfigured" also means no pin.)
+node: ''
+workerId: unconfigured
+smtpHostname: smtp.example.invalid
+bounceDomain: bounce.example.invalid
+controllerIdentity: spiffe://thinpost.invalid/control
+controlClientCidrs: []
+# The primary address: the SMTP listener, the MX and the default outbound
+# source for every app. It is the first address the Edge reports.
+sourceAddress: 192.0.2.1
+# Further addresses, one network attachment each (so each can sit in its own
+# network behind its own gateway). The Edge listens for SMTP on every one of
+# them, as well as sending from it: it greets with, and presents a certificate
+# for, the entry's own hostname, and accepts bounces and inbound mail there.
+# address and hostname are required. certificateSecret names a kubernetes.io/tls
+# Secret in this namespace whose certificate covers the hostname (default
+# thinpost-smtp-public, which may be reused when it does); use a separate
+# Secret per name. range, gateway, master and mtu default to publicNetwork.
+# The hostname must match the address's reverse DNS. Name each address in the
+# console (Operations > Sending IPs) with that hostname as its HELO name.
+# Changing this list restarts the Edge. Each address must also be in the
+# infrastructure CIDRs on both Trusted and Edge.
+additionalSources: []
+#  - address: 203.0.113.10
+#    hostname: smtp.hosting.example
+#    certificateSecret: thinpost-smtp-hosting
+#    range: 203.0.113.0/24
+#    gateway: 203.0.113.1
+#    master: ens19
+# Extra bounce domains the Edge accepts beyond its own: only for retired domains
+# still receiving bounces. The bounce listener already accepts bounceDomain and
+# every additionalSources hostname, so those need no entry here.
+additionalBounceDomains: []
+journalCapacity: 1000
+journalReserveBytes: 67108864
+clockMargin: 5s
+smtpRate:
+  globalInterval: 100ms
+  globalBurst: 100
+  sourceInterval: 1s
+  sourceBurst: 12
+publicNetwork:
+  master: unconfigured
+  range: 192.0.2.0/24
+  gateway: 192.0.2.254
+  mtu: 1400
+  table: 100
+  # Labels added to every NetworkAttachmentDefinition (the primary and each
+  # additionalSources entry), for example one a policy engine checks.
+  attachmentLabels: {}
+  # CNI plugin binary names used in each attachment. Override when the cluster
+  # installs them under versioned or custom names.
+  cniTypes:
+    ipvlan: ipvlan
+    sbr: sbr
+# ConfigMap in this namespace holding the CA bundle (key ca.crt) that the control
+# plane trusts for Postgres (sslrootcert=/run/thinpost/db-ca/ca.crt). The cluster
+# trust bundle distributes it; the file is re-read on every new connection.
+database:
+  caConfigMap: thinpost-db-ca
+workload: edge
+# Image pull Secrets for every pod spec (the Edge, the operator and the hook
+# Jobs), as a list of {name: ...}. Empty renders no imagePullSecrets.
+imagePullSecrets: []
+control:
+  # Extra annotations for the operator Deployment metadata.
+  deploymentAnnotations: {}
+  # Restart the operator when its control client Secret renews (needs the
+  # Stakater Reloader controller). Set false to omit the annotation.
+  reloader:
+    enabled: true
+  replicas: 2
+  image: ''
+  bootstrapImage: unconfigured
+  # Mail host that receiving (inbound) domains point their MX record at. Empty
+  # leaves it unset: the console then says no mail server is set up.
+  inboundMxHost: ''
+  # Optional HTTPS listener beside the plain :8080 one (the public Gateway path
+  # stays plain). The Secret (tls.crt, tls.key; for example from cert-manager)
+  # is mounted as a directory and re-read on renewal without a restart. The
+  # thinpost-operator Service port is owned outside this chart.
+  tls:
+    enabled: false
+    secretName: thinpost-operator-tls
+    port: 8443
+  # Exact internal webhook URLs the operator API may accept and the dispatcher
+  # may deliver to (THINPOST_WEBHOOK_INTERNAL_DESTINATIONS), such as
+  # http://app.namespace.svc.cluster.local/hooks/thinpost. An exception to the
+  # public-HTTPS rule for that whole URL only (scheme, host, port, path and query);
+  # empty keeps public HTTPS only. Requires serviceCidrs.
+  webhookInternalDestinations: []
+  # Cluster Service CIDRs (THINPOST_SERVICE_CIDRS), for example 10.96.0.0/12. An
+  # internal destination must resolve inside one of them at connection time.
+  # Take them from the cluster's Service network; the control binary rejects
+  # anything that is not wholly private address space.
+  serviceCidrs: []
+  # Helm hook Jobs that migrate the schema before a rollout and reopen the
+  # admission gate after it. The schema owner secret and ServiceAccount are
+  # managed outside this chart.
+  migrations:
+    enabled: true
+    serviceAccount: thinpost-migrate
+    activeDeadlineSeconds: 600
+bootstrapImage: unconfigured

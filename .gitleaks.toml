@@ -1,0 +1,37 @@
+title = "Thinpost gitleaks configuration"
+
+[extend]
+useDefault = true
+
+# Everything allowlisted here is synthetic: fixture credentials, fabricated
+# tokens and webhook-signing values that exist only to exercise parsers and
+# signature checks. Real credentials never belong in these paths either; new
+# findings elsewhere fail CI.
+[[allowlists]]
+description = "Fixture secrets in tests"
+condition = "OR"
+targetRules = ["generic-api-key"]
+paths = [
+  '''^internal/(bounceingest|controlsession|controlapp|edgesession|postgres|feedback)/[^/]+_test\.go$''',
+  '''^internal/webhook/format/[^/]+_test\.go$''',
+  '''^tests/sdk-contract/fixture/main\.go$''',
+  '''^ui/tests/e2e/fixtures/console\.ts$''',
+]
+
+[[allowlists]]
+description = "Fabricated webhook secrets used throughout the test suites"
+regexTarget = "match"
+regexes = [
+  '''tpwh_0123[0-9a-f]*''',
+  '''whsec_AAEC[A-Za-z0-9+/=]*''',
+  '''whsec_e2e_fabricated_secret''',
+]
+
+[[allowlists]]
+description = "Placeholder credentials in documented curl examples and the quickstart's runtime-generated S3 secret"
+condition = "OR"
+targetRules = ["curl-auth-user", "curl-auth-header"]
+paths = [
+  '''^docs/reference/compatibility/[^/]+\.md$''',
+  '''^examples/quickstart/db-init\.sh$''',
+]

@@ -1,0 +1,21 @@
+# Single HTTPS origin for the console, the operator API, the submission API and
+# the development issuer. `tls internal` uses Caddy's own local CA: the browser
+# warns once, and the control plane trusts the root through a shared volume to
+# fetch the JWKS at https://caddy:8443/idp/jwks.
+{
+	admin 127.0.0.1:2019
+	default_sni localhost
+	auto_https disable_redirects
+}
+
+https://localhost:8443, https://caddy:8443 {
+	tls internal
+
+	handle /idp/* {
+		reverse_proxy devidp:9000
+	}
+	handle {
+		# ctlnet holds the control plane's network namespace.
+		reverse_proxy ctlnet:8080
+	}
+}

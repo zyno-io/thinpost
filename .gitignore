@@ -1,0 +1,9 @@
+/thinpost-edge
+/thinpost-control
+docs/.vitepress/dist
+docs/.vitepress/cache
+docs/node_modules
+docs/public/openapi/
+examples/quickstart/.state/
+__pycache__/
+*.pyc
