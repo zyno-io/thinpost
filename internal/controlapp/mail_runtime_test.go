@@ -119,3 +119,34 @@ func TestAppReadRoutesFollowSubmissionAndNeverFallToConsole(t *testing.T) {
 		t.Fatal("/app is not a reserved console path")
 	}
 }
+
+func TestNativeSendRouteFollowsSubmissionAndNeverFallsToAppReadsOrConsole(t *testing.T) {
+	console := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("console")) })
+	operator := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("operator")) })
+	submission := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("submission")) })
+	app := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("app")) })
+	post := func(router http.Handler, path string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, nil))
+		return w
+	}
+	enabled := RouterWithRuntime(operator, submission, console, nil, MailRuntime{App: app})
+	if got := post(enabled, "/app/v1/messages"); got.Body.String() != "submission" {
+		t.Fatal("send route not served by submission", got.Body.String())
+	}
+	// Message reads under the same prefix still go to the app read handler.
+	if got := post(enabled, "/app/v1/messages/x/release"); got.Body.String() != "app" {
+		t.Fatal("read route moved", got.Body.String())
+	}
+	// Without submission the send route is absent, even when reads exist, and
+	// the console's reserved-prefix rule answers 404 rather than the SPA.
+	real := newTestConsole(t)
+	for name, router := range map[string]http.Handler{
+		"no submission":          RouterWithRuntime(operator, nil, real, nil, MailRuntime{App: app}),
+		"no submission, no apps": RouterWithRuntime(operator, nil, real, nil, MailRuntime{}),
+	} {
+		if got := post(router, "/app/v1/messages"); got.Code != http.StatusNotFound || strings.Contains(got.Body.String(), "app") || strings.Contains(got.Body.String(), "submission") {
+			t.Fatalf("%s: %d", name, got.Code)
+		}
+	}
+}
