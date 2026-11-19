@@ -63,6 +63,7 @@ paths:
           description: An Idempotency-Key retry; the original message, nothing new queued
           headers:
             Location: { schema: { type: string } }
+            X-Thinpost-Hold: { schema: { type: string, const: held }, description: Present when the request set hold }
           content:
             application/json:
               schema: { $ref: '../admin/openapi.yaml#/components/schemas/SubmittedMessage' }

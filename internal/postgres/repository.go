@@ -114,6 +114,14 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 	var pendingLimit int
 	err = tx.QueryRowContext(ctx, `SELECT pending_message_limit FROM apps WHERE id=$1 AND active FOR UPDATE`, record.AppID).Scan(&pendingLimit)
 	if errors.Is(err, sql.ErrNoRows) {
+		// An operator submission has no key whose revocation explains this: the
+		// app was paused after authorization, which is reported as such.
+		if record.Operator != "" && record.KeyID == "" {
+			var exists bool
+			if tx.QueryRowContext(ctx, `SELECT true FROM apps WHERE id=$1`, record.AppID).Scan(&exists) == nil {
+				return receipt, submission.ErrAppPaused
+			}
+		}
 		return receipt, submission.ErrInvalidMessage
 	}
 	if err != nil {

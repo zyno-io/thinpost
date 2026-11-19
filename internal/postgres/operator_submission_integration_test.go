@@ -149,8 +149,12 @@ func TestOperatorPausedApp(t *testing.T) {
 	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1); !errors.Is(err, submission.ErrAppPaused) {
 		t.Fatalf("reserve: %v", err)
 	}
-	if _, err := f.repo.Commit(f.ctx, f.record(f.app, "sender@example.com", 1)); err == nil {
-		t.Fatal("committed for a paused app")
+	if _, err := f.repo.Commit(f.ctx, f.record(f.app, "sender@example.com", 1)); !errors.Is(err, submission.ErrAppPaused) {
+		t.Fatalf("commit for a paused app: %v", err)
+	}
+	// A key commit is unchanged: the app is not found for it.
+	if _, err := f.submit(f.app, f.key, false); !errors.Is(err, submission.ErrInvalidMessage) {
+		t.Fatalf("key commit for a paused app: %v", err)
 	}
 	// The key path still reports a paused app as before.
 	if err := f.repo.ReserveSubmission(f.ctx, f.app, f.key, 1); !errors.Is(err, submission.ErrInvalidMessage) {
@@ -289,5 +293,21 @@ func TestOperatorSubmissionThroughAcceptance(t *testing.T) {
 	}
 	if _, err := service.AuthorizeOperator(f.ctx, f.id(), operatorSubject); !errors.Is(err, admin.ErrNotFound) {
 		t.Fatalf("unknown app: %v", err)
+	}
+}
+
+// TestOperatorPausedBetweenReserveAndCommit pauses the app after the
+// reservation succeeded, the window the 409 app_paused answer must cover.
+func TestOperatorPausedBetweenReserveAndCommit(t *testing.T) {
+	f := newOperatorFixture(t)
+	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1); err != nil {
+		t.Fatal(err)
+	}
+	f.exec(`UPDATE apps SET active=false WHERE id=$1`, f.app)
+	if _, err := f.repo.Commit(f.ctx, f.record(f.app, "sender@example.com", 1)); !errors.Is(err, submission.ErrAppPaused) {
+		t.Fatalf("got %v", err)
+	}
+	if f.messages(f.app) != 0 || f.audits(f.app) != 0 {
+		t.Fatal("rows left for a paused app")
 	}
 }

@@ -50,7 +50,15 @@ type nativeOptions struct {
 	Hold bool
 	// Headers, Attachments and Tracking report that the body contained the field.
 	Headers, Attachments, Tracking bool
+	// Present holds the top-level keys the body contained.
+	Present map[string]bool
 }
+
+// nativeKeys are the accepted top-level keys, matched exactly.
+var nativeKeys = map[string]bool{"from": true, "to": true, "cc": true, "bcc": true, "reply_to": true, "subject": true, "text": true, "html": true, "headers": true, "attachments": true, "enhanced_protection": true, "tracking": true, "hold": true}
+
+// testForbiddenKeys may not appear at all in an operator test send, even empty.
+var testForbiddenKeys = []string{"cc", "bcc", "reply_to", "headers", "attachments", "tracking", "hold"}
 
 // decodeNative strictly decodes a native request body: no duplicate, unknown
 // or null-valued optional objects. Errors never include request content. A body
@@ -59,6 +67,19 @@ func decodeNative(data []byte, lim limits) (submission.Message, nativeOptions, e
 	var opts nativeOptions
 	if len(data) > lim.body || !utf8.Valid(data) {
 		return submission.Message{}, opts, submission.ErrInvalidRequest
+	}
+	// encoding/json matches keys case-insensitively and reads null as absent,
+	// so check the top level first: exact known keys, no null values.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil || fields == nil {
+		return submission.Message{}, opts, submission.ErrInvalidRequest
+	}
+	opts.Present = make(map[string]bool, len(fields))
+	for key, value := range fields {
+		if !nativeKeys[key] || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return submission.Message{}, opts, submission.ErrInvalidRequest
+		}
+		opts.Present[key] = true
 	}
 	var input nativeInput
 	if err := decodeJSONBytes(data, &input); err != nil {
@@ -155,6 +176,11 @@ func (s *Server) SubmitTestMessage(ctx context.Context, actor, appID string, bod
 	msg, opts, err := decodeNative(body, limits{body: maxTestBody, attachment: s.attachmentLimit})
 	if err != nil {
 		return submission.Receipt{}, err
+	}
+	for _, key := range testForbiddenKeys {
+		if opts.Present[key] {
+			return submission.Receipt{}, submission.ErrInvalidRequest
+		}
 	}
 	if len(msg.To) < 1 || len(msg.To) > maxTestRecipients || len(msg.Cc) > 0 || len(msg.Bcc) > 0 || len(msg.ReplyTo) > 0 || opts.Hold || opts.Headers || opts.Attachments || opts.Tracking {
 		return submission.Receipt{}, submission.ErrInvalidRequest
