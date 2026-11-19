@@ -25,6 +25,7 @@
   "overrides": {
     "vitepress-plugin-mermaid": {
       "mermaid": "$mermaid"
-    }
+    },
+    "vite": "6.4.6"
   }
 }
