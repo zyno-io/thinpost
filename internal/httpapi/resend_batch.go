@@ -21,7 +21,7 @@ func (s *Server) resendBatch(w http.ResponseWriter, r *http.Request, app submiss
 		fail(w, "resend", http.StatusServiceUnavailable, "batch submission unavailable")
 		return
 	}
-	key, err := resendIdempotencyKey(r)
+	key, err := idempotencyKeyHeader(r)
 	if err != nil {
 		fail(w, "resend", http.StatusBadRequest, "invalid idempotency key")
 		return

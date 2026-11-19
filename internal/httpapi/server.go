@@ -153,6 +153,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		provider = "resend"
 	case "/v3/mail/send":
 		provider = "sendgrid"
+	case nativePath:
+		provider = "thinpost"
+		nativeHeaders(w)
+		// The route has one canonical spelling; any percent-encoding is 404.
+		if strings.Contains(r.URL.EscapedPath(), "%") {
+			nativeFail(w, http.StatusNotFound, "Not Found")
+			return
+		}
 	default:
 		parts := strings.Split(r.URL.Path, "/")
 		if len(parts) != 4 || parts[1] != "v3" || parts[3] != "messages" || !validDomain(parts[2]) {
@@ -164,6 +172,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		fail(w, provider, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if provider == "thinpost" && (r.URL.RawQuery != "" || r.URL.ForceQuery || nativeRejectedHeader(r.Header)) {
+		fail(w, provider, http.StatusBadRequest, "Bad Request")
 		return
 	}
 	if s.service == nil {
@@ -182,6 +194,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			fail(w, provider, http.StatusServiceUnavailable, "authentication unavailable")
 		}
+		return
+	}
+	// Authenticate returns API-key principals only. An operator principal is
+	// created solely by AuthorizeOperator for the console route, so one here
+	// means a misbehaving service: refuse rather than submit it.
+	if app.Operator != "" {
+		fail(w, provider, http.StatusServiceUnavailable, "authentication unavailable")
 		return
 	}
 	if provider != "resend" && (len(r.Header.Values("X-Thinpost-Track-Opens")) > 0 || len(r.Header.Values("X-Thinpost-Track-Clicks")) > 0) {
@@ -246,6 +265,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var msg submission.Message
 	var postmarkTo string
 	var gridMessages []submission.Message
+	var nativeOpts nativeOptions
 	switch provider {
 	case "postmark":
 		msg, postmarkTo, err = decodePostmark(r, lim)
@@ -258,6 +278,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case "mailgun":
 		msg, err = decodeMailgun(r, lim)
+	case "thinpost":
+		var data []byte
+		if data, err = readBody(r, lim); err == nil {
+			msg, nativeOpts, err = decodeNative(data, lim)
+		}
 	}
 	if errors.Is(err, errBodyRead) {
 		// A timeout or dropped connection is not a verdict on the message, and
@@ -277,6 +302,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.sendGridBatch(w, r, app, gridMessages, hold)
+		return
+	}
+	if provider == "thinpost" {
+		s.serveNative(w, r, app, msg, nativeOpts)
 		return
 	}
 	if provider == "resend" {
@@ -301,7 +330,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var idem string
 	if provider == "resend" {
-		idem, err = resendIdempotencyKey(r)
+		idem, err = idempotencyKeyHeader(r)
 		if err != nil {
 			fail(w, provider, http.StatusBadRequest, "invalid idempotency key")
 			return
@@ -364,7 +393,7 @@ func senderDomain(from string) string {
 	return strings.ToLower(address.Address[at+1:])
 }
 
-func resendIdempotencyKey(r *http.Request) (string, error) {
+func idempotencyKeyHeader(r *http.Request) (string, error) {
 	values := r.Header.Values("Idempotency-Key")
 	if len(values) == 0 {
 		return "", nil
@@ -483,15 +512,30 @@ func optionalFlag(values []string) (*bool, error) {
 	return &value, nil
 }
 func decodeJSON(r *http.Request, dest any, lim limits) error {
+	data, err := readBody(r, lim)
+	if err != nil {
+		return err
+	}
+	return decodeJSONBytes(data, dest)
+}
+
+// readBody reads the whole request body, at most lim.body bytes of valid UTF-8.
+func readBody(r *http.Request, lim limits) ([]byte, error) {
 	defer r.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(r.Body, int64(lim.body)+1))
 	if err != nil {
-		return fmt.Errorf("%w: %w", errBodyRead, err)
+		return nil, fmt.Errorf("%w: %w", errBodyRead, err)
 	}
 	if len(data) > lim.body || !utf8.Valid(data) {
-		return fmt.Errorf("invalid body")
+		return nil, fmt.Errorf("invalid body")
 	}
-	if err = rejectAmbiguousJSONFields(data); err != nil {
+	return data, nil
+}
+
+// decodeJSONBytes strictly decodes one JSON value: no duplicate or unknown
+// fields and no trailing data.
+func decodeJSONBytes(data []byte, dest any) error {
+	if err := rejectAmbiguousJSONFields(data); err != nil {
 		return err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -671,6 +715,10 @@ func decodeResend(r *http.Request, lim limits) (submission.Message, error) {
 	return message, nil
 }
 func fail(w http.ResponseWriter, provider string, code int, msg string) {
+	if provider == "thinpost" {
+		nativeFail(w, code, http.StatusText(code))
+		return
+	}
 	if provider == "postmark" {
 		writeJSON(w, code, map[string]any{"ErrorCode": code, "Message": msg})
 		return

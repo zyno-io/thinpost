@@ -381,6 +381,9 @@ type Handler struct {
 	AppStatus      AppStatusStore
 	Suppressions   SuppressionStore
 	Operations     OperationsStore
+	// TestMessages submits operator test messages as an app. Without it the
+	// test-send route answers 503.
+	TestMessages TestMessageSubmitter
 	// BounceDomain is the domain of per-delivery bounce addresses and the feedback
 	// mailbox, set only on a replica that receives bounces.
 	BounceDomain string
@@ -796,6 +799,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			headers = []HeaderField{}
 		}
 		respond(w, http.StatusOK, map[string]any{"headers": headers})
+		return
+	}
+	if len(path) == 7 && path[5] == "messages" && path[6] == "test" {
+		h.testMessage(w, r, principal.Subject, appID)
 		return
 	}
 	if len(path) == 7 && path[5] == "messages" && path[6] == "search" {

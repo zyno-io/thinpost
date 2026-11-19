@@ -21,6 +21,22 @@ var (
 	ErrQuotaExceeded       = errors.New("application recipient quota exceeded")
 	ErrRateLimited         = errors.New("application submission rate exceeded")
 	ErrBacklogExceeded     = errors.New("application pending message limit exceeded")
+	// ErrAppPaused reports that the application is inactive. It is returned
+	// only for operator submissions, whose principal is not a credential that
+	// an inactive application would already have invalidated.
+	ErrAppPaused = errors.New("application is paused")
+	// ErrInvalidRequest reports a request that could not be decoded, or that
+	// is outside the profile of its route. It is never a policy refusal: the
+	// message was not submitted to acceptance.
+	ErrInvalidRequest = errors.New("invalid request")
+)
+
+// Adapter names recorded with a submission. AdapterNative is Thinpost's own
+// JSON API. AdapterConsole is reserved for operator submissions and is the
+// only adapter an operator principal may use.
+const (
+	AdapterNative  = "thinpost"
+	AdapterConsole = "console"
 )
 
 // App identifies the authenticated application. It must come from an
@@ -28,8 +44,15 @@ var (
 // ListUnsubscribe is the app's Thinpost one-click unsubscribe opt-in as read at
 // authentication. DefaultTrackOpens and DefaultTrackClicks are the app's
 // tracking defaults as read at authentication; only acceptance applies them.
+//
+// Exactly one of KeyID and Operator identifies the principal. KeyID is set by
+// authenticating an API key. Operator is the subject of an authenticated
+// administrator and is set only by OperatorService.AuthorizeOperator; it
+// selects the operator submission path (adapter AdapterConsole, no
+// idempotency key). Nothing else may set it.
 type App struct {
 	ID, KeyID                             string
+	Operator                              string
 	ListUnsubscribe                       bool
 	DefaultTrackOpens, DefaultTrackClicks bool
 }
@@ -562,4 +585,12 @@ type BatchService interface {
 type Service interface {
 	Authenticate(ctx context.Context, key string) (App, error)
 	Accept(ctx context.Context, app App, request Request) (Receipt, error)
+}
+
+// OperatorService is implemented by services that can submit on behalf of an
+// authenticated administrator. AuthorizeOperator returns the application as an
+// operator principal; actor must be the verified administrator subject. The
+// result is passed to the same Service.Accept as an API-key submission.
+type OperatorService interface {
+	AuthorizeOperator(ctx context.Context, appID, actor string) (App, error)
 }

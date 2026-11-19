@@ -1382,6 +1382,65 @@ paths:
         '400': { description: Invalid request or no searchable form of q for the field }
         '503': { description: Database unavailable or timed out }
         default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/messages/test:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    post:
+      operationId: sendAppTestMessage
+      description: >-
+        Submits one message as the app, for an operator to check delivery. It goes
+        through the same acceptance path as the app API's sendMessage, so the app's
+        quotas, submission rate, pending-message limit, sender-domain verification
+        and recipient policy all apply, the message counts against them, and the
+        app's webhooks receive its events. Tracking defaults and one-click
+        unsubscribe follow the app's settings. The request is constrained: From
+        must be on one of the app's active, verified sender domains, there are 1 to
+        5 To recipients, and Cc, Bcc, reply addresses, headers, attachments,
+        tracking choices and hold are not accepted. It needs no API key and takes
+        no idempotency key: a repeated request sends another message. Audited as
+        message.test.submitted (actor: the administrator subject, resource: the
+        message ID, details: recipient_count only). The body is read only from the
+        request (at most 64 KiB); a query string is rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TestMessageRequest' }
+      responses:
+        '201':
+          description: Accepted and queued
+          headers:
+            Location: { schema: { type: string }, description: 'The message in this API, /api/v1/apps/{appId}/messages/{messageId}' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubmittedMessage' }
+        '400':
+          description: Malformed, oversized or unsupported request, or a query string
+          content: { application/json: { schema: { $ref: '#/components/schemas/SubmissionRefusal' } } }
+        '404':
+          description: Unknown app
+          content: { application/json: { schema: { $ref: '#/components/schemas/SubmissionRefusal' } } }
+        '409':
+          description: The app is paused (app_paused)
+          content: { application/json: { schema: { $ref: '#/components/schemas/SubmissionRefusal' } } }
+        '422':
+          description: >-
+            Acceptance refused the message (message_rejected): for example a From
+            domain that is not an active verified sender domain of the app, or a
+            recipient the operator's recipient policy does not allow.
+          content: { application/json: { schema: { $ref: '#/components/schemas/SubmissionRefusal' } } }
+        '429':
+          description: >-
+            recipient_quota_exceeded, submission_rate_exceeded or
+            pending_limit_exceeded
+          content: { application/json: { schema: { $ref: '#/components/schemas/SubmissionRefusal' } } }
+        '503':
+          description: >-
+            Submission is not configured on this replica, the admission gate is
+            closed, or storage or the database is unavailable. The outcome of a
+            request that got no response is unknown.
+          content: { application/json: { schema: { $ref: '#/components/schemas/SubmissionRefusal' } } }
+        default: { $ref: '#/components/responses/Error' }
   /apps/{appId}/messages/{messageId}:
     parameters:
       - { $ref: '#/components/parameters/AppId' }
@@ -2136,6 +2195,52 @@ components:
         name: { type: string }
         active: { type: boolean }
         created_at: { type: string, format: date-time }
+    TestMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [from, to, subject]
+      description: >-
+        The operator test-send profile of the app API's SendMessageRequest. At
+        least one of text and html is required.
+      properties:
+        from: { type: string, minLength: 1, maxLength: 998, description: 'An address, optionally with a display name ("Name <local@example.com>"), on an active verified sender domain of the app.' }
+        to:
+          type: array
+          minItems: 1
+          maxItems: 5
+          items: { type: string, minLength: 1, maxLength: 998 }
+          description: Recipient addresses, each optionally with a display name.
+        subject: { type: string, minLength: 1, maxLength: 998, description: At most 998 UTF-8 bytes; no control characters other than tab. }
+        text: { type: string, description: Plain-text body. The whole request is at most 64 KiB. }
+        html: { type: string, description: HTML body. }
+        enhanced_protection: { type: boolean, description: "Require TLS to the recipient's server (Enhanced Protection)." }
+    SubmittedMessage:
+      type: object
+      required: [id, accepted_at]
+      description: A message accepted for delivery.
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        accepted_at: { type: string, format: date-time }
+    SubmissionRefusal:
+      type: object
+      required: [error]
+      description: >-
+        A submission refused or failed. error is the status text for generic
+        failures and a stable code for refusals a caller can act on.
+      properties:
+        error:
+          type: string
+          enum:
+            - Bad Request
+            - Unauthorized
+            - Not Found
+            - app_paused
+            - idempotency_conflict
+            - message_rejected
+            - recipient_quota_exceeded
+            - submission_rate_exceeded
+            - pending_limit_exceeded
+            - Service Unavailable
     MessageSearch:
       type: object
       additionalProperties: false

@@ -48,6 +48,9 @@ func RouterWithRuntime(operator, experimentalSubmission, console http.Handler, o
 		mux.Handle("/emails", experimentalSubmission)
 		mux.Handle("/emails/batch", experimentalSubmission)
 		mux.Handle("/v3/", experimentalSubmission)
+		// Native send. Exact pattern: it wins over the "/app/" read handler,
+		// whose sub-paths are message reads.
+		mux.Handle("/app/v1/messages", experimentalSubmission)
 		if runtime.App != nil {
 			mux.Handle("/app/", runtime.App)
 		}

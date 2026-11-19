@@ -56,6 +56,37 @@ func (r *Repository) LookupKey(ctx context.Context, digest [32]byte) (submission
 	return app, nil
 }
 
+// LookupOperatorApp reads an app for an operator submission. It is the
+// operator counterpart of LookupKey: the principal is an authenticated
+// administrator, so there is no key, and an inactive app is reported as paused
+// rather than as an invalid credential.
+func (r *Repository) LookupOperatorApp(ctx context.Context, appID string) (submission.App, error) {
+	app := submission.App{ID: appID}
+	if !opaqueID(appID) {
+		return submission.App{}, admin.ErrNotFound
+	}
+	tx, err := r.beginRuntime(ctx)
+	if err != nil {
+		return submission.App{}, err
+	}
+	defer tx.Rollback()
+	var active bool
+	err = tx.QueryRowContext(ctx, `SELECT active,list_unsubscribe,default_track_opens,default_track_clicks FROM apps WHERE id=$1`, appID).Scan(&active, &app.ListUnsubscribe, &app.DefaultTrackOpens, &app.DefaultTrackClicks)
+	if errors.Is(err, sql.ErrNoRows) {
+		return submission.App{}, admin.ErrNotFound
+	}
+	if err != nil {
+		return submission.App{}, err
+	}
+	if !active {
+		return submission.App{}, submission.ErrAppPaused
+	}
+	if err = tx.Commit(); err != nil {
+		return submission.App{}, err
+	}
+	return app, nil
+}
+
 func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (submission.Receipt, error) {
 	var receipt submission.Receipt
 	if record.RecipientCount < 1 || record.RecipientCount > 100 || len(record.PreviousHashes) > 7 {
@@ -89,12 +120,25 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 		return receipt, err
 	}
 	var exists bool
-	err = tx.QueryRowContext(ctx, `SELECT true FROM api_keys WHERE id=$1 AND app_id=$2 AND active FOR SHARE`, record.KeyID, record.AppID).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
+	// Exactly one principal. A key submission rechecks its key; an operator
+	// submission has no key and is bound to the console adapter and to no
+	// idempotency key. Any other combination is refused, so a stray operator
+	// value can never open a keyless path for a provider adapter.
+	switch {
+	case record.KeyID != "" && record.Operator == "":
+		if record.Adapter == submission.AdapterConsole {
+			return receipt, submission.ErrInvalidKey
+		}
+		err = tx.QueryRowContext(ctx, `SELECT true FROM api_keys WHERE id=$1 AND app_id=$2 AND active FOR SHARE`, record.KeyID, record.AppID).Scan(&exists)
+		if errors.Is(err, sql.ErrNoRows) {
+			return receipt, submission.ErrInvalidKey
+		}
+		if err != nil {
+			return receipt, err
+		}
+	case record.KeyID == "" && adminText(record.Operator, 256) && record.Adapter == submission.AdapterConsole && record.IdempotencyKey == "":
+	default:
 		return receipt, submission.ErrInvalidKey
-	}
-	if err != nil {
-		return receipt, err
 	}
 	for _, senderDomain := range []string{domain, record.SendingDomain} {
 		if senderDomain == "" {
@@ -182,6 +226,17 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 	}
 	if err = insertRecipients(ctx, tx, record.AppID, &recipients); err != nil {
 		return submission.Receipt{}, err
+	}
+	if record.Operator != "" {
+		auditID, idErr := newOpaqueID()
+		if idErr != nil {
+			return submission.Receipt{}, idErr
+		}
+		// Only the recipient count: never the subject, addresses or body.
+		if _, err = tx.ExecContext(ctx, `INSERT INTO audit_events(id,actor_id,app_id,action,resource_id,details)
+			VALUES ($1,$2,$3,'message.test.submitted',$4,jsonb_build_object('recipient_count',$5::integer))`, auditID, record.Operator, record.AppID, messageID, record.RecipientCount); err != nil {
+			return submission.Receipt{}, err
+		}
 	}
 	if record.Hold {
 		if err = insertMessageEvent(ctx, tx, record.AppID, messageID, holdEventHeld); err != nil {
