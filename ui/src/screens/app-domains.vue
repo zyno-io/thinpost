@@ -30,6 +30,8 @@
 
             <div class="card-body domains-body">
                 <p v-if="!app.active" id="request-hint" class="hint">This app is paused, so TXT records can't be requested.</p>
+                <p v-if="testSend.blocker.value && testSend.blocker.value !== pausedHint" class="hint">{{ testSend.blocker.value }}</p>
+                <ApiErrorNotice v-if="testSend.outcomeError.value" :error="testSend.outcomeError.value" />
 
                 <ApiErrorNotice v-if="actionError" :error="actionError" />
 
@@ -99,6 +101,16 @@
                                 <span v-else class="muted">—</span>
                             </td>
                             <td class="actions">
+                                <button
+                                    v-if="domain.active"
+                                    type="button"
+                                    class="btn sm"
+                                    :disabled="!!testSend.blocker.value || !canAct"
+                                    @click="testSend.open(domain.name)"
+                                >
+                                    Send test
+                                    <span class="sr-only">from {{ domain.name }}</span>
+                                </button>
                                 <template v-if="!domain.active">
                                     <button type="button" class="btn sm" :disabled="!canAct" @click="verify(domain.name)">
                                         {{ isBusy(domain.name, 'verify') ? 'Verifying…' : 'Verify' }}
@@ -116,6 +128,16 @@
             </div>
         </section>
 
+        <TestMessageModal
+            v-if="testSend.isOpen.value"
+            :domains="testSend.domains.value"
+            :domains-error="testSend.domainsError.value"
+            :preselect="testSend.preselect.value"
+            :is-submitting="testSend.isSubmitting.value"
+            :error="testSend.error.value"
+            @close="testSend.close"
+            @submit="testSend.submit"
+        />
         <DomainModal v-if="isRequestOpen" :is-submitting="isRequesting" :error="requestError" @close="closeRequest" @submit="requestDomain" />
     </div>
 </template>
@@ -134,6 +156,8 @@ import HelpButton from '@/shared/components/help-button.vue';
 import CopyField from '@/shared/components/copy-field.vue';
 import DomainModal from '@/shared/components/domain-modal.vue';
 import Loader from '@/shared/components/loader.vue';
+import TestMessageModal from '@/shared/components/test-message-modal.vue';
+import { useTestSend } from '@/test-send';
 
 interface IssuedChallenge {
     domain: string;
@@ -142,6 +166,8 @@ interface IssuedChallenge {
 }
 
 const { app, appId } = useAppContext();
+const testSend = useTestSend({ appId, isActive: computed(() => app.value.active) });
+const pausedHint = 'This app is paused. Resume the app to send.';
 
 const domains = shallowRef<Domain[] | null>(null);
 const isLoading = ref(true);

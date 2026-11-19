@@ -17,10 +17,22 @@
                         </p>
                     </HelpButton>
                 </div>
-                <button type="button" class="btn sm" :disabled="isLoading || isSearching || isLoadingMore || isRefreshing" @click="refresh">
-                    <i class="fa-solid fa-rotate" :class="{ 'fa-spin': isRefreshing }" aria-hidden="true" />
-                    {{ isRefreshing ? 'Refreshing…' : 'Refresh' }}
-                </button>
+                <div class="header-actions">
+                    <button
+                        type="button"
+                        class="btn sm"
+                        :disabled="!!testBlocker || testSend.isSubmitting.value"
+                        :aria-describedby="testBlocker ? 'test-send-hint' : undefined"
+                        @click="testSend.open()"
+                    >
+                        <i class="fa-solid fa-paper-plane" aria-hidden="true" />
+                        Send test message
+                    </button>
+                    <button type="button" class="btn sm" :disabled="isLoading || isSearching || isLoadingMore || isRefreshing" @click="refresh">
+                        <i class="fa-solid fa-rotate" :class="{ 'fa-spin': isRefreshing }" aria-hidden="true" />
+                        {{ isRefreshing ? 'Refreshing…' : 'Refresh' }}
+                    </button>
+                </div>
             </div>
 
             <div class="card-body messages-body">
@@ -49,6 +61,8 @@
                     <span class="muted search-status" role="status">{{ searchStatus }}</span>
                 </form>
 
+                <p v-if="testBlocker" id="test-send-hint" class="hint">{{ testBlocker }}</p>
+                <ApiErrorNotice v-if="testSend.outcomeError.value" :error="testSend.outcomeError.value" />
                 <p v-if="validationHint" class="hint validation" role="status">{{ validationHint }}</p>
                 <p v-if="isSearchActive && excludesProtected(active.field)" class="hint ep-excluded">Excludes Enhanced Protection subjects.</p>
 
@@ -193,6 +207,17 @@
                 </div>
             </template>
         </section>
+
+        <TestMessageModal
+            v-if="testSend.isOpen.value"
+            :domains="testSend.domains.value"
+            :domains-error="testSend.domainsError.value"
+            :preselect="testSend.preselect.value"
+            :is-submitting="testSend.isSubmitting.value"
+            :error="testSend.error.value"
+            @close="testSend.close"
+            @submit="testSend.submit"
+        />
     </div>
 </template>
 
@@ -225,7 +250,9 @@ import { DefaultApi } from '@/openapi-client-generated';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import HelpButton from '@/shared/components/help-button.vue';
 import Loader from '@/shared/components/loader.vue';
+import TestMessageModal from '@/shared/components/test-message-modal.vue';
 import { messageStatus, tagClass } from '@/states';
+import { useTestSend } from '@/test-send';
 
 const PAGE_SIZE = 50;
 const MAX_CURSOR_LENGTH = 512;
@@ -259,6 +286,18 @@ const refreshError = ref<ApiErrorDescription | null>(null);
 const revealed = shallowRef(new Map<string, Revealed>());
 const revealing = ref(new Set<string>());
 const revealError = ref<ApiErrorDescription | null>(null);
+
+
+// ---- Test message ----
+const testSend = useTestSend({
+    appId,
+    isActive: computed(() => app.value.active),
+    onUnknownOutcome: async () => {
+        await refresh();
+        return !refreshError.value && !loadError.value;
+    }
+});
+const testBlocker = testSend.blocker;
 
 const isSearchActive = computed(() => active.value.q !== '');
 const searchStatus = computed(() => {
@@ -589,6 +628,12 @@ async function reveal(row: MessageRow) {
 </script>
 
 <style lang="scss" scoped>
+.header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
 .messages-body {
     display: flex;
     flex-direction: column;

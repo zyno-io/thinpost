@@ -27,6 +27,14 @@ export class InvalidResponseError extends Error {
     }
 }
 
+/** Returns the stable `error` code (for example `app_paused`) from a failed call's JSON body, if it has one. */
+export function apiErrorCode(err: unknown): string | undefined {
+    if (!(err instanceof OpenApiError)) return undefined;
+    const body = err.body as { error?: unknown } | null | undefined;
+    const code = body?.error;
+    return typeof code === 'string' && /^[a-z_]+$/.test(code) ? code : undefined;
+}
+
 /** Returns the HTTP status of a failed API call, if the server responded. */
 export function apiErrorStatus(err: unknown): number | undefined {
     return err instanceof OpenApiError ? err.response?.status : undefined;
