@@ -225,6 +225,9 @@ func (r *Repository) GetMessage(ctx context.Context, actor, appID, messageID str
 		}
 		detail.PreparationFailure = &failure
 	}
+	if detail.Hold, err = readMessageHold(ctx, tx, appID, messageID); err != nil {
+		return admin.MessageDetail{}, err
+	}
 	// Count attempts using the same exclusion as retry scheduling. An eligible
 	// time does not guarantee dispatch: app state, the runtime gate, tracking
 	// and worker availability remain independent constraints.

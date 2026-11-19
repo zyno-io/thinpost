@@ -19,8 +19,20 @@ type AppMessageStore interface {
 	GetMessage(ctx context.Context, actor, appID, messageID string) (MessageDetail, error)
 }
 
-// AppReadHandler serves read-only message routes under /app/v1/ to the
-// submission API keys of an app: message status, source body and attachments.
+// AppHoldStore releases or cancels a message submitted on hold. Each call
+// rechecks, in its own transaction, that the app is active and the key
+// unrevoked (submission.ErrInvalidKey otherwise), and serializes on the
+// message: a repeat of the same action changes nothing and returns nil, and a
+// message the action cannot apply to returns a HoldConflict. A message of
+// another app is ErrNotFound. A change is audited with the actor key:<keyID>.
+type AppHoldStore interface {
+	ReleaseHeldMessage(ctx context.Context, appID, keyID, messageID string) error
+	CancelHeldMessage(ctx context.Context, appID, keyID, messageID string) error
+}
+
+// AppReadHandler serves the message routes under /app/v1/ to the submission
+// API keys of an app: message status, source body and attachments (GET), and
+// release or cancel of a message submitted on hold (POST).
 // Authentication is the submission service's (Authorization: Bearer <app key>),
 // the key's app is the only app a request can read, and the audit actor is
 // "key:<keyId>". Reads share the admin routes' store and content paths, so
@@ -30,6 +42,8 @@ type AppReadHandler struct {
 	Service       submission.Service
 	Store         AppMessageStore
 	ContentReader ContentReader
+	// Holds serves release and cancel; nil answers them 503.
+	Holds AppHoldStore
 
 	once   sync.Once
 	budget *semaphore.Weighted
@@ -117,7 +131,7 @@ func (h *AppReadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound)
 		return
 	}
-	// Shapes: {id}, {id}/body, {id}/attachments/{index}.
+	// Shapes: {id}, {id}/body, {id}/attachments/{index}, {id}/release, {id}/cancel.
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, appReadPrefix), "/")
 	id, ok := providerid.Normalize(parts[0])
 	if !ok || !opaqueID(id) {
@@ -130,6 +144,8 @@ func (h *AppReadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		kind = "message"
 	case len(parts) == 2 && parts[1] == "body":
 		kind = "body"
+	case len(parts) == 2 && (parts[1] == "release" || parts[1] == "cancel"):
+		kind = parts[1]
 	case len(parts) == 3 && parts[1] == "attachments":
 		kind = "attachment"
 		if index, ok = attachmentIndex(parts[2]); !ok {
@@ -140,8 +156,8 @@ func (h *AppReadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound)
 		return
 	}
-	if r.Method != http.MethodGet {
-		method(w, "GET")
+	if want := holdMethod(kind); r.Method != want {
+		method(w, want)
 		return
 	}
 	if r.URL.RawQuery != "" || r.URL.ForceQuery {
@@ -199,6 +215,39 @@ func (h *AppReadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			body.Attachments = []AttachmentMetadata{}
 		}
 		respond(w, http.StatusOK, body)
+	case "release", "cancel":
+		if h.Holds == nil {
+			fail(w, http.StatusServiceUnavailable)
+			return
+		}
+		if kind == "release" {
+			err = h.Holds.ReleaseHeldMessage(r.Context(), app.ID, app.KeyID, id)
+		} else {
+			err = h.Holds.CancelHeldMessage(r.Context(), app.ID, app.KeyID, id)
+		}
+		var conflict HoldConflict
+		switch {
+		case errors.As(err, &conflict):
+			respond(w, http.StatusConflict, map[string]string{"error": string(conflict)})
+			return
+		case errors.Is(err, submission.ErrInvalidKey):
+			fail(w, http.StatusUnauthorized)
+			return
+		case err != nil:
+			storeError(w, err)
+			return
+		}
+		// The action committed; report the message as it is now, which may
+		// already have moved on (a released message being prepared).
+		detail, err := h.Store.GetMessage(r.Context(), actor, app.ID, id)
+		if err != nil {
+			storeError(w, err)
+			return
+		}
+		if detail.Deliveries == nil {
+			detail.Deliveries = []DeliverySummary{}
+		}
+		respond(w, http.StatusOK, detail)
 	case "attachment":
 		if h.ContentReader == nil {
 			fail(w, http.StatusServiceUnavailable)
@@ -218,6 +267,15 @@ func (h *AppReadHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeAttachment(w, index, attachment)
 	}
+}
+
+// holdMethod is the one method each route serves: POST for the hold actions,
+// GET for reads.
+func holdMethod(kind string) string {
+	if kind == "release" || kind == "cancel" {
+		return http.MethodPost
+	}
+	return http.MethodGet
 }
 
 // appKey extracts the single Bearer credential, as the submission API does.

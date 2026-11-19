@@ -13,7 +13,10 @@ export interface StateLabel {
 const MESSAGE_STATES: Record<string, StateLabel> = {
     queued: { label: 'Queued', tone: 'inactive', description: 'Submitted by your app and waiting to be prepared for sending.' },
     preparing: { label: 'Preparing', tone: 'inactive', description: 'Being prepared for each recipient.' },
-    prepared: { label: 'Prepared', tone: 'inactive', description: 'Ready to send to each recipient. This doesn\'t mean it has been delivered.' }
+    prepared: { label: 'Prepared', tone: 'inactive', description: 'Ready to send to each recipient. This doesn\'t mean it has been delivered.' },
+    on_hold: { label: 'On hold by app', tone: 'inactive', description: 'Your app submitted it on hold. It isn\'t prepared or sent until your app releases it.' },
+    cancelled: { label: 'Cancelled', tone: 'inactive', description: 'Your app cancelled it while it was on hold. It was never sent.' },
+    hold_expired: { label: 'Hold expired', tone: 'inactive', description: 'Your app didn\'t release it before its hold expired, so it was never sent.' }
 };
 
 const MESSAGE_STATUSES: Record<string, StateLabel> = {
@@ -27,6 +30,9 @@ const MESSAGE_STATUSES: Record<string, StateLabel> = {
     suppressed: { label: 'Suppressed', tone: 'inactive', description: 'Every recipient was on the suppression list, so nothing was sent.' },
     held: { label: 'Held', tone: 'warning', description: 'Held back after a data recovery and not sent.' },
     attention: { label: 'Needs attention', tone: 'warning', description: 'A delivery is on hold or its result is unknown. Open the message for details.' },
+    on_hold: { label: 'On hold by app', tone: 'inactive', description: 'Submitted on hold. It waits for your app to release or cancel it, and expires unsent if it isn\'t released in time.' },
+    cancelled: { label: 'Cancelled', tone: 'inactive', description: 'Cancelled by your app while on hold. Nothing was sent.' },
+    expired: { label: 'Hold expired', tone: 'inactive', description: 'Not released before its hold expired. Nothing was sent.' },
     unknown: { label: 'Unknown', tone: 'inactive', description: 'The status could not be determined.' }
 };
 

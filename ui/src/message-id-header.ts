@@ -2,7 +2,10 @@
 const HEADER = /^<([0-9a-f]{32})@[a-z0-9.-]{1,253}>$/;
 
 /** Message states before any delivery exists; the header is assigned at preparation. */
-const UNPREPARED = new Set(['queued', 'preparing', 'preparation_failed']);
+const UNPREPARED = new Set(['queued', 'preparing', 'preparation_failed', 'on_hold']);
+
+/** Holds that ended without sending: no header was ever assigned. */
+const NEVER_SENT = new Set(['cancelled', 'hold_expired']);
 
 export type MessageIdHeaderView =
     /** Every copy carries this one header (messages prepared at schema 38 or later). */
@@ -11,6 +14,8 @@ export type MessageIdHeaderView =
     | { kind: 'perRecipient' }
     /** Not assigned yet. */
     | { kind: 'pending' }
+    /** Never assigned: the message was cancelled or its hold expired. */
+    | { kind: 'notSent' }
     /** The sender domain was not recorded, or no valid value was reported. */
     | { kind: 'unrecorded' };
 
@@ -21,6 +26,7 @@ export type MessageIdHeaderView =
  */
 export function readMessageIdHeader(messageId: string, state: string, deliveries: ReadonlyArray<{ message_id_header?: unknown }>): MessageIdHeaderView {
     if (UNPREPARED.has(state) && deliveries.length === 0) return { kind: 'pending' };
+    if (NEVER_SENT.has(state) && deliveries.length === 0) return { kind: 'notSent' };
     let shared: string | null = null;
     let perRecipient = false;
     for (const delivery of deliveries) {

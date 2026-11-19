@@ -16,9 +16,13 @@ describe('readMessageIdHeader', () => {
     });
 
     it('is pending before any delivery exists, and unrecorded otherwise without a value', () => {
-        for (const state of ['queued', 'preparing', 'preparation_failed']) expect(readMessageIdHeader(ID, state, [])).toEqual({ kind: 'pending' });
+        for (const state of ['queued', 'preparing', 'preparation_failed', 'on_hold']) expect(readMessageIdHeader(ID, state, [])).toEqual({ kind: 'pending' });
         expect(readMessageIdHeader(ID, 'prepared', [{}, {}])).toEqual({ kind: 'unrecorded' });
         expect(readMessageIdHeader(ID, 'prepared', [])).toEqual({ kind: 'unrecorded' });
+    });
+
+    it('is never assigned for a hold that ended without sending', () => {
+        for (const state of ['cancelled', 'hold_expired']) expect(readMessageIdHeader(ID, state, [])).toEqual({ kind: 'notSent' });
     });
 
     it('ignores malformed values and never displays them', () => {

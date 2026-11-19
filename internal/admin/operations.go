@@ -51,12 +51,14 @@ type OperationsWorker struct {
 
 // MessageBacklog counts messages that are not finished preparing.
 type MessageBacklog struct {
-	QueuedDue         int        `json:"queued_due"`
-	QueuedWaiting     int        `json:"queued_waiting"`
-	Preparing         int        `json:"preparing"`
-	PreparationFailed int        `json:"preparation_failed"`
-	RecoveryHold      int        `json:"recovery_hold"`
-	OldestDueAt       *time.Time `json:"oldest_due_at,omitempty"`
+	QueuedDue         int `json:"queued_due"`
+	QueuedWaiting     int `json:"queued_waiting"`
+	Preparing         int `json:"preparing"`
+	PreparationFailed int `json:"preparation_failed"`
+	RecoveryHold      int `json:"recovery_hold"`
+	// OnHold counts messages submitted on hold that wait for their app.
+	OnHold      int        `json:"on_hold"`
+	OldestDueAt *time.Time `json:"oldest_due_at,omitempty"`
 }
 
 type DeliveryBacklog struct {

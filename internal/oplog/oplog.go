@@ -18,7 +18,13 @@ const (
 	StatusAccepted          Status = "accepted"
 	StatusPrepared          Status = "prepared"
 	StatusPreparationFailed Status = "preparation_failed"
-	StatusOther             Status = "other"
+	// Messages submitted on hold: accepted on hold, then released, cancelled
+	// by the app, or expired without release.
+	StatusHeld        Status = "held"
+	StatusReleased    Status = "released"
+	StatusCancelled   Status = "cancelled"
+	StatusHoldExpired Status = "hold_expired"
+	StatusOther       Status = "other"
 )
 
 // Delivery outcomes recorded by the delivery result path.
@@ -38,7 +44,8 @@ const (
 // invalidID replaces any ID that is not 32 lowercase hex characters.
 const invalidID = "invalid"
 
-var messageStatuses = map[Status]bool{StatusAccepted: true, StatusPrepared: true, StatusPreparationFailed: true}
+var messageStatuses = map[Status]bool{StatusAccepted: true, StatusPrepared: true, StatusPreparationFailed: true,
+	StatusHeld: true, StatusReleased: true, StatusCancelled: true, StatusHoldExpired: true}
 
 var deliveryOutcomes = map[Status]bool{
 	OutcomeAccepted: true, OutcomeRejected: true, OutcomeRouteRejected: true, OutcomeUncertain: true,

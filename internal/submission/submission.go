@@ -517,7 +517,15 @@ type Request struct {
 	// every distinct recipient is suppressed. Only the Postmark adapter sets it
 	// (ErrorCode 406); the others accept and drop suppressed recipients later.
 	RejectAllSuppressed bool
+	// Hold accepts the message on hold (X-Thinpost-Hold: true): stored and
+	// counted like any accepted message, but not prepared or sent until the app
+	// releases it. It is part of the idempotency fingerprint.
+	Hold bool
 }
+
+// MaxHold is how long a message submitted on hold waits for release. After it
+// the hold expires and the message is never sent.
+const MaxHold = 7 * 24 * time.Hour
 
 type Receipt struct {
 	ID         string
@@ -532,6 +540,8 @@ type BatchRequest struct {
 	Messages       []Message
 	IdempotencyKey string
 	Adapter        string
+	// Hold accepts every message of the batch on hold (see Request.Hold).
+	Hold bool
 }
 
 type BatchReceipt struct {

@@ -24,6 +24,7 @@ var Outcomes = []string{
 	"accepted", "rejected", "route_rejected", "uncertain", "null_mx", "domain_not_found",
 	"retry_expired", "recipient_policy_denied", "tracking_unavailable", "tracking_abandoned",
 	"preparation_failed", "bounce_received_unverified", "opened", "clicked", "suppressed", "unsubscribed", "complained",
+	"held", "released", "cancelled", "hold_expired",
 }
 
 const minThinpostSecret = 32

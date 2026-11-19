@@ -33,9 +33,9 @@ The app area stays mounted as you move between tabs. The console remembers the l
 
 ### Messages
 
-- **List.** Accepted time, message ID, sender domain, first recipient (with a count of others), subject, an overall status (queued through delivered) and delivery counts. Messages accepted before the console recorded this metadata show "Not recorded".
+- **List.** Accepted time, message ID, sender domain, first recipient (with a count of others), subject, an overall status (queued through delivered) and delivery counts. Messages accepted before the console recorded this metadata show "Not recorded". A message [submitted on hold](/guide/holding-messages) shows **On hold by app**, then **Cancelled** or **Hold expired** if it was never released.
 - **Search.** By message ID, recipient, recipient domain, sender domain or subject. Terms go in a `POST` body and are kept only in memory, never in the URL, router state, document title, browser storage, logs or notifications. They are not restored after a reload. Pasting an exact 32-character ID opens that message.
-- **Detail.** Sender domain, recipients, and per-delivery state with the retry count, earliest next attempt and latest outcome. HTML content appears on **Rendered**, **Text** and **HTML source** tabs. The rendered view is sanitized, shown in a `sandbox` iframe with its own policy, and blocks all remote content, with a count of what it blocked. Inline `cid:` images are resolved within size limits. Attachments download as `application/octet-stream`. A **Headers** view shows every synthesized header in order. Everything is held in memory and discarded when you leave.
+- **Detail.** Sender domain, recipients, and per-delivery state with the retry count, earliest next attempt and latest outcome. HTML content appears on **Rendered**, **Text** and **HTML source** tabs. The rendered view is sanitized, shown in a `sandbox` iframe with its own policy, and blocks all remote content, with a count of what it blocked. Inline `cid:` images are resolved within size limits. Attachments download as `application/octet-stream`. A **Headers** view shows every synthesized header in order. Everything is held in memory and discarded when you leave. A held message also shows its hold: when it expires, or when it was released, cancelled or expired. Operators cannot release or cancel it; only the app can.
 - **Enhanced Protection.** The subject of a protected message is masked in lists and excluded from search. Revealing it, showing content, downloading an attachment and viewing headers each ask for confirmation and are recorded in the audit log. Unprotected messages show none of these dialogs. See [Concepts](/guide/concepts#enhanced-protection).
 
 ### Webhook history and replay
@@ -46,7 +46,7 @@ Delivery history is paged, newest first, with the latest attempts for a delivery
 
 The Operations screen is global rather than per app. It shows data returned by the operator API, and anything the API cannot provide is shown as unavailable, never as zero. It covers:
 
-- **Runtime and operations status:** the admission gate, the edge worker's lease, message, delivery and webhook backlogs, and a cross-app list of messages that need an operator.
+- **Runtime and operations status:** the admission gate, the edge worker's lease, message, delivery and webhook backlogs (messages on hold by their app are counted in the messages row's **Held** column), and a cross-app list of messages that need an operator.
 - **Retry policy:** the delivery retry policy, which is the one setting you can edit here. The defaults are 128 attempts, a 30-minute first delay, a three-hour cap and a five-day lifetime. Changes use a revision check and are audited.
 - **Sending IPs:** add, name and check the DNS of sending addresses and assign apps. See [Sending IPs](/guide/sending-ips).
 - **Feedback loops:** the abuse-report mailbox, the reporter allowlist and 14 days of counters. See [Suppressions](/guide/suppressions#spam-complaints-and-feedback-loops).

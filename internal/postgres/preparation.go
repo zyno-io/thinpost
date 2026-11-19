@@ -49,7 +49,7 @@ func (r *Repository) ClaimPreparation(ctx context.Context, token string, ttl tim
 	}
 	err = tx.QueryRowContext(ctx, `UPDATE messages SET state='preparing',prepare_token=$1,prepare_until=clock_timestamp()+$2*interval '1 millisecond',prepare_attempts=prepare_attempts+1
 		WHERE id=(SELECT m.id FROM messages m JOIN apps app ON app.id=m.app_id WHERE app.active AND m.state='queued' AND m.prepare_next_at<=clock_timestamp() AND m.prepare_attempts<$3 ORDER BY m.prepare_next_at,m.accepted_at,m.id FOR UPDATE OF m SKIP LOCKED LIMIT 1)
-		RETURNING id,app_id,object_key,accepted_at,enhanced_protection,(SELECT a.list_unsubscribe FROM apps a WHERE a.id=messages.app_id),COALESCE(sender_domain,'')`, token, ttl.Milliseconds(), maxPreparationAttempts).Scan(&claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.AcceptedAt, &claim.EnhancedProtection, &claim.ListUnsubscribe, &claim.SenderDomain)
+		RETURNING id,app_id,object_key,accepted_at,COALESCE(hold_resolved_at,accepted_at),enhanced_protection,(SELECT a.list_unsubscribe FROM apps a WHERE a.id=messages.app_id),COALESCE(sender_domain,'')`, token, ttl.Milliseconds(), maxPreparationAttempts).Scan(&claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.AcceptedAt, &claim.Date, &claim.EnhancedProtection, &claim.ListUnsubscribe, &claim.SenderDomain)
 	if errors.Is(err, sql.ErrNoRows) {
 		return claim, preparation.ErrNoWork
 	}

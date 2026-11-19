@@ -156,6 +156,10 @@ These are not provider features. They are optional.
 
 Send `X-Thinpost-Enhanced-Protection: true` to require validated TLS on every attempt and to protect the message in the console ([Concepts](/guide/concepts#enhanced-protection)). Where each SDK lets you set a header, set it per message. Postmark and SendGrid take it as an HTTP header on the request; Resend can supply it in request options; Mailgun can use `o:require-tls` instead. A client-wide header applies to every message sent through that client.
 
+### Holding a message
+
+Send `X-Thinpost-Hold: true` to store a message without sending it, then release or cancel it through the app API. Check that the response carries `X-Thinpost-Hold: held`: an older Thinpost ignores the request header and sends at once. Postmark (through its `fetch` option), Resend (request options) and SendGrid (a client header) can set the header; the Mailgun SDK has no per-request header option, so send it from your HTTP client. See [Holding messages](/guide/holding-messages).
+
 ### Tracking per message
 
 Open and click tracking are off unless an app default or the message turns them on. Explicit per-message values always win over the app default. See [Open and click tracking](/guide/tracking).
@@ -171,7 +175,7 @@ Tracking applies to HTML bodies only.
 
 ## Reading messages back
 
-An app key can also read back its own messages through `GET /app/v1/messages/{id}` and its `/body` and `/attachments/{index}` sub-routes. These are Thinpost routes, not a provider API, and are described in the [App API reference](/reference/api/app).
+An app key can also read back its own messages through `GET /app/v1/messages/{id}` and its `/body` and `/attachments/{index}` sub-routes, and release or cancel a held message with `POST /app/v1/messages/{id}/release` and `/cancel`. These are Thinpost routes, not a provider API, and are described in the [App API reference](/reference/api/app).
 
 ## Next
 

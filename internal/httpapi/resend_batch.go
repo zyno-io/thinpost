@@ -14,7 +14,7 @@ import (
 
 // resendBatch validates the complete request before invoking the atomic
 // batch service. It never falls back to individual message submissions.
-func (s *Server) resendBatch(w http.ResponseWriter, r *http.Request, app submission.App) {
+func (s *Server) resendBatch(w http.ResponseWriter, r *http.Request, app submission.App, hold bool) {
 	defer r.Body.Close()
 	service, ok := s.service.(submission.BatchService)
 	if !ok {
@@ -64,7 +64,7 @@ func (s *Server) resendBatch(w http.ResponseWriter, r *http.Request, app submiss
 		}
 		messages = append(messages, message)
 	}
-	receipt, err := service.AcceptBatch(r.Context(), app, submission.BatchRequest{Messages: messages, IdempotencyKey: key, Adapter: "resend"})
+	receipt, err := service.AcceptBatch(r.Context(), app, submission.BatchRequest{Messages: messages, IdempotencyKey: key, Adapter: "resend", Hold: hold})
 	if err != nil {
 		switch {
 		case errors.Is(err, submission.ErrInvalidKey):
@@ -94,5 +94,6 @@ func (s *Server) resendBatch(w http.ResponseWriter, r *http.Request, app submiss
 		seen[id] = true
 		results = append(results, map[string]string{"id": providerid.Resend(id)})
 	}
+	markHeld(w, hold)
 	writeJSON(w, http.StatusOK, map[string]any{"data": results})
 }

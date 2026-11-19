@@ -54,7 +54,7 @@ func TestNormalizeWebhookEndpoint(t *testing.T) {
 }
 
 func TestValidWebhookEventNames(t *testing.T) {
-	if len(WebhookOutcomes) != 17 || !ValidWebhookEventNames(WebhookOutcomes) || !ValidWebhookEventNames([]string{"opened", "complained", "Delivery", "SpamComplaint", "email.complained", "email.bounced", "permanent_fail"}) {
+	if len(WebhookOutcomes) != 21 || !ValidWebhookEventNames(WebhookOutcomes) || !ValidWebhookEventNames([]string{"opened", "complained", "Delivery", "SpamComplaint", "email.complained", "email.bounced", "permanent_fail"}) {
 		t.Fatal("known event names rejected")
 	}
 	for _, bad := range [][]string{nil, {}, {"bogus"}, {"opened", "opened"}, {"Opened"}, {""}, {"opened", "bogus"}, make([]string, 33)} {

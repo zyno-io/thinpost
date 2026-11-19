@@ -64,11 +64,14 @@ func newFixture(t *testing.T) *fixture {
 	if err = postgres.Migrate(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	// Revert migrations 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29 and 28 to leave the exact schema-27 shape.
+	// Revert migrations 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29 and 28 to leave the exact schema-27 shape.
+	// Migration 42: dropping the hold columns also drops their CHECKs and index;
+	// its webhook_events CHECK is dropped with inbound_id below.
 	// Migration 35's constraint is rebuilt without its feedback branch first.
 	// Migration 41: message_recipients.kind is dropped with the table below.
 	// Migration 39: dropping webhook_events.inbound_id also drops the source CHECK and the unique index.
-	if _, err = db.ExecContext(ctx, `ALTER TABLE apps DROP COLUMN sending_ip_id;
+	if _, err = db.ExecContext(ctx, `ALTER TABLE messages DROP COLUMN hold_expires_at, DROP COLUMN hold_resolved_at;
+		ALTER TABLE apps DROP COLUMN sending_ip_id;
 		ALTER TABLE delivery_attempts DROP COLUMN source_address;
 		DROP TABLE edge_source_reports, sending_ips;
 ALTER TABLE webhook_deliveries DROP COLUMN lane;
@@ -107,7 +110,7 @@ ALTER TABLE webhook_deliveries DROP COLUMN lane;
 		DROP TABLE message_recipients; DROP INDEX deliveries_id_prefix_idx, messages_app_id_prefix_idx;
 		ALTER TABLE messages DROP CONSTRAINT messages_id_app_key, DROP COLUMN subject, DROP COLUMN recipient_count, DROP COLUMN sender_domain, DROP COLUMN sender_domain_rev;
 		ALTER TABLE messages RENAME COLUMN enhanced_protection TO require_tls;
-		DELETE FROM thinpost_schema_migrations WHERE version IN (28,29,30,31,32,33,34,35,36,37,38,39,40,41);
+		DELETE FROM thinpost_schema_migrations WHERE version IN (28,29,30,31,32,33,34,35,36,37,38,39,40,41,42);
 		UPDATE runtime_gate SET generation='`+testGeneration+`',mode='open',revision=5,quarantine_complete=true,changed_by='fixture' WHERE singleton`); err != nil {
 		t.Fatal(err)
 	}

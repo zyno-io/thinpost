@@ -388,8 +388,8 @@ const queueRows = computed(() => {
         {
             name: 'messages',
             label: 'Messages',
-            cells: [m.queued_due, m.queued_waiting, m.preparing, null, null, m.preparation_failed, m.recovery_hold],
-            titles: ['Waiting to be prepared, ready now', 'Waiting to be prepared, scheduled for later', 'Being prepared', '', '', 'Preparation failed', 'Held after data recovery'],
+            cells: [m.queued_due, m.queued_waiting, m.preparing, null, m.on_hold ?? null, m.preparation_failed, m.recovery_hold],
+            titles: ['Waiting to be prepared, ready now', 'Waiting to be prepared, scheduled for later', 'Being prepared', '', 'On hold by their app until it releases or cancels them', 'Preparation failed', 'Held after data recovery'],
             oldest: m.oldest_due_at ?? null
         },
         {

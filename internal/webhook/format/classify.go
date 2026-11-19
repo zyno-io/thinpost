@@ -16,6 +16,7 @@ const (
 	classSuppressed
 	classUnsubscribed
 	classComplained
+	classHoldExpired
 )
 
 // classify never yields a class for bounce_received_unverified: an
@@ -47,6 +48,10 @@ func classify(f Fact) class {
 		return classUnsubscribed
 	case f.Outcome == "complained":
 		return classComplained
+	// held, released and cancelled are app-driven hold transitions with no
+	// provider meaning; an expired hold is a message that was never sent.
+	case f.Outcome == "hold_expired":
+		return classHoldExpired
 	}
 	return classNone
 }

@@ -10,7 +10,7 @@ Thinpost describes its HTTP APIs with OpenAPI 3.1 documents in the repository un
 | Contract | Served at | Rendered reference | Download | Source |
 | --- | --- | --- | --- | --- |
 | Admin (operator) API | `/api/v1` | [Admin API](/reference/api/admin) | [YAML](/openapi/admin.yaml), [JSON](/openapi/admin.json) | [`api/admin/openapi.yaml`](https://github.com/zyno-io/thinpost/blob/main/api/admin/openapi.yaml) |
-| App read API | `/app/v1` | [App API](/reference/api/app) | [YAML](/openapi/app.yaml), [JSON](/openapi/app.json) | [`api/app/openapi.yaml`](https://github.com/zyno-io/thinpost/blob/main/api/app/openapi.yaml) |
+| App API | `/app/v1` | [App API](/reference/api/app) | [YAML](/openapi/app.yaml), [JSON](/openapi/app.json) | [`api/app/openapi.yaml`](https://github.com/zyno-io/thinpost/blob/main/api/app/openapi.yaml) |
 
 The downloads are the same contracts as the source files. The only difference is that the app download includes copies of the message schemas it shares with the admin contract, because the source file references them by relative path.
 

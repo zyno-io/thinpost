@@ -177,6 +177,62 @@ test('fixture rejects non-loopback connections', () => {
   assert.throws(() => net.connect({ host: '203.0.113.1', port: 443 }), /non-fixture network connection/);
 });
 
+test('SDKs submit on hold with X-Thinpost-Hold and see the confirmation header', async () => {
+  // Postmark: the SDK's fetch hook adds the request header and exposes the response header.
+  let postmarkHold = null;
+  const postmarkClient = new postmark.ServerClient('fixture-key', {
+    useHttps: false,
+    requestHost: base.host,
+    fetch: async (input, init) => {
+      const headers = new Headers(init.headers);
+      headers.set('X-Thinpost-Hold', 'true');
+      const response = await fetch(input, { ...init, headers });
+      postmarkHold = response.headers.get('X-Thinpost-Hold');
+      return response;
+    },
+  });
+  const single = await postmarkClient.sendEmail({ From: 'sender@example.com', To: 'recipient@example.net', Subject: 'hold postmark', TextBody: 'fixture body' });
+  assert.equal(single.ErrorCode, 0);
+  assert.match(single.MessageID, UUID);
+  assert.equal(postmarkHold, 'held');
+  postmarkHold = null;
+  const batch = await postmarkClient.sendEmailBatch([{ From: 'sender@example.com', To: 'recipient@example.net', Subject: 'hold postmark batch', TextBody: 'fixture body' }]);
+  assert.ok(batch.every(item => item.ErrorCode === 0));
+  assert.equal(postmarkHold, 'held');
+  // Resend: per-request headers.
+  const resendClient = new Resend('fixture-key', { baseUrl: base.origin });
+  const message = { from: 'sender@example.com', to: ['recipient@example.net'], subject: 'hold resend', text: 'fixture body' };
+  const sent = await resendClient.emails.send(message, { headers: { 'X-Thinpost-Hold': 'true' } });
+  assert.equal(sent.error, null);
+  assert.match(sent.data.id, UUID);
+  const sentBatch = await resendClient.batch.send([{ ...message, subject: 'hold resend batch' }], { headers: { 'X-Thinpost-Hold': 'true' } });
+  assert.equal(sentBatch.error, null);
+  // An invalid value is a 400 and submits nothing.
+  const beforeInvalid = (await records()).length;
+  const invalid = await resendClient.emails.send({ ...message, subject: 'hold invalid' }, { headers: { 'X-Thinpost-Hold': 'yes' } });
+  assert.equal(invalid.data, null);
+  assert.equal(invalid.error.statusCode, 400);
+  assert.equal((await records()).length, beforeInvalid);
+  // SendGrid: a client default header, cleared afterwards so other tests are unaffected.
+  sendgrid.setApiKey('fixture-key');
+  sendgrid.client.setDefaultRequest('baseUrl', base.origin);
+  sendgrid.client.setDefaultHeader('X-Thinpost-Hold', 'true');
+  let gridResponse;
+  try {
+    [gridResponse] = await sendgrid.send({ from: 'sender@example.com', to: 'recipient@example.net', subject: 'hold sendgrid', text: 'fixture body' });
+  } finally {
+    sendgrid.client.setDefaultHeader('X-Thinpost-Hold', 'false');
+  }
+  assert.equal(gridResponse.statusCode, 202);
+  assert.equal(gridResponse.headers['x-thinpost-hold'], 'held');
+  const all = await records();
+  for (const subject of ['hold postmark', 'hold postmark batch', 'hold resend', 'hold resend batch', 'hold sendgrid']) {
+    assert.equal(bySubject(all, subject).hold, true, subject);
+  }
+  // Without the header nothing is held.
+  assert.ok(all.filter(item => !item.message.Subject.startsWith('hold ')).every(item => item.hold === undefined));
+});
+
 test('SendGrid SDK sends a supported message', async () => {
   sendgrid.setApiKey('fixture-key');
   sendgrid.client.setDefaultRequest('baseUrl', base.origin);

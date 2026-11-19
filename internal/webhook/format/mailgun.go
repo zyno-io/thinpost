@@ -38,7 +38,8 @@ func (mailgunFormat) Classify(f Fact) (string, bool) {
 	case classComplained:
 		return "complained", true
 	}
-	// preparation_failed is message-level; Mailgun events are per recipient.
+	// preparation_failed and hold_expired are message-level; Mailgun events are
+	// per recipient.
 	return "", false
 }
 

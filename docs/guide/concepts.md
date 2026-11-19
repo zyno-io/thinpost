@@ -39,6 +39,8 @@ A **delivery** is one recipient of a message. Every To, Cc and Bcc address becom
 
 Typical delivery states run from queued, through one or more SMTP attempts, to accepted (the remote server took the message) or failed. Acceptance means the receiving server accepted it. It does not mean the mailbox received it or that a person read it.
 
+A message can also be submitted **on hold**: it is stored and counted, but has no deliveries until the app releases it. The app can cancel it instead, and a hold that is not released within seven days expires. See [Holding messages](/guide/holding-messages).
+
 ## Enhanced Protection
 
 **Enhanced Protection** (EP) is a per-message flag, set with the `X-Thinpost-Enhanced-Protection: true` header (or Mailgun's `o:require-tls`). It does two things:

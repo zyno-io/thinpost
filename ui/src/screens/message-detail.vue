@@ -87,6 +87,7 @@
                             </dd>
                             <dd v-else-if="messageIdHeader.kind === 'perRecipient'" class="muted" title="This message was sent before Thinpost used one Message-ID per message. Each recipient's copy has its own; open a recipient's Headers to see it.">Different for each recipient</dd>
                             <dd v-else-if="messageIdHeader.kind === 'pending'" class="muted" title="Assigned when Thinpost prepares the message for sending.">Not assigned yet</dd>
+                            <dd v-else-if="messageIdHeader.kind === 'notSent'" class="muted" title="The message ended on hold without being sent.">None (not sent)</dd>
                             <dd v-else class="muted">Not recorded</dd>
                         </div>
                         <div data-fact="sender-domain">
@@ -129,6 +130,19 @@
                                         downloading attachments and viewing delivery headers are each recorded in the audit log under your name.
                                     </p>
                                 </HelpButton>
+                            </dd>
+                        </div>
+                        <div v-if="detail.hold" data-fact="hold">
+                            <dt title="Your app submitted this message on hold. Only the app can release or cancel it.">Hold</dt>
+                            <dd v-if="detail.hold.resolved">
+                                {{ HOLD_RESOLUTIONS[detail.hold.resolved.resolution] }}
+                                <time class="v" :datetime="detail.hold.resolved.time">{{ formatDateTime(detail.hold.resolved.time) }}</time>
+                            </dd>
+                            <dd v-else-if="detail.message.state === 'recovery_hold'" class="muted" title="A data recovery quarantined it while it was on hold. Your app can no longer release or cancel it, and it doesn't expire.">
+                                Quarantined after data recovery
+                            </dd>
+                            <dd v-else>
+                                Until released, or expires <time class="v" :datetime="detail.hold.expiresAt">{{ formatDateTime(detail.hold.expiresAt) }}</time>
                             </dd>
                         </div>
                         <div v-if="detail.message.state !== 'prepared'" data-fact="preparation">
@@ -453,7 +467,7 @@ import { copyText, formatDateTime, formatRelativeTime, shortId } from '@/format'
 import { readDeliveryTracking } from '@/tracking';
 import { saveSearch } from '@/message-search-store';
 import { saveSuppressionSearch } from '@/suppression-search-store';
-import { readDeliveryRecipient, readDeliveryRecipientKind, readMessageSummary, type MessageRow, type RecipientKind } from '@/message-summary';
+import { readDeliveryRecipient, readDeliveryRecipientKind, readMessageHold, readMessageSummary, type HoldView, type MessageRow, type RecipientKind } from '@/message-summary';
 import { DefaultApi, type DeliverySummary } from '@/openapi-client-generated';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import DropdownMenu from '@/shared/components/dropdown-menu.vue';
@@ -502,9 +516,13 @@ const { app } = context;
 interface Detail {
     message: MessageRow;
     deliveries: DeliverySummary[];
+    /** Null unless the app submitted the message on hold. */
+    hold: HoldView | null;
 }
 
 const RECIPIENTS_COLLAPSED = 10;
+
+const HOLD_RESOLUTIONS = { released: 'Released', cancelled: 'Cancelled', expired: 'Expired' } as const;
 
 const detail = shallowRef<Detail | null>(null);
 const isLoading = ref(true);
@@ -646,8 +664,9 @@ async function fetchDetail(appId: string, messageId: string): Promise<Detail> {
     const response = await DefaultApi.getAppMessage({ path: { appId, messageId } });
     const data = response.data;
     const message = readMessageSummary(data?.message, { maxRecipients: Infinity });
-    if (!message || !Array.isArray(data?.deliveries)) throw new InvalidResponseError();
-    return { message, deliveries: data.deliveries };
+    const hold = readMessageHold((data as { hold?: unknown } | undefined)?.hold);
+    if (!message || !Array.isArray(data?.deliveries) || hold === undefined) throw new InvalidResponseError();
+    return { message, deliveries: data.deliveries, hold };
 }
 
 /**
