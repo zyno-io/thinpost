@@ -78,6 +78,7 @@ export default withMermaid(
             items: [
               { text: "Quickstart", link: "/guide/quickstart" },
               { text: "Sending with SDKs", link: "/guide/sending-with-sdks" },
+              { text: "Sending with the native API", link: "/guide/native-api" },
               { text: "Holding messages", link: "/guide/holding-messages" },
             ],
           },

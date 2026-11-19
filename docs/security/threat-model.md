@@ -98,6 +98,8 @@ The operator API accepts only a verified administrator identity and fails closed
 
 In role-only mode, a client-credentials token from a provider that puts scopes on such tokens can carry the role. Do not assign the administrator role to a service account. Details are in [Operator authentication](/deploy/operator-auth).
 
+**Test sends.** An administrator can submit a message as an app from the console (`POST /api/v1/apps/{appId}/messages/test`). The request is policy-bound: it takes the app's acceptance path, so sender-domain verification, recipient rules, suppressions, the submission rate, the recipient quota and the pending-message limit all apply, and a paused app refuses it. The profile is narrow (verified From, one to five To recipients, no attachments, custom headers, tracking choices or hold) and the body is limited to 64 KiB. It uses no API key. It is audited as `message.test.submitted` in the same transaction as the message. It still delivers real mail, and its webhooks fire, so treat the administrator role as one that can send as any app within its limits.
+
 Reads of message history are not audited. Content reads of Enhanced Protection messages are audited before data is returned. See [Data handling](/security/data-handling).
 
 ### Console content security

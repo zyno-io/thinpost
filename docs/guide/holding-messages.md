@@ -11,7 +11,9 @@ Use a hold when something must happen between submission and sending: an approva
 
 ## Submit on hold
 
-Add `X-Thinpost-Hold: true` to any send request. It works on every provider route (`POST /email`, `/email/batch`, `/emails`, `/emails/batch`, `/v3/mail/send` and `/v3/{domain}/messages`) and applies to every message of a batch.
+On the [native route](/guide/native-api), set `"hold": true` in the JSON body. The route does not accept the header. The rest of this section describes the header, which is how every provider route takes the choice.
+
+Add `X-Thinpost-Hold: true` to any provider send request. It works on every provider route (`POST /email`, `/email/batch`, `/emails`, `/emails/batch`, `/v3/mail/send` and `/v3/{domain}/messages`) and applies to every message of a batch.
 
 ```sh
 curl https://thinpost.example.com/emails \

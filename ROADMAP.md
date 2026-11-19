@@ -29,7 +29,7 @@ This is a statement of direction, not a commitment or a schedule. Items are grou
 
 - SendGrid webhooks and click events in the provider webhook formats.
 - Closer parity with each provider's errors, batch behavior, retries and idempotency where practical.
-- A documented, versioned native API covering authentication, limits, idempotency and audit.
+- Native API follow-ups: a batch send route, and app, key and domain administration through the native API. Sending one message is available as `POST /app/v1/messages`.
 - More SDK languages and versions in the contract test suite.
 - Suppression events as webhooks, DSN-based hard-bounce suppression and mailto unsubscribe.
 - Search over received mail.
