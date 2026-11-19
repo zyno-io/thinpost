@@ -18,9 +18,12 @@
 -- 'hold_expired' (no earlier schema writes them), so it satisfies all three
 -- predicates; new and updated rows are checked. CREATE INDEX on messages is a
 -- plain build of a partial index that matches no existing row, but it still
--- reads the table once under a SHARE lock (the gate is closed, so no writer
--- waits on it), so its duration scales with the size of messages: review that
--- size before deploying, as for migrations 14 and 28. The ALTER TABLE
+-- reads the whole table once. It runs in the same transaction as the ALTER
+-- TABLE above, so messages stays under that ACCESS EXCLUSIVE lock until
+-- commit (and Migrate already holds runtime_gate ACCESS EXCLUSIVE with the
+-- gate closed): every reader and writer of messages waits for the build, so
+-- its duration scales with the size of messages. Review that size before
+-- deploying, as for migrations 14 and 28. The ALTER TABLE
 -- webhook_events replaces the source CHECK with a NOT VALID one, as migration
 -- 32 did for its CHECK, so the table is not scanned: no existing row carries
 -- any of the four new outcomes, so every row that satisfied the old CHECK

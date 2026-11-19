@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -490,5 +491,107 @@ func TestMessageHoldHTTP(t *testing.T) {
 	}
 	if got := call("POST", "/app/v1/messages/"+receipt.ID+"/release", "", nil); got.Code != 409 || got.Body.String() != `{"error":"not_held"}`+"\n" {
 		t.Fatal("release of an unheld message", got.Code, got.Body.String())
+	}
+}
+
+// holdAgrees reports whether a detail's hold block agrees with its state and
+// status: an open hold only while on_hold (or quarantined before release),
+// cancelled and expired only with their states, released otherwise.
+func holdAgrees(detail admin.MessageDetail) bool {
+	hold, state, status := detail.Hold, detail.Message.State, detail.Message.Status
+	if hold == nil {
+		return false
+	}
+	switch hold.Resolution {
+	case "":
+		return hold.ResolvedAt == nil && (state == "on_hold" && status == "on_hold" || state == "recovery_hold")
+	case admin.HoldCancelled:
+		return hold.ResolvedAt != nil && state == "cancelled" && status == "cancelled"
+	case admin.HoldExpired:
+		return hold.ResolvedAt != nil && state == "hold_expired" && status == "expired"
+	case admin.HoldReleased:
+		return hold.ResolvedAt != nil && state != "on_hold" && state != "cancelled" && state != "hold_expired" && status != "on_hold"
+	}
+	return false
+}
+
+// TestMessageHoldDetailAgreesWithState reads the detail after each transition
+// and while releases and cancels run concurrently: the hold block and the
+// state come from one statement, so they never disagree.
+func TestMessageHoldDetailAgreesWithState(t *testing.T) {
+	f := newHoldFixture(t)
+	ctx := f.ctx
+	read := func(message string) admin.MessageDetail {
+		t.Helper()
+		detail, err := f.repo.GetMessage(ctx, "operator", f.app, message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !holdAgrees(detail) {
+			t.Fatalf("hold %+v disagrees with state %q status %q", detail.Hold, detail.Message.State, detail.Message.Status)
+		}
+		return detail
+	}
+	released, cancelled, expired := f.mustSubmit(true), f.mustSubmit(true), f.mustSubmit(true)
+	for _, message := range []string{released, cancelled, expired} {
+		read(message)
+	}
+	if err := f.repo.ReleaseHeldMessage(ctx, f.app, f.key, released); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.CancelHeldMessage(ctx, f.app, f.key, cancelled); err != nil {
+		t.Fatal(err)
+	}
+	f.exec(`UPDATE messages SET hold_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1`, expired)
+	if _, err := f.repo.ExpireHeldMessages(ctx, 100); err != nil {
+		t.Fatal(err)
+	}
+	if read(released).Hold.Resolution != admin.HoldReleased || read(cancelled).Hold.Resolution != admin.HoldCancelled || read(expired).Hold.Resolution != admin.HoldExpired {
+		t.Fatal("resolutions after transitions")
+	}
+	if detail, err := f.repo.GetMessage(ctx, "operator", f.app, f.mustSubmit(false)); err != nil || detail.Hold != nil {
+		t.Fatal("unheld message has a hold", err)
+	}
+
+	// Readers race each release or cancel.
+	for i := range 20 {
+		message := f.mustSubmit(true)
+		stop := make(chan struct{})
+		var readers sync.WaitGroup
+		failures := make(chan string, 4)
+		for range 4 {
+			readers.Add(1)
+			go func() {
+				defer readers.Done()
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					detail, err := f.repo.GetMessage(ctx, "operator", f.app, message)
+					if err != nil || !holdAgrees(detail) {
+						failures <- fmt.Sprintf("%v %+v %q %q", err, detail.Hold, detail.Message.State, detail.Message.Status)
+						return
+					}
+				}
+			}()
+		}
+		var err error
+		if i%2 == 0 {
+			err = f.repo.ReleaseHeldMessage(ctx, f.app, f.key, message)
+		} else {
+			err = f.repo.CancelHeldMessage(ctx, f.app, f.key, message)
+		}
+		time.Sleep(10 * time.Millisecond)
+		close(stop)
+		readers.Wait()
+		close(failures)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for failure := range failures {
+			t.Fatal("torn read:", failure)
+		}
 	}
 }

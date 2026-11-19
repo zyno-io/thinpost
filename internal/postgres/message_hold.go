@@ -219,18 +219,12 @@ func (r *Repository) ExpireHeldMessages(ctx context.Context, limit int) (int, er
 	return len(expired), nil
 }
 
-// readMessageHold returns the hold of a message submitted on hold, or nil.
-// The resolution follows from the state read with it: a resolved hold whose
-// message is not cancelled or expired was released.
-func readMessageHold(ctx context.Context, tx *sql.Tx, appID, messageID string) (*admin.MessageHold, error) {
-	var state string
-	var expires, resolved sql.NullTime
-	err := tx.QueryRowContext(ctx, `SELECT state,hold_expires_at,hold_resolved_at FROM messages WHERE id=$1 AND app_id=$2`, messageID, appID).Scan(&state, &expires, &resolved)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, admin.ErrNotFound
-	}
-	if err != nil || !expires.Valid {
-		return nil, err
+// messageHold is the hold of a message submitted on hold, or nil, from the
+// state and hold columns of one row. A resolved hold whose message is not
+// cancelled or expired was released.
+func messageHold(state string, expires, resolved sql.NullTime) *admin.MessageHold {
+	if !expires.Valid {
+		return nil
 	}
 	hold := &admin.MessageHold{ExpiresAt: expires.Time}
 	if resolved.Valid {
@@ -245,5 +239,5 @@ func readMessageHold(ctx context.Context, tx *sql.Tx, appID, messageID string) (
 			hold.Resolution = admin.HoldReleased
 		}
 	}
-	return hold, nil
+	return hold
 }
