@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { readDeliveryRecipient, readDeliveryRecipientKind, readMessageSummary } from '@/message-summary';
+import { readDeliveryRecipient, readDeliveryRecipientKind, readMessageHold, readMessageSummary } from '@/message-summary';
 
 const ID = '0123456789abcdef0123456789abcdef';
 function raw(overrides: Record<string, unknown> = {}) {
@@ -126,5 +126,30 @@ describe('readDeliveryRecipientKind', () => {
         expect(readDeliveryRecipientKind({ recipient_kind: 'reply' })).toBeNull();
         expect(readDeliveryRecipientKind({})).toBeNull();
         expect(readDeliveryRecipientKind(undefined)).toBeNull();
+    });
+});
+
+describe('readMessageHold', () => {
+    it('is null for a message not submitted on hold', () => {
+        expect(readMessageHold(undefined)).toBeNull();
+        expect(readMessageHold(null)).toBeNull();
+    });
+
+    it('reads an open and a resolved hold', () => {
+        expect(readMessageHold({ expires_at: '2026-11-25T09:00:00Z' })).toEqual({ expiresAt: '2026-11-25T09:00:00Z', resolved: null });
+        for (const resolution of ['released', 'cancelled', 'expired'] as const) {
+            expect(readMessageHold({ expires_at: '2026-11-25T09:00:00Z', resolution, resolved_at: '2026-11-19T09:00:00Z' })).toEqual({
+                expiresAt: '2026-11-25T09:00:00Z',
+                resolved: { resolution, time: '2026-11-19T09:00:00Z' }
+            });
+        }
+    });
+
+    it('rejects malformed holds', () => {
+        expect(readMessageHold('held')).toBeUndefined();
+        expect(readMessageHold({})).toBeUndefined();
+        expect(readMessageHold({ expires_at: '2026-11-25T09:00:00Z', resolution: 'paused', resolved_at: '2026-11-19T09:00:00Z' })).toBeUndefined();
+        expect(readMessageHold({ expires_at: '2026-11-25T09:00:00Z', resolution: 'released' })).toBeUndefined();
+        expect(readMessageHold({ expires_at: '2026-11-25T09:00:00Z', resolved_at: '2026-11-19T09:00:00Z' })).toBeUndefined();
     });
 });

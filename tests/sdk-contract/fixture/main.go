@@ -41,6 +41,7 @@ type record struct {
 	IdempotencyKey string             `json:"idempotencyKey,omitempty"`
 	SendingDomain  string             `json:"sendingDomain,omitempty"`
 	Batch          bool               `json:"batch,omitempty"`
+	Hold           bool               `json:"hold,omitempty"`
 }
 
 type fixture struct {
@@ -92,7 +93,7 @@ func (f *fixture) Accept(_ context.Context, _ submission.App, req submission.Req
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := fmt.Sprintf("%032x", len(f.records)+1)
-	f.records = append(f.records, record{ID: id, Adapter: req.Adapter, Message: req.Message, IdempotencyKey: req.IdempotencyKey, SendingDomain: req.SendingDomain})
+	f.records = append(f.records, record{ID: id, Adapter: req.Adapter, Message: req.Message, IdempotencyKey: req.IdempotencyKey, SendingDomain: req.SendingDomain, Hold: req.Hold})
 	return submission.Receipt{ID: id, AcceptedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}, nil
 }
 
@@ -102,7 +103,7 @@ func (f *fixture) AcceptBatch(_ context.Context, _ submission.App, req submissio
 	ids := make([]string, 0, len(req.Messages))
 	for _, message := range req.Messages {
 		id := fmt.Sprintf("%032x", len(f.records)+1)
-		f.records = append(f.records, record{ID: id, Adapter: req.Adapter, Message: message, IdempotencyKey: req.IdempotencyKey, Batch: true})
+		f.records = append(f.records, record{ID: id, Adapter: req.Adapter, Message: message, IdempotencyKey: req.IdempotencyKey, Batch: true, Hold: req.Hold})
 		ids = append(ids, id)
 	}
 	return submission.BatchReceipt{IDs: ids}, nil

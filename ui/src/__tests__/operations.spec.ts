@@ -38,7 +38,7 @@ function snapshot(overrides: Record<string, unknown> = {}) {
         generated_at: new Date(now).toISOString(),
         gate: { mode: 'open', revision: 9, changed_at: '2026-11-10T09:00:00Z', changed_by: 'deploy:ns/rel:r4', generation_matches: true, quarantine_complete: true },
         workers: [{ worker_id: 'edge-1', controller_id: 'control-a', epoch: 4, expires_at: new Date(now + 90_000).toISOString(), live: true }],
-        messages: { queued_due: 2, queued_waiting: 1, preparing: 0, preparation_failed: 1, recovery_hold: 0, oldest_due_at: new Date(now - 600_000).toISOString() },
+        messages: { queued_due: 2, queued_waiting: 1, preparing: 0, preparation_failed: 1, recovery_hold: 0, on_hold: 4, oldest_due_at: new Date(now - 600_000).toISOString() },
         deliveries: { queued_due: 5, queued_waiting: 3, in_flight: 1, uncertain: 2, recipient_policy_held: 1, tracking_held: 1, recovery_hold: 0 },
         webhooks: { queued_due: 0, queued_waiting: 0, in_flight: 0, recovery_hold: 0 },
         retry_policy: policy,
@@ -129,6 +129,15 @@ describe('operations helpers', () => {
 });
 
 describe('operations page', () => {
+    it('accepts a server that predates message holds', async () => {
+        const old = snapshot();
+        delete (old.messages as Record<string, unknown>).on_hold;
+        api.getOperations.mockResolvedValue({ data: old });
+        await mountPage();
+        expect(wrapper!.find('[data-queue="messages"]').exists()).toBe(true);
+        expect(wrapper!.text()).not.toContain("couldn't read");
+    });
+
     it('renders the snapshot with its sources', async () => {
         await mountPage();
         const text = wrapper!.text();
@@ -141,6 +150,8 @@ describe('operations page', () => {
         expect(row).toContain('Deliveries');
         expect(row).toContain('5');
         expect(wrapper!.find('[data-queue="messages"]').text()).toContain('10 min');
+        // Messages on hold by their app are counted in the Held column.
+        expect(wrapper!.find('[data-queue="messages"] [title="On hold by their app until it releases or cancels them"]').text()).toBe('4');
         const facts = wrapper!.find('[data-testid="policy-facts"]').text();
         expect(facts).toContain('128');
         expect(facts).toContain('30 min');

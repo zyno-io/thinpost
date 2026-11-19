@@ -89,11 +89,13 @@ func (s *Service) AcceptBatch(ctx context.Context, app submission.App, req submi
 		}
 		bodies[i] = body
 	}
+	// Hold is omitted when false so earlier fingerprints are byte-identical.
 	fingerprint, err := json.Marshal(struct {
 		AppID    string               `json:"app_id"`
 		Adapter  string               `json:"adapter"`
 		Messages []submission.Message `json:"messages"`
-	}{app.ID, req.Adapter, req.Messages})
+		Hold     bool                 `json:"hold,omitempty"`
+	}{app.ID, req.Adapter, req.Messages, req.Hold})
 	if err != nil {
 		return submission.BatchReceipt{}, errors.New("cannot fingerprint batch submission")
 	}
@@ -122,7 +124,7 @@ func (s *Service) AcceptBatch(ctx context.Context, app submission.App, req submi
 		_, _ = mac.Write(fingerprint)
 		copy(hashes[i][:], mac.Sum(nil))
 	}
-	record := BatchRecord{Record: Record{AppID: app.ID, KeyID: app.KeyID, Adapter: req.Adapter, IdempotencyKey: req.IdempotencyKey, RequestHash: hashes[0], PreviousHashes: hashes[1:]}, Items: make([]BatchItem, 0, len(req.Messages))}
+	record := BatchRecord{Record: Record{AppID: app.ID, KeyID: app.KeyID, Adapter: req.Adapter, IdempotencyKey: req.IdempotencyKey, RequestHash: hashes[0], PreviousHashes: hashes[1:], Hold: req.Hold}, Items: make([]BatchItem, 0, len(req.Messages))}
 	for i, message := range req.Messages {
 		var id [16]byte
 		if _, err := rand.Read(id[:]); err != nil {
@@ -141,6 +143,9 @@ func (s *Service) AcceptBatch(ctx context.Context, app submission.App, req submi
 	if err == nil && !receipt.Replayed {
 		for _, id := range receipt.IDs {
 			oplog.Message(app.ID, id, oplog.StatusAccepted)
+			if req.Hold {
+				oplog.Message(app.ID, id, oplog.StatusHeld)
+			}
 		}
 	}
 	return receipt, err

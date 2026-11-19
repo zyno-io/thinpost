@@ -10,7 +10,10 @@ describe('messageStatus', () => {
         ['partially_delivered', 'Partially delivered', 'warning'],
         ['failed', 'Failed', 'danger'],
         ['suppressed', 'Suppressed', 'inactive'],
-        ['attention', 'Needs attention', 'warning']
+        ['attention', 'Needs attention', 'warning'],
+        ['on_hold', 'On hold by app', 'inactive'],
+        ['cancelled', 'Cancelled', 'inactive'],
+        ['expired', 'Hold expired', 'inactive']
     ])('labels %s', (status, label, tone) => {
         expect(messageStatus(status)).toMatchObject({ label, tone });
     });

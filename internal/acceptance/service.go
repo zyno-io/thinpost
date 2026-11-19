@@ -37,7 +37,10 @@ type Record struct {
 	SendingDomain      string
 	From               string
 	EnhancedProtection bool
-	RecipientCount     int
+	// Hold commits the message (every item of a batch) on hold: stored and
+	// counted, but not prepared until the app releases it.
+	Hold           bool
+	RecipientCount int
 	// Subject, Recipients and SenderDomain are operator-visible metadata
 	// recorded in the submission transaction. Recipients holds the bare
 	// envelope addresses in submission order (To, then Cc, then Bcc;
@@ -165,12 +168,15 @@ func (s *Service) Accept(ctx context.Context, app submission.App, req submission
 			return submission.Receipt{}, submission.ErrInvalidMessage
 		}
 	}
+	// Hold is omitted when false so fingerprints of requests without it are
+	// byte-identical to those recorded before holds existed.
 	fingerprint, err := json.Marshal(struct {
 		AppID         string             `json:"app_id"`
 		Adapter       string             `json:"adapter"`
 		Message       submission.Message `json:"message"`
 		SendingDomain string             `json:"sending_domain"`
-	}{app.ID, req.Adapter, req.Message, req.SendingDomain})
+		Hold          bool               `json:"hold,omitempty"`
+	}{app.ID, req.Adapter, req.Message, req.SendingDomain, req.Hold})
 	if err != nil {
 		return submission.Receipt{}, fmt.Errorf("fingerprint submission: %w", err)
 	}
@@ -246,9 +252,12 @@ func (s *Service) Accept(ctx context.Context, app submission.App, req submission
 		_, _ = mac.Write(fingerprint)
 		copy(hashes[i][:], mac.Sum(nil))
 	}
-	receipt, err := s.repository.Commit(ctx, Record{AppID: app.ID, KeyID: app.KeyID, ObjectKey: objectKey, RequestHash: hashes[0], PreviousHashes: hashes[1:], IdempotencyKey: req.IdempotencyKey, Adapter: req.Adapter, SendingDomain: req.SendingDomain, From: req.Message.From, EnhancedProtection: req.Message.EnhancedProtection, RecipientCount: len(req.Message.Envelope()), Subject: metadata.Subject, Recipients: metadata.Recipients, RecipientKinds: metadata.RecipientKinds, SenderDomain: metadata.SenderDomain, SenderAddress: metadata.SenderAddress, SenderName: metadata.SenderName})
+	receipt, err := s.repository.Commit(ctx, Record{AppID: app.ID, KeyID: app.KeyID, ObjectKey: objectKey, RequestHash: hashes[0], PreviousHashes: hashes[1:], IdempotencyKey: req.IdempotencyKey, Adapter: req.Adapter, SendingDomain: req.SendingDomain, From: req.Message.From, EnhancedProtection: req.Message.EnhancedProtection, Hold: req.Hold, RecipientCount: len(req.Message.Envelope()), Subject: metadata.Subject, Recipients: metadata.Recipients, RecipientKinds: metadata.RecipientKinds, SenderDomain: metadata.SenderDomain, SenderAddress: metadata.SenderAddress, SenderName: metadata.SenderName})
 	if err == nil && !receipt.Replayed {
 		oplog.Message(app.ID, receipt.ID, oplog.StatusAccepted)
+		if req.Hold {
+			oplog.Message(app.ID, receipt.ID, oplog.StatusHeld)
+		}
 	}
 	return receipt, err
 }

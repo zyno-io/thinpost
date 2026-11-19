@@ -80,7 +80,7 @@ All of these are optional as a group. Leaving every one of them unset runs the c
 
 ### Submission, signing and the app API
 
-The submission API (`POST /emails` and the provider-compatible routes) and the read-only app API are enabled by a fingerprint key. They also need object storage, a signing catalog and the control bridge; the control plane refuses to start when any of those is missing.
+The submission API (`POST /emails` and the provider-compatible routes) and the app API are enabled by a fingerprint key. They also need object storage, a signing catalog and the control bridge; the control plane refuses to start when any of those is missing.
 
 | Variable | Type | Default | Required | Description |
 | --- | --- | --- | --- | --- |

@@ -34,6 +34,7 @@ export const WEBHOOK_FORMATS: Readonly<Record<WebhookFormat, WebhookFormatInfo>>
                 label: 'Held or failed before sending',
                 events: ['recipient_policy_denied', 'tracking_unavailable', 'tracking_abandoned', 'preparation_failed']
             },
+            { label: 'Messages on hold', events: ['held', 'released', 'cancelled', 'hold_expired'] },
             { label: 'Bounces', events: ['bounce_received_unverified'] },
             { label: 'Tracking', events: ['opened', 'clicked'] },
             { label: 'Recipient feedback', events: ['unsubscribed', 'complained'] }

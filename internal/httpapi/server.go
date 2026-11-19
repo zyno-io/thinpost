@@ -188,12 +188,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, provider, http.StatusBadRequest, "unsupported tracking headers")
 		return
 	}
+	hold, err := holdFlag(r.Header)
+	if err != nil {
+		fail(w, provider, http.StatusBadRequest, "invalid X-Thinpost-Hold header")
+		return
+	}
 	if r.URL.Path == "/email/batch" {
-		s.postmarkBatch(w, r, app)
+		s.postmarkBatch(w, r, app, hold)
 		return
 	}
 	if r.URL.Path == "/emails/batch" {
-		s.resendBatch(w, r, app)
+		s.resendBatch(w, r, app, hold)
 		return
 	}
 	lim := s.singleLimits()
@@ -271,7 +276,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(w, provider, http.StatusBadRequest, "invalid or unsupported message")
 			return
 		}
-		s.sendGridBatch(w, r, app, gridMessages)
+		s.sendGridBatch(w, r, app, gridMessages, hold)
 		return
 	}
 	if provider == "resend" {
@@ -302,7 +307,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	receipt, err := s.service.Accept(r.Context(), app, submission.Request{Message: msg, IdempotencyKey: idem, Adapter: provider, SendingDomain: domain, RejectAllSuppressed: provider == "postmark"})
+	receipt, err := s.service.Accept(r.Context(), app, submission.Request{Message: msg, IdempotencyKey: idem, Adapter: provider, SendingDomain: domain, RejectAllSuppressed: provider == "postmark", Hold: hold})
 	if err != nil {
 		switch {
 		case errors.Is(err, submission.ErrInvalidKey):
@@ -328,6 +333,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(w, provider, http.StatusServiceUnavailable, "submission unavailable")
 		return
 	}
+	markHeld(w, hold)
 	switch provider {
 	case "postmark":
 		writeJSON(w, http.StatusOK, map[string]any{"To": postmarkTo, "SubmittedAt": receipt.AcceptedAt.UTC().Format("2006-01-02T15:04:05.0000000Z"), "MessageID": providerid.Postmark(receipt.ID), "ErrorCode": 0, "Message": "OK"})
@@ -426,6 +432,29 @@ func protectionFlag(h http.Header) (bool, error) {
 		return false, fmt.Errorf("unsupported header")
 	}
 	return tlsFlag(h.Values("X-Thinpost-Enhanced-Protection"))
+}
+
+// holdHeader is the Thinpost extension that accepts a message on hold. A
+// successful response to a request that set it carries holdHeader: heldValue,
+// so a client can tell that the server honored it: a server that predates
+// holds ignores the request header and sends at once.
+const (
+	holdHeader = "X-Thinpost-Hold"
+	heldValue  = "held"
+)
+
+// holdFlag reads X-Thinpost-Hold, which may appear at most once and must be
+// "true" or "false" (case-insensitive). Absent is false.
+func holdFlag(h http.Header) (bool, error) {
+	return tlsFlag(h.Values(holdHeader))
+}
+
+// markHeld sets the response confirmation for a hold request. It must run
+// before the status line is written.
+func markHeld(w http.ResponseWriter, hold bool) {
+	if hold {
+		w.Header().Set(holdHeader, heldValue)
+	}
 }
 
 // Resend does not expose these per-message options in the supported request

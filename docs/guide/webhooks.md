@@ -57,6 +57,7 @@ The native format has one event per delivery outcome. Each delivery attempt crea
 | `complained` | A mailbox provider reported a spam complaint |
 | `bounce_received_unverified` | Mail arrived at a delivery's return path. It is **not** an authenticated bounce and must not by itself suppress an address |
 | `tracking_unavailable`, `tracking_abandoned` | Tracking-related holds and an operator's decision to fail one |
+| `held`, `released`, `cancelled`, `hold_expired` | A message [submitted on hold](/guide/holding-messages) was accepted, released, cancelled by the app, or not released before its hold expired. Message-level: no delivery, SMTP code zero |
 
 Native events also carry `delivery_state` (so a receiver can tell a retried 4xx from a final one) and `message_id_header`, the RFC 5322 `Message-ID` with angle brackets. Parsers that reject unknown JSON fields need to accept both.
 
@@ -74,6 +75,8 @@ The `message_id` in native events is the 32-character lowercase hex ID. Provider
 | `unsubscribed` | `SubscriptionChange` | not sent | `unsubscribed` |
 | `complained` | `SpamComplaint` | `email.complained` | `complained` |
 | `clicked` | not yet | not yet | not yet |
+| `hold_expired` | not sent | `email.failed` | not sent |
+| `held`, `released`, `cancelled` | not sent | not sent | not sent |
 
 An event a format cannot represent is never queued for that endpoint. Fields Thinpost does not record are omitted, not invented or set to null. The mapping, field lists and deviations are in [Webhook formats](/reference/webhook-formats).
 

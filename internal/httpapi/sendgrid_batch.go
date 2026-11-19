@@ -9,7 +9,7 @@ import (
 
 // sendGridBatch never falls back to individual acceptance calls: partial
 // success would make a provider retry silently duplicate earlier messages.
-func (s *Server) sendGridBatch(w http.ResponseWriter, r *http.Request, app submission.App, messages []submission.Message) {
+func (s *Server) sendGridBatch(w http.ResponseWriter, r *http.Request, app submission.App, messages []submission.Message, hold bool) {
 	flag, err := protectionFlag(r.Header)
 	if err != nil {
 		fail(w, "sendgrid", http.StatusBadRequest, "invalid X-Thinpost-Enhanced-Protection header")
@@ -30,7 +30,7 @@ func (s *Server) sendGridBatch(w http.ResponseWriter, r *http.Request, app submi
 		fail(w, "sendgrid", http.StatusServiceUnavailable, "batch submission unavailable")
 		return
 	}
-	receipt, err := service.AcceptBatch(r.Context(), app, submission.BatchRequest{Messages: messages, Adapter: "sendgrid"})
+	receipt, err := service.AcceptBatch(r.Context(), app, submission.BatchRequest{Messages: messages, Adapter: "sendgrid", Hold: hold})
 	if err != nil {
 		switch {
 		case errors.Is(err, submission.ErrInvalidKey):
@@ -56,5 +56,6 @@ func (s *Server) sendGridBatch(w http.ResponseWriter, r *http.Request, app submi
 		}
 		seen[id] = true
 	}
+	markHeld(w, hold)
 	w.WriteHeader(http.StatusAccepted)
 }

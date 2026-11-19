@@ -40,7 +40,7 @@ flowchart LR
 
 One binary, run as several replicas, serves:
 
-- the provider submission routes (`/email`, `/emails`, `/v3/mail/send`, `/v3/{domain}/messages`) and the read-only app routes under `/app/v1/`;
+- the provider submission routes (`/email`, `/emails`, `/v3/mail/send`, `/v3/{domain}/messages`) and the app routes under `/app/v1/` (reads, and release or cancel of held messages);
 - the operator admin API under `/api/v1` and the console on the same origin;
 - the tracking and unsubscribe routes under `/t/`.
 

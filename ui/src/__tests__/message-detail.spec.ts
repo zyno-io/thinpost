@@ -1357,3 +1357,52 @@ describe('message detail recipient feedback', () => {
         expect(tag.attributes('title')).toContain('Complained');
     });
 });
+
+describe('message detail hold', () => {
+    const held = { ...plain, state: 'on_hold', status: 'on_hold', delivery_count: 0, accepted_count: 0, uncertain_count: 0 };
+
+    it('shows an open hold with its expiry and no release action', async () => {
+        api.getAppMessage.mockResolvedValue({ data: { message: held, deliveries: [], hold: { expires_at: '2026-10-09T12:00:00Z' } } });
+        await mountAt(`/apps/${APP_ID}/messages/${MESSAGE_ID}`);
+        expect(wrapper!.find('#message-heading').element.parentElement!.querySelector('.tag')!.textContent).toContain('On hold by app');
+        const fact = wrapper!.find('[data-fact="hold"]');
+        expect(fact.text()).toContain('Until released, or expires');
+        expect(fact.find('time').attributes('datetime')).toBe('2026-10-09T12:00:00Z');
+        expect(wrapper!.find('[data-fact="message-id-header"] dd').text()).toBe('Not assigned yet');
+        expect(wrapper!.findAll('button').some(b => /release|cancel/i.test(b.text()))).toBe(false);
+    });
+
+    it.each([
+        ['released', 'queued', 'queued', 'Released'],
+        ['cancelled', 'cancelled', 'cancelled', 'Cancelled'],
+        ['expired', 'hold_expired', 'expired', 'Expired']
+    ])('shows a %s hold', async (resolution, state, status, label) => {
+        api.getAppMessage.mockResolvedValue({
+            data: { message: { ...held, state, status }, deliveries: [], hold: { expires_at: '2026-10-09T12:00:00Z', resolution, resolved_at: '2026-10-03T12:00:00Z' } }
+        });
+        await mountAt(`/apps/${APP_ID}/messages/${MESSAGE_ID}`);
+        const fact = wrapper!.find('[data-fact="hold"]');
+        expect(fact.text()).toContain(label);
+        expect(fact.find('time').attributes('datetime')).toBe('2026-10-03T12:00:00Z');
+        if (resolution !== 'released') expect(wrapper!.find('[data-fact="message-id-header"] dd').text()).toBe('None (not sent)');
+    });
+
+    it('shows a held message quarantined by a recovery as such', async () => {
+        api.getAppMessage.mockResolvedValue({ data: { message: { ...held, state: 'recovery_hold', status: 'held' }, deliveries: [], hold: { expires_at: '2026-10-09T12:00:00Z' } } });
+        await mountAt(`/apps/${APP_ID}/messages/${MESSAGE_ID}`);
+        const fact = wrapper!.find('[data-fact="hold"]');
+        expect(fact.text()).toContain('Quarantined after data recovery');
+        expect(fact.text()).not.toContain('Until released');
+    });
+
+    it('has no hold fact for a message not submitted on hold', async () => {
+        await mountAt(`/apps/${APP_ID}/messages/${MESSAGE_ID}`);
+        expect(wrapper!.find('[data-fact="hold"]').exists()).toBe(false);
+    });
+
+    it('treats a malformed hold as an invalid response', async () => {
+        api.getAppMessage.mockResolvedValue({ data: { message: held, deliveries: [], hold: { resolution: 'released' } } });
+        await mountAt(`/apps/${APP_ID}/messages/${MESSAGE_ID}`);
+        expect(wrapper!.find('[data-fact="hold"]').exists()).toBe(false);
+    });
+});

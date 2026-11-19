@@ -105,7 +105,7 @@ func RecoveryQuarantineBatch(ctx context.Context, db *sql.DB, generation, run, a
 		revision++
 	}
 	queries := []string{
-		`WITH selected AS (SELECT m.id,m.state FROM messages m WHERE m.state IN ('queued','preparing','recovery_hold')
+		`WITH selected AS (SELECT m.id,m.state FROM messages m WHERE m.state IN ('queued','preparing','recovery_hold','on_hold')
 		 AND NOT EXISTS (SELECT 1 FROM recovery_holds h WHERE h.recovery_id=$1 AND h.kind='message' AND h.entity_id=m.id AND h.secondary_id='') ORDER BY m.id FOR UPDATE LIMIT 128),
 		 recorded AS (INSERT INTO recovery_holds(recovery_id,kind,entity_id,original_state) SELECT $1,'message',id,state FROM selected RETURNING entity_id)
 		 UPDATE messages SET state='recovery_hold' FROM recorded WHERE messages.id=recorded.entity_id`,
@@ -196,7 +196,7 @@ func RecoveryOpen(ctx context.Context, db *sql.DB, generation, run, actor string
 
 func recoveryWorkPending(ctx context.Context, tx *sql.Tx, run string) (bool, error) {
 	var pending bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM messages m WHERE m.state IN ('queued','preparing') OR (m.state='recovery_hold' AND NOT EXISTS (SELECT 1 FROM recovery_holds h WHERE h.recovery_id=$1 AND h.kind='message' AND h.entity_id=m.id AND h.secondary_id='')))
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM messages m WHERE m.state IN ('queued','preparing','on_hold') OR (m.state='recovery_hold' AND NOT EXISTS (SELECT 1 FROM recovery_holds h WHERE h.recovery_id=$1 AND h.kind='message' AND h.entity_id=m.id AND h.secondary_id='')))
 		OR EXISTS (SELECT 1 FROM deliveries d WHERE d.state IN ('queued','in_flight') OR (d.state='recovery_hold' AND NOT EXISTS (SELECT 1 FROM recovery_holds h WHERE h.recovery_id=$1 AND h.kind='delivery' AND h.entity_id=d.id AND h.secondary_id='')))
 		OR EXISTS (SELECT 1 FROM webhook_deliveries w WHERE w.state IN ('queued','in_flight') OR (w.state='recovery_hold' AND NOT EXISTS (SELECT 1 FROM recovery_holds h WHERE h.recovery_id=$1 AND h.kind='webhook' AND h.entity_id=w.event_id AND h.secondary_id=w.subscription_id)))`, run).Scan(&pending)
 	return pending, err

@@ -174,13 +174,19 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 	if err = r.lockAndVerifyObjects(ctx, tx, []string{record.ObjectKey}); err != nil {
 		return submission.Receipt{}, err
 	}
-	err = tx.QueryRowContext(ctx, `INSERT INTO messages (id, app_id, object_key, enhanced_protection, subject, recipient_count, sender_domain, sender_domain_rev, sender_address, sender_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id,accepted_at`,
-		messageID, record.AppID, record.ObjectKey, record.EnhancedProtection, record.Subject, record.RecipientCount, record.SenderDomain, reverseDomainLabels(record.SenderDomain), record.SenderAddress, nullableName(record.SenderName)).Scan(&receipt.ID, &receipt.AcceptedAt)
+	state, holdMS := initialMessageState(record.Hold)
+	err = tx.QueryRowContext(ctx, `INSERT INTO messages (id, app_id, object_key, enhanced_protection, subject, recipient_count, sender_domain, sender_domain_rev, sender_address, sender_name, state, hold_expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now()+$12::bigint*interval '1 millisecond') RETURNING id,accepted_at`,
+		messageID, record.AppID, record.ObjectKey, record.EnhancedProtection, record.Subject, record.RecipientCount, record.SenderDomain, reverseDomainLabels(record.SenderDomain), record.SenderAddress, nullableName(record.SenderName), state, holdMS).Scan(&receipt.ID, &receipt.AcceptedAt)
 	if err != nil {
 		return submission.Receipt{}, err
 	}
 	if err = insertRecipients(ctx, tx, record.AppID, &recipients); err != nil {
 		return submission.Receipt{}, err
+	}
+	if record.Hold {
+		if err = insertMessageEvent(ctx, tx, record.AppID, messageID, holdEventHeld); err != nil {
+			return submission.Receipt{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return submission.Receipt{}, err

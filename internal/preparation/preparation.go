@@ -32,14 +32,25 @@ type Claim struct {
 	// SenderDomain is the From domain recorded at acceptance (lowercase). The
 	// shared Message-ID is built on it, so preparation requires the signing key
 	// to be for exactly this domain.
-	SenderDomain       string
-	AcceptedAt         time.Time
+	SenderDomain string
+	AcceptedAt   time.Time
+	// Date is the Date header: the release time for a message submitted on
+	// hold, otherwise AcceptedAt. Zero means AcceptedAt.
+	Date               time.Time
 	EnhancedProtection bool
 	// ListUnsubscribe is the app's one-click opt-in as read by the claim. A
 	// toggle that races preparation is harmless: either state is a valid
 	// outcome for a message accepted around the change.
 	ListUnsubscribe bool
 }
+
+func (c Claim) date() time.Time {
+	if c.Date.IsZero() {
+		return c.AcceptedAt
+	}
+	return c.Date
+}
+
 type Delivery struct {
 	ID             string
 	RecipientIndex int
@@ -311,7 +322,7 @@ func (s *Service) PrepareNext(ctx context.Context) (resultErr error) {
 			}
 		}
 		reason = "mime_build"
-		final, err := message.Build(preparedMessage, message.Options{Recipient: recipient, ID: claim.MessageID, Date: claim.AcceptedAt, SigningDomain: key.Domain, Selector: key.Selector, Signer: key.Signer, ListRecipients: payload.ListsRecipients()})
+		final, err := message.Build(preparedMessage, message.Options{Recipient: recipient, ID: claim.MessageID, Date: claim.date(), SigningDomain: key.Domain, Selector: key.Selector, Signer: key.Signer, ListRecipients: payload.ListsRecipients()})
 		if err != nil {
 			// message.Build errors are constant; never wrap anything that could quote input.
 			return errors.New("build signed MIME failed")

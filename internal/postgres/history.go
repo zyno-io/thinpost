@@ -83,12 +83,15 @@ const (
 
 type rowScanner interface{ Scan(...any) error }
 
-func scanSummary(row rowScanner, item *admin.MessageSummary) error {
+// extra receives any columns selected after the summary columns, from the
+// same row.
+func scanSummary(row rowScanner, item *admin.MessageSummary, extra ...any) error {
 	var subject, senderDomain, senderAddress, senderName sql.NullString
 	var count sql.NullInt64
 	var counts admin.DeliveryCounts
 	var recipients []byte
-	if err := row.Scan(&item.ID, &item.State, &item.EnhancedProtection, &item.AcceptedAt, &item.DeliveryCount, &item.AcceptedCount, &item.FailedCount, &item.UncertainCount, &counts.Pending, &counts.Held, &counts.RecoveryHeld, &counts.Retrying, &item.SuppressedCount, &subject, &item.SubjectMasked, &senderDomain, &senderAddress, &senderName, &count, &recipients); err != nil {
+	dest := []any{&item.ID, &item.State, &item.EnhancedProtection, &item.AcceptedAt, &item.DeliveryCount, &item.AcceptedCount, &item.FailedCount, &item.UncertainCount, &counts.Pending, &counts.Held, &counts.RecoveryHeld, &counts.Retrying, &item.SuppressedCount, &subject, &item.SubjectMasked, &senderDomain, &senderAddress, &senderName, &count, &recipients}
+	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return err
 	}
 	counts.Total, counts.Accepted, counts.Failed, counts.Uncertain, counts.Suppressed = item.DeliveryCount, item.AcceptedCount, item.FailedCount, item.UncertainCount, item.SuppressedCount
@@ -208,8 +211,11 @@ func (r *Repository) GetMessage(ctx context.Context, actor, appID, messageID str
 		return detail, err
 	}
 	defer tx.Rollback()
-	err = scanSummary(tx.QueryRowContext(ctx, `SELECT `+summaryColumns(detailRecipientLimit)+`
-		FROM messages m LEFT JOIN deliveries d ON d.message_id=m.id WHERE m.app_id=$1 AND m.id=$2 GROUP BY m.id`, appID, messageID), &detail.Message)
+	// The hold columns come from the same row as the state, in one statement,
+	// so the hold resolution can never disagree with the state and status.
+	var holdExpires, holdResolved sql.NullTime
+	err = scanSummary(tx.QueryRowContext(ctx, `SELECT `+summaryColumns(detailRecipientLimit)+`,m.hold_expires_at,m.hold_resolved_at
+		FROM messages m LEFT JOIN deliveries d ON d.message_id=m.id WHERE m.app_id=$1 AND m.id=$2 GROUP BY m.id`, appID, messageID), &detail.Message, &holdExpires, &holdResolved)
 	if errors.Is(err, sql.ErrNoRows) {
 		return admin.MessageDetail{}, admin.ErrNotFound
 	}
@@ -225,6 +231,7 @@ func (r *Repository) GetMessage(ctx context.Context, actor, appID, messageID str
 		}
 		detail.PreparationFailure = &failure
 	}
+	detail.Hold = messageHold(detail.Message.State, holdExpires, holdResolved)
 	// Count attempts using the same exclusion as retry scheduling. An eligible
 	// time does not guarantee dispatch: app state, the runtime gate, tracking
 	// and worker availability remain independent constraints.

@@ -85,8 +85,9 @@ func (r *Repository) Operations(ctx context.Context) (admin.Operations, error) {
 		count(*) FILTER (WHERE state='preparing'),
 		count(*) FILTER (WHERE state='preparation_failed'),
 		count(*) FILTER (WHERE state='recovery_hold'),
+		count(*) FILTER (WHERE state='on_hold'),
 		min(prepare_next_at) FILTER (WHERE state='queued' AND prepare_next_at<=clock_timestamp())
-		FROM messages WHERE pending`).Scan(&m.QueuedDue, &m.QueuedWaiting, &m.Preparing, &m.PreparationFailed, &m.RecoveryHold, &oldest)
+		FROM messages WHERE pending`).Scan(&m.QueuedDue, &m.QueuedWaiting, &m.Preparing, &m.PreparationFailed, &m.RecoveryHold, &m.OnHold, &oldest)
 	if err != nil {
 		return admin.Operations{}, err
 	}

@@ -1413,6 +1413,7 @@ paths:
                     properties:
                       attempts: { type: integer, minimum: 1, maximum: 12 }
                       reason: { type: string, enum: [source_read, source_invalid, signing_key, mime_build, object_write, queue_commit, internal, lease_expired] }
+                  hold: { $ref: '#/components/schemas/MessageHold' }
         default: { $ref: '#/components/responses/Error' }
   /apps/{appId}/messages/{messageId}/subject:
     parameters:
@@ -1698,6 +1699,7 @@ components:
             preparing: { type: integer }
             preparation_failed: { type: integer }
             recovery_hold: { type: integer }
+            on_hold: { type: integer, description: Messages submitted on hold and not yet released, cancelled or expired. They wait for their app, not for an operator. Absent from servers that predate holds. }
             oldest_due_at: { type: string, format: date-time }
         deliveries:
           type: object
@@ -1786,7 +1788,7 @@ components:
         finished_at: { type: string, format: date-time }
     WebhookOutcome:
       type: string
-      enum: [accepted, rejected, route_rejected, uncertain, null_mx, domain_not_found, retry_expired, recipient_policy_denied, tracking_unavailable, tracking_abandoned, preparation_failed, bounce_received_unverified, opened, clicked, suppressed, unsubscribed, complained]
+      enum: [accepted, rejected, route_rejected, uncertain, null_mx, domain_not_found, retry_expired, recipient_policy_denied, tracking_unavailable, tracking_abandoned, preparation_failed, bounce_received_unverified, opened, clicked, suppressed, unsubscribed, complained, held, released, cancelled, hold_expired]
     WebhookFormat:
       type: string
       enum: [thinpost, postmark, resend, mailgun, thinpost_inbound]
@@ -1801,13 +1803,14 @@ components:
         (accepted, rejected, route_rejected, uncertain, null_mx, domain_not_found,
         retry_expired, recipient_policy_denied, tracking_unavailable,
         tracking_abandoned, preparation_failed, bounce_received_unverified, opened,
-        clicked, suppressed, unsubscribed, complained). postmark: Delivery, Bounce, Open, SubscriptionChange,
+        clicked, suppressed, unsubscribed, complained, held, released, cancelled,
+        hold_expired). postmark: Delivery, Bounce, Open, SubscriptionChange,
         SpamComplaint. resend: email.delivered,
         email.delivery_delayed, email.bounced, email.failed, email.opened,
         email.suppressed, email.complained. mailgun:
         delivered, temporary_fail, permanent_fail, opened, unsubscribed, complained. thinpost_inbound:
         inbound_received. The server validates the names against the format.
-      enum: [accepted, rejected, route_rejected, uncertain, null_mx, domain_not_found, retry_expired, recipient_policy_denied, tracking_unavailable, tracking_abandoned, preparation_failed, bounce_received_unverified, opened, clicked, suppressed, unsubscribed, complained, inbound_received, Delivery, Bounce, Open, SubscriptionChange, SpamComplaint, email.delivered, email.delivery_delayed, email.bounced, email.failed, email.opened, email.suppressed, email.complained, delivered, temporary_fail, permanent_fail, unsubscribed]
+      enum: [accepted, rejected, route_rejected, uncertain, null_mx, domain_not_found, retry_expired, recipient_policy_denied, tracking_unavailable, tracking_abandoned, preparation_failed, bounce_received_unverified, opened, clicked, suppressed, unsubscribed, complained, held, released, cancelled, hold_expired, inbound_received, Delivery, Bounce, Open, SubscriptionChange, SpamComplaint, email.delivered, email.delivery_delayed, email.bounced, email.failed, email.opened, email.suppressed, email.complained, delivered, temporary_fail, permanent_fail, unsubscribed]
     WebhookHeaderInput:
       type: object
       additionalProperties: false
@@ -2196,11 +2199,11 @@ components:
       required: [id, state, status, enhanced_protection, subject_masked, accepted_at, delivery_count, accepted_count, failed_count, uncertain_count, suppressed_count]
       properties:
         id: { $ref: '#/components/schemas/Id' }
-        state: { type: string, description: Preparation state; not proof of delivery. }
+        state: { type: string, description: 'Preparation state; not proof of delivery. on_hold, cancelled and hold_expired belong to messages submitted on hold.' }
         status:
           type: string
-          enum: [queued, preparing, sending, retrying, delivered, partially_delivered, failed, suppressed, held, attention, unknown]
-          description: Overall status derived from the preparation state and delivery states; delivered means accepted by every recipient's remote SMTP server; suppressed means every recipient was on the suppression list when delivery was attempted.
+          enum: [queued, preparing, sending, retrying, delivered, partially_delivered, failed, suppressed, held, attention, on_hold, cancelled, expired, unknown]
+          description: Overall status derived from the preparation state and delivery states; delivered means accepted by every recipient's remote SMTP server; suppressed means every recipient was on the suppression list when delivery was attempted; held means quarantined after a data recovery; on_hold means submitted on hold and waiting for the app to release it; cancelled and expired end a hold without sending.
         enhanced_protection: { type: boolean, description: Requires validated STARTTLS on every attempt; subject withheld; content reads audited. }
         subject: { type: string, maxLength: 998, description: Present only when recorded and not Enhanced Protection. }
         subject_masked: { type: boolean, description: A subject was recorded but is withheld; use getAppMessageSubject. }
@@ -2221,6 +2224,19 @@ components:
         failed_count: { type: integer, minimum: 0 }
         uncertain_count: { type: integer, minimum: 0 }
         suppressed_count: { type: integer, minimum: 0, description: Failed deliveries dropped because the recipient was suppressed; also counted in failed_count. }
+    MessageHold:
+      type: object
+      required: [expires_at]
+      description: >-
+        Present only for a message submitted on hold (X-Thinpost-Hold: true).
+        While it is held, resolution and resolved_at are absent. A held message
+        quarantined by a data recovery (state recovery_hold) also has no
+        resolution; it can no longer be released or cancelled and does not
+        expire.
+      properties:
+        expires_at: { type: string, format: date-time, description: 'When an unreleased hold expires: seven days after acceptance.' }
+        resolved_at: { type: string, format: date-time, description: When the message was released or cancelled, or the hold expired. }
+        resolution: { type: string, enum: [released, cancelled, expired] }
     DeliverySummary:
       type: object
       required: [id, recipient_index, state]

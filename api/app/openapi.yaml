@@ -1,15 +1,18 @@
 openapi: 3.1.0
 info:
-  title: Thinpost app read API
-  version: 0.1.0
+  title: Thinpost app API
+  version: 0.2.0
   description: >-
-    Read-only message routes for the submission API key of an app. They are
+    Message routes for the submission API key of an app: reads, and release or
+    cancel of a message submitted on hold (X-Thinpost-Hold: true). They are
     served by the control process on the same listener as the submission routes
     and only when submission is configured. The key identifies the app; a
     message of another app is reported as not found. Responses use the admin
     API's schemas and security headers. Intended for in-cluster callers, so
-    deployments need not expose /app/ on the public ingress. GET only; a query
-    string is rejected. Errors are {"error": "<status text>"}.
+    deployments need not expose /app/ on the public ingress. Reads are GET and
+    the hold actions POST; a query string is rejected. Errors are
+    {"error": "<status text>"}, except that a hold action that cannot apply
+    answers 409 with a reason code in error.
 servers:
   - url: /app/v1
 security:
@@ -45,6 +48,7 @@ paths:
                     properties:
                       attempts: { type: integer, minimum: 1, maximum: 12 }
                       reason: { type: string }
+                  hold: { $ref: '../admin/openapi.yaml#/components/schemas/MessageHold' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -103,6 +107,49 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '405': { $ref: '#/components/responses/MethodNotAllowed' }
         '503': { $ref: '#/components/responses/Unavailable' }
+  /messages/{messageId}/release:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+    post:
+      operationId: releaseMessage
+      description: >-
+        Queues a message submitted on hold for normal preparation and delivery,
+        exactly once. Idempotent: releasing an already released message answers
+        200 with its current state and queues nothing. Concurrent releases and a
+        release racing a cancel or the hold expiry are serialized on the message,
+        so exactly one takes effect. The app must be active and the key
+        unrevoked at release; every check that precedes an SMTP attempt
+        (sender-domain verification, suppression, recipient rules) still runs
+        after release. A release that changes the message is audited
+        (message.hold.released, actor key:<keyId>) and creates a released webhook
+        event. No request body; a query string is rejected.
+      responses:
+        '200': { $ref: '#/components/responses/HoldResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '409': { $ref: '#/components/responses/HoldConflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+  /messages/{messageId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+    post:
+      operationId: cancelMessage
+      description: >-
+        Ends a message submitted on hold without sending it (state cancelled).
+        Idempotent: cancelling an already cancelled message answers 200. A
+        released message cannot be cancelled. A cancel that changes the message
+        is audited (message.hold.cancelled, actor key:<keyId>) and creates a
+        cancelled webhook event. No request body; a query string is rejected.
+      responses:
+        '200': { $ref: '#/components/responses/HoldResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '405': { $ref: '#/components/responses/MethodNotAllowed' }
+        '409': { $ref: '#/components/responses/HoldConflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
 components:
   securitySchemes:
     appKey:
@@ -120,8 +167,36 @@ components:
     BadRequest: { description: A query string was supplied, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     Unauthorized: { description: Missing, malformed, wrong or revoked app key, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
     NotFound: { description: Unknown message, another app's message, malformed ID or path, or non-canonical attachment index, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-    MethodNotAllowed: { description: Only GET is served, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-    Unavailable: { description: 'Submission, authentication, database or object storage unavailable, or (body and attachment) the read budget is busy; Retry-After 5 accompanies the busy case', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    MethodNotAllowed: { description: 'Only GET is served on read routes and only POST on release and cancel; Allow names the method', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    HoldResult:
+      description: The message after the action, in the getMessage body
+      headers: { Cache-Control: { schema: { type: string, const: no-store } } }
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [message, deliveries, hold]
+            properties:
+              message: { $ref: '../admin/openapi.yaml#/components/schemas/MessageSummary' }
+              deliveries:
+                type: array
+                items: { $ref: '../admin/openapi.yaml#/components/schemas/DeliverySummary' }
+              hold: { $ref: '../admin/openapi.yaml#/components/schemas/MessageHold' }
+    HoldConflict:
+      description: >-
+        The action cannot apply. not_held: the message was not submitted on hold.
+        released: cancel of a released message. cancelled: release of a cancelled
+        message. hold_expired: the hold passed its expires_at (a release or
+        cancel after that time expires the message if the periodic check has not
+        yet). recovery_hold: the message was quarantined by a database recovery.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: { type: string, enum: [not_held, released, cancelled, hold_expired, recovery_hold] }
+    Unavailable: { description: 'Submission, authentication, database or object storage unavailable, the admission gate is closed, or (body and attachment) the read budget is busy; Retry-After 5 accompanies the busy case', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   schemas:
     Error:
       type: object

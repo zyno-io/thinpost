@@ -78,6 +78,8 @@ A rejection is final when its `delivery_state` is `failed`. When `delivery_state
 | `suppressed` | not sent | `email.suppressed` | `permanent_fail` |
 | `tracking_abandoned` | not sent | `email.failed` | `permanent_fail` |
 | `preparation_failed` | not sent | `email.failed` | not sent |
+| `hold_expired` | not sent | `email.failed` | not sent |
+| `held`, `released`, `cancelled` | not sent | not sent | not sent |
 | `opened` | `Open` | `email.opened` | `opened` |
 | `unsubscribed` | `SubscriptionChange` | not sent | `unsubscribed` |
 | `complained` | `SpamComplaint` | `email.complained` | `complained` |
@@ -85,7 +87,7 @@ A rejection is final when its `delivery_state` is `failed`. When `delivery_state
 | `bounce_received_unverified` | not sent | not sent | not sent |
 | `clicked` | not sent | not sent | not sent |
 
-`bounce_received_unverified` is an unauthenticated receipt and is never rendered as a provider bounce. `preparation_failed` is message-level and has no per-recipient Mailgun event. Resend has no per-email unsubscribe event.
+`bounce_received_unverified` is an unauthenticated receipt and is never rendered as a provider bounce. `preparation_failed` and `hold_expired` are message-level and have no per-recipient Mailgun event. `held`, `released` and `cancelled` are the app's own hold actions and have no provider equivalent. Resend has no per-email unsubscribe event.
 
 An endpoint with no event filter receives every event its format can represent. The `thinpost` format represents every outcome listed in [Native format](#native-format).
 
@@ -129,7 +131,7 @@ X-Thinpost-Signature: v1=<hex>
 | --- | --- | --- | --- |
 | `id` | string | Yes | Event ID. Same as `X-Thinpost-Event-ID`. |
 | `message_id` | string | Yes | The 32-character lowercase hex message ID. |
-| `delivery_id` | string | No | The delivery (one recipient of the message). Absent for message-level events such as `preparation_failed`. |
+| `delivery_id` | string | No | The delivery (one recipient of the message). Absent for message-level events such as `preparation_failed` and the hold events. |
 | `attempt_id` | string | No | The delivery attempt that produced the event. |
 | `bounce_receipt_id` | string | No | Set on `bounce_received_unverified`. |
 | `tracking_link_id` | string | No | Set on tracking events that reference a link. |
@@ -155,6 +157,7 @@ Parsers that reject unknown JSON fields must accept `delivery_state`, `suppressi
 | `uncertain` | An attempt may or may not have reached the recipient and needs an operator. |
 | `recipient_policy_denied` | The recipient was denied by policy before sending. `smtp_code` is `0`. |
 | `preparation_failed` | The message could not be prepared. It has a `message_id` and no delivery. |
+| `held`, `released`, `cancelled`, `hold_expired` | A message [submitted on hold](/guide/holding-messages) was accepted on hold, released, cancelled by its app, or expired without release. Each has a `message_id` and no delivery, and `smtp_code` is `0`. |
 | `opened`, `clicked` | A tracking pixel or link was fetched. |
 | `unsubscribed` | A recipient used one-click unsubscribe. |
 | `complained` | A mailbox provider reported a spam complaint. |
@@ -319,7 +322,7 @@ The payload is `{ "type", "created_at", "data" }`. `created_at` is the event tim
 
 `type` is `Permanent` or `Transient`. `subType` is always `General`. `diagnosticCode` is present only when the SMTP code is above zero.
 
-`email.failed` carries `"failed": { "reason": "tracking_abandoned" }` or `"failed": { "reason": "preparation_failed" }`.
+`email.failed` carries `"failed": { "reason": "tracking_abandoned" }`, `"failed": { "reason": "preparation_failed" }` or `"failed": { "reason": "hold_expired" }`.
 
 `email.suppressed` carries `"suppressed": { "message": "The recipient is on the suppression list. No SMTP attempt was made.", "type": "OnAccountSuppressionList" }`.
 

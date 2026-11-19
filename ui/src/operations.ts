@@ -64,6 +64,8 @@ export function parseOperations(data: unknown): Operations {
     }
     if (
         !countsOk(data.messages, ['queued_due', 'queued_waiting', 'preparing', 'preparation_failed', 'recovery_hold']) ||
+        // Servers before message holds omit on_hold; the console may poll one during a rolling deploy.
+        (data.messages.on_hold !== undefined && !isCount(data.messages.on_hold)) ||
         !countsOk(data.deliveries, ['queued_due', 'queued_waiting', 'in_flight', 'uncertain', 'recipient_policy_held', 'tracking_held', 'recovery_hold']) ||
         !countsOk(data.webhooks, ['queued_due', 'queued_waiting', 'in_flight', 'recovery_hold'])
     ) {

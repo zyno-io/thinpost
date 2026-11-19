@@ -16,7 +16,7 @@ import (
 // and 2 MiB total. Every successful result follows its own durable commit.
 // A disconnected caller can observe a partial batch; Postmark does not define
 // an idempotency key for this endpoint, so retries may create duplicates.
-func (s *Server) postmarkBatch(w http.ResponseWriter, r *http.Request, app submission.App) {
+func (s *Server) postmarkBatch(w http.ResponseWriter, r *http.Request, app submission.App, hold bool) {
 	defer r.Body.Close()
 	flag, err := protectionFlag(r.Header)
 	if err != nil {
@@ -47,7 +47,7 @@ func (s *Server) postmarkBatch(w http.ResponseWriter, r *http.Request, app submi
 			results = append(results, map[string]any{"ErrorCode": 300, "Message": "invalid or unsupported message"})
 			continue
 		}
-		receipt, err := s.service.Accept(r.Context(), app, submission.Request{Message: message, Adapter: "postmark", RejectAllSuppressed: true})
+		receipt, err := s.service.Accept(r.Context(), app, submission.Request{Message: message, Adapter: "postmark", RejectAllSuppressed: true, Hold: hold})
 		if err != nil {
 			code := 100
 			message := "submission unavailable"
@@ -78,5 +78,7 @@ func (s *Server) postmarkBatch(w http.ResponseWriter, r *http.Request, app submi
 		}
 		results = append(results, map[string]any{"To": to, "SubmittedAt": receipt.AcceptedAt.UTC().Format("2006-01-02T15:04:05.0000000Z"), "MessageID": providerid.Postmark(receipt.ID), "ErrorCode": 0, "Message": "OK"})
 	}
+	// Every item that was accepted is held; failed items carry their own error.
+	markHeld(w, hold)
 	writeJSON(w, http.StatusOK, results)
 }

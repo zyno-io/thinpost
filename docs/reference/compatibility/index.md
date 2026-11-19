@@ -130,6 +130,7 @@ These are optional and are not provider fields.
 
 - **Enhanced Protection**: `X-Thinpost-Enhanced-Protection: true` (or `false`) on any send request, including batches. It may appear at most once. It requires validated TLS on every delivery attempt. The removed header name `X-Thinpost-Require-TLS` is rejected with 400. Mailgun's `o:require-tls` sets the same policy; if either asks for it, the message requires it. See [Concepts](/guide/concepts).
 - **Resend tracking headers**: `X-Thinpost-Track-Opens` and `X-Thinpost-Track-Clicks`. They are rejected with 400 on the other three adapters.
+- **Hold**: `X-Thinpost-Hold: true` (or `false`) on any send request, including batches, at most once. The message is stored and counted but not sent until the app releases it, and a successful response carries `X-Thinpost-Hold: held`. No provider has an equivalent field (scheduled sends need a time), so there is no provider-native form. See [Holding messages](/guide/holding-messages).
 
 ### Tracking
 
@@ -141,4 +142,4 @@ A success response means the message is committed to the queue, not delivered. U
 
 ## Read-back routes
 
-An app key can read its own messages through `GET /app/v1/messages/{id}` and its `/body` and `/attachments/{index}` routes. These are Thinpost routes, not part of any provider API. See the [App API](/reference/api/app).
+An app key can read its own messages through `GET /app/v1/messages/{id}` and its `/body` and `/attachments/{index}` routes, and release or cancel a held message through `POST /app/v1/messages/{id}/release` and `/cancel`. These are Thinpost routes, not part of any provider API. See the [App API](/reference/api/app).

@@ -33,7 +33,7 @@ func (resendFormat) Classify(f Fact) (string, bool) {
 		return "email.delivery_delayed", true
 	case classPermanent, classSoft:
 		return "email.bounced", true
-	case classTrackingAbandoned, classPreparationFailed:
+	case classTrackingAbandoned, classPreparationFailed, classHoldExpired:
 		return "email.failed", true
 	case classOpened:
 		return "email.opened", true
@@ -129,6 +129,8 @@ func (resendFormat) Build(in Input) (Request, error) {
 		data.Failed = &resendFailed{Reason: "tracking_abandoned"}
 	case classPreparationFailed:
 		data.Failed = &resendFailed{Reason: "preparation_failed"}
+	case classHoldExpired:
+		data.Failed = &resendFailed{Reason: "hold_expired"}
 	}
 	body, err := marshal(resendEvent{eventType, in.Event.OccurredAt.UTC().Format(resendTime), data})
 	if err != nil {

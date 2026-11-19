@@ -152,14 +152,22 @@ func (r *Repository) CommitBatch(ctx context.Context, record acceptance.BatchRec
 	if err = r.lockAndVerifyObjects(ctx, tx, keys); err != nil {
 		return submission.BatchReceipt{}, err
 	}
+	state, holdMS := initialMessageState(record.Hold)
 	for i, item := range record.Items {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO messages(id,app_id,object_key,enhanced_protection,subject,recipient_count,sender_domain,sender_domain_rev,sender_address,sender_name) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-			ids[i], record.AppID, item.ObjectKey, item.EnhancedProtection, item.Subject, item.RecipientCount, item.SenderDomain, reverseDomainLabels(item.SenderDomain), item.SenderAddress, nullableName(item.SenderName)); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO messages(id,app_id,object_key,enhanced_protection,subject,recipient_count,sender_domain,sender_domain_rev,sender_address,sender_name,state,hold_expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now()+$12::bigint*interval '1 millisecond')`,
+			ids[i], record.AppID, item.ObjectKey, item.EnhancedProtection, item.Subject, item.RecipientCount, item.SenderDomain, reverseDomainLabels(item.SenderDomain), item.SenderAddress, nullableName(item.SenderName), state, holdMS); err != nil {
 			return submission.BatchReceipt{}, err
 		}
 	}
 	if err = insertRecipients(ctx, tx, record.AppID, &recipients); err != nil {
 		return submission.BatchReceipt{}, err
+	}
+	if record.Hold {
+		for _, id := range ids {
+			if err = insertMessageEvent(ctx, tx, record.AppID, id, holdEventHeld); err != nil {
+				return submission.BatchReceipt{}, err
+			}
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return submission.BatchReceipt{}, err

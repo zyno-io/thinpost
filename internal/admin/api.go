@@ -108,6 +108,14 @@ func DeriveMessageStatus(state string, c DeliveryCounts) string {
 		return "failed"
 	case "recovery_hold":
 		return "held"
+	// A message submitted on hold waits for its app; the two terminal hold
+	// states never produced a delivery.
+	case "on_hold":
+		return "on_hold"
+	case "cancelled":
+		return "cancelled"
+	case "hold_expired":
+		return "expired"
 	case "prepared":
 		switch {
 		case c.Pending > 0 && c.Retrying > 0:
@@ -222,7 +230,42 @@ type MessageDetail struct {
 	Message            MessageSummary      `json:"message"`
 	Deliveries         []DeliverySummary   `json:"deliveries"`
 	PreparationFailure *PreparationFailure `json:"preparation_failure,omitempty"`
+	// Hold is present only for a message submitted on hold.
+	Hold *MessageHold `json:"hold,omitempty"`
 }
+
+// MessageHold describes the hold of a message submitted on hold. Resolution
+// and ResolvedAt are absent while it is held.
+type MessageHold struct {
+	ExpiresAt  time.Time  `json:"expires_at"`
+	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	// Resolution is HoldReleased, HoldCancelled or HoldExpired.
+	Resolution string `json:"resolution,omitempty"`
+}
+
+// Hold resolutions reported in MessageHold.
+const (
+	HoldReleased  = "released"
+	HoldCancelled = "cancelled"
+	HoldExpired   = "expired"
+)
+
+// HoldConflict is the 409 reason when a release or cancel cannot apply. It
+// matches ErrConflict with errors.Is.
+type HoldConflict string
+
+// Hold conflict reasons, sent as {"error": reason}.
+const (
+	HoldNotHeld      HoldConflict = "not_held"
+	HoldWasReleased  HoldConflict = "released"
+	HoldWasCancelled HoldConflict = "cancelled"
+	HoldHasExpired   HoldConflict = "hold_expired"
+	HoldInRecovery   HoldConflict = "recovery_hold"
+)
+
+func (c HoldConflict) Error() string        { return "hold conflict: " + string(c) }
+func (c HoldConflict) Is(target error) bool { return target == ErrConflict }
+
 type PreparationFailure struct {
 	Attempts int    `json:"attempts"`
 	Reason   string `json:"reason"`

@@ -139,6 +139,8 @@ func run() error {
 	operator := &admin.Handler{Authenticator: auth, Store: repository, WebhookHistory: repository, PolicyHolds: repository, TrackingHolds: repository, AppStatus: repository, Suppressions: repository, Operations: repository, AuthConfig: &config.PublicAuth, DNS: net.DefaultResolver, MX: net.DefaultResolver, InboundMXHost: config.InboundMXHost, ReverseDNS: net.DefaultResolver, WebhookDestinations: config.WebhookDestinations}
 	stopCleanup := startIdempotencyCleanup(ctx, repository)
 	defer stopCleanup()
+	stopHoldExpiry := startHoldExpiry(ctx, repository)
+	defer stopHoldExpiry()
 	var objects *objectstore.EncryptedStore
 	var webhookKeys webhook.Keys
 	if config.S3 != nil {
@@ -260,7 +262,7 @@ func run() error {
 		handler = submissionHandler(service, config, repository)
 		// App-key reads share the submission service's key authentication and the
 		// operator API's store and content reader (nil without object storage).
-		appReads = &admin.AppReadHandler{Service: service, Store: repository, ContentReader: operator.ContentReader}
+		appReads = &admin.AppReadHandler{Service: service, Store: repository, ContentReader: operator.ContentReader, Holds: repository}
 	}
 	runtimeInfo := &admin.RuntimeInfo{Features: admin.RuntimeFeatures{Submission: handler != nil, Tracking: config.Tracking != nil}}
 	if config.Tracking != nil {

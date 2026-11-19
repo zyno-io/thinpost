@@ -15,7 +15,7 @@ Thinpost is one Go module, `github.com/zyno-io/thinpost`, with a Vue console, a 
 | `cmd/thinpost-edge/` | The edge worker, plus `healthcheck` and `journal-id` subcommands |
 | `internal/` | All Go packages. Nothing is importable from outside the module |
 | `api/admin/openapi.yaml` | The operator (admin) API contract. The console client is generated from it |
-| `api/app/openapi.yaml` | The read-only app API contract |
+| `api/app/openapi.yaml` | The app API contract |
 | `api/control/v1/` | The control protocol `.proto` and its generated Go code |
 | `ui/` | The Vue operator console |
 | `resources/helm/chart/` | The Helm chart, with `values.schema.json` |

@@ -69,7 +69,7 @@ EP is a request-time choice by the sender. It limits who sees content in the con
 
 ## Audit events
 
-Operator actions that change state, such as creating an app, issuing or revoking a key, pausing an app, changing suppressions, tracking defaults, the retry policy and feedback-loop settings, write audit events in the same database transaction. Records name IDs and old and new values, never addresses or subjects. Audit rows live in PostgreSQL. Protect the table, retain it according to your policy, and use database privileges to prevent tampering. Thinpost does not provide tamper-evident storage.
+Operator actions that change state, such as creating an app, issuing or revoking a key, pausing an app, changing suppressions, tracking defaults, the retry policy and feedback-loop settings, write audit events in the same database transaction. Records name IDs and old and new values, never addresses or subjects. An app's release or cancel of a [held message](/guide/holding-messages) is audited the same way, with the actor `key:<key ID>`. Audit rows live in PostgreSQL. Protect the table, retain it according to your policy, and use database privileges to prevent tampering. Thinpost does not provide tamper-evident storage.
 
 ## Retention
 

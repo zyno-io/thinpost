@@ -54,6 +54,7 @@ Because the endpoints are loopback-only, the image provides `thinpost-edge healt
 - the gate mode, revision, who changed it and when, and whether its generation matches;
 - each Edge worker lease and whether it is live by the database clock;
 - message, delivery and webhook backlogs, including the oldest due time and counts of uncertain and held work;
+- messages on hold by their app (`messages.on_hold`), which wait for the app to release or cancel them, not for an operator, and expire after seven days;
 - today's inbound counters and the retry policy.
 
 It works while the gate is closed, returns counts and IDs only, and is not audited. `GET /api/v1/operations/attention` lists messages that need an operator. The console's Operations page shows the same data and refreshes while visible.
@@ -89,6 +90,10 @@ message app=<id> message=<id> status=accepted
 message app=<id> message=<id> status=prepared
 message app=<id> message=<id> status=preparation_failed reason=<enum>
 message app=<id> message=<id> status=preparation_lease_lost
+message app=<id> message=<id> status=held
+message app=<id> message=<id> status=released
+message app=<id> message=<id> status=cancelled
+message app=<id> message=<id> status=hold_expired
 delivery app=<id> message=<id> delivery=<id> status=<outcome> smtp=<code> ip=<name>
 ```
 

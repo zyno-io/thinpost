@@ -97,6 +97,29 @@ export function readMessageSummary(raw: unknown, options: { maxRecipients?: numb
     };
 }
 
+/** The hold of a message submitted on hold. `resolved` is null while it is held. */
+export interface HoldView {
+    expiresAt: string;
+    resolved: { resolution: 'released' | 'cancelled' | 'expired'; time: string } | null;
+}
+
+/**
+ * Validates the optional `hold` object of a message detail. Absent means the message was not
+ * submitted on hold (null); a malformed value is reported as invalid (undefined).
+ */
+export function readMessageHold(raw: unknown): HoldView | null | undefined {
+    if (raw === undefined || raw === null) return null;
+    if (typeof raw !== 'object') return undefined;
+    const v = raw as Record<string, unknown>;
+    if (typeof v.expires_at !== 'string') return undefined;
+    const resolution = v.resolution === undefined ? null : v.resolution;
+    if (resolution !== null && resolution !== 'released' && resolution !== 'cancelled' && resolution !== 'expired') return undefined;
+    const resolvedAt = typeof v.resolved_at === 'string' ? v.resolved_at : null;
+    if (resolution === null && resolvedAt === null) return { expiresAt: v.expires_at, resolved: null };
+    if (resolution === null || resolvedAt === null) return undefined;
+    return { expiresAt: v.expires_at, resolved: { resolution, time: resolvedAt } };
+}
+
 /** Whether a delivery is for a To, Cc or Bcc recipient; null when not recorded. */
 export function readDeliveryRecipientKind(delivery: unknown): RecipientKind | null {
     if (!delivery || typeof delivery !== 'object') return null;
