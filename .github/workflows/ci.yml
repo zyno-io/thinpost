@@ -316,7 +316,8 @@ jobs:
     # Wakes an optional downstream deployer once both main images are
     # published and attested. DEPLOY_HOOK_URL is a repository secret (a URL
     # that accepts an empty POST); without it this job does nothing. A failed
-    # notification is a warning, not a failed build: deployers should also poll.
+    # notification fails the job so a missed deploy is visible; re-run the job
+    # to notify again.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [publish-images]
     runs-on: ubuntu-24.04
@@ -327,7 +328,7 @@ jobs:
         env:
           DEPLOY_HOOK_URL: ${{ secrets.DEPLOY_HOOK_URL }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
           if [[ -z "$DEPLOY_HOOK_URL" ]]; then
             echo "DEPLOY_HOOK_URL is not set; nothing to notify."
             exit 0
@@ -335,7 +336,8 @@ jobs:
           # The URL goes through curl's stdin config, never the command line.
           if ! printf 'url = "%s"\n' "$DEPLOY_HOOK_URL" |
             curl -fsS --proto '=https' --max-time 30 --retry 3 -X POST -o /dev/null -K -; then
-            echo "::warning::The deploy hook did not accept the notification."
+            echo "::error::The deploy hook did not accept the notification. Re-run this job to notify again."
+            exit 1
           fi
 
   release:

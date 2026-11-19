@@ -29,7 +29,7 @@ Release builds do not touch any deployment. Deployments are separate from releas
 
 ## Notifying a deployer
 
-To track `main` continuously, set a `DEPLOY_HOOK_URL` repository secret in your fork or mirror: a URL that accepts an empty `POST`, such as a CI pipeline trigger. After both `main` images are published and attested, the **Notify deployer** job posts to it once. The request carries no release data, so the deployer must resolve and verify the commit itself, the way [Verify a release](#verify-a-release) does. Without the secret the job does nothing. A failed notification shows as a warning, not a failed build, so a deployer should also poll.
+To track `main` continuously, set a `DEPLOY_HOOK_URL` repository secret in your fork or mirror: a URL that accepts an empty `POST`, such as a CI pipeline trigger. After both `main` images are published and attested, the **Notify deployer** job posts to it once. The request carries no release data, so the deployer must resolve and verify the commit itself, the way [Verify a release](#verify-a-release) does. Without the secret the job does nothing. If the hook does not accept the request, the job fails so the missed notification is visible; re-run the job to notify again.
 
 ## Verify a release
 
