@@ -22,6 +22,11 @@ describe('readMessageBody', () => {
         expect(body?.attachments[0]).toEqual({ index: 0, filename: 'a.png', contentType: 'image/png', size: 10, inline: true, contentId: 'x' });
         expect(Object.keys(body!)).not.toContain('extra');
     });
+    it('reads the raw flag, defaulting to false, and rejects a non-boolean', () => {
+        expect(readMessageBody(raw())?.raw).toBe(false);
+        expect(readMessageBody(raw({ raw: true }))?.raw).toBe(true);
+        expect(readMessageBody(raw({ raw: 'yes' }))).toBeNull();
+    });
     it('reads Cc and Bcc, defaulting to none, and rejects malformed lists', () => {
         expect(readMessageBody(raw())).toMatchObject({ cc: [], bcc: [] });
         expect(readMessageBody(raw({ cc: ['c@example.com'], bcc: ['d@example.com'] }))).toMatchObject({ cc: ['c@example.com'], bcc: ['d@example.com'] });

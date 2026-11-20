@@ -18,6 +18,8 @@ export interface ParsedMessageBody {
     html: string;
     enhancedProtection: boolean;
     attachments: AttachmentInfo[];
+    /** The message was submitted as raw MIME over SMTP, so its original can be downloaded as an .eml. */
+    raw: boolean;
     /** Inbound reads only: what could not be shown (`text`, `html` or `headers`). Empty for outbound messages. */
     omitted: string[];
 }
@@ -66,7 +68,8 @@ export function readMessageBody(raw: unknown): ParsedMessageBody | null {
         (v.cc !== undefined && !isStringArray(v.cc)) ||
         (v.bcc !== undefined && !isStringArray(v.bcc)) ||
         !Array.isArray(v.attachments) ||
-        (v.omitted !== undefined && !isStringArray(v.omitted))
+        (v.omitted !== undefined && !isStringArray(v.omitted)) ||
+        (v.raw !== undefined && typeof v.raw !== 'boolean')
     ) {
         return null;
     }
@@ -89,6 +92,7 @@ export function readMessageBody(raw: unknown): ParsedMessageBody | null {
         html: v.html,
         enhancedProtection: v.enhanced_protection,
         attachments,
+        raw: v.raw === true,
         omitted: v.omitted ?? []
     };
 }

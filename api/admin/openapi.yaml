@@ -1620,6 +1620,39 @@ paths:
         '404': { description: Message or attachment index not found }
         '503': { description: Object storage unavailable or not configured }
         default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/messages/{messageId}/raw:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: messageId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    get:
+      operationId: downloadMessageRaw
+      description: >-
+        The original message of a raw MIME submission, exactly as received, as an
+        .eml download (always application/octet-stream). Audited (message.raw.read)
+        before the object is read when the message uses Enhanced Protection; not
+        audited otherwise. A message not submitted as raw MIME is 404.
+      responses:
+        '200':
+          description: Original message bytes; sensitive and not cacheable
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: attachment with a message-<id>.eml filename
+            Cache-Control:
+              schema: { type: string, const: no-store }
+            X-Content-Type-Options:
+              schema: { type: string, const: nosniff }
+            Cross-Origin-Resource-Policy:
+              schema: { type: string, const: same-origin }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '404': { description: Message not found, or not submitted as raw MIME }
+        '503': { description: Object storage unavailable or not configured }
+        default: { $ref: '#/components/responses/Error' }
   /apps/{appId}/messages/{messageId}/deliveries/{deliveryId}/headers:
     parameters:
       - { $ref: '#/components/parameters/AppId' }
@@ -2490,6 +2523,9 @@ components:
           type: array
           maxItems: 20
           items: { $ref: '#/components/schemas/AttachmentMetadata' }
+        raw:
+          type: boolean
+          description: Present and true when the message was submitted as raw MIME over SMTP. The contents above are parsed from the original message, which downloadMessageRaw returns whole; attachments is then always empty and the attachment endpoint is 404.
         omitted:
           type: array
           items: { type: string, enum: [text, html, headers] }
