@@ -63,8 +63,8 @@ func TestOperatorCommitRecordsAuditWithoutKey(t *testing.T) {
 		t.Fatalf("audit actor %q resource %q", actor, resource)
 	}
 	var parsed map[string]any
-	if err := json.Unmarshal([]byte(details), &parsed); err != nil || len(parsed) != 1 || parsed["recipient_count"] != float64(2) {
-		t.Fatalf("audit details must hold only recipient_count: %s", details)
+	if err := json.Unmarshal([]byte(details), &parsed); err != nil || len(parsed) != 3 || parsed["recipient_count"] != float64(2) || parsed["bypass_limits"] != false || parsed["bypass_recipient_policy"] != false {
+		t.Fatalf("audit details must hold only recipient_count and the two bypass flags: %s", details)
 	}
 	if f.messages(app) != 1 {
 		t.Fatal("message not stored")
@@ -146,7 +146,7 @@ func TestOperatorPausedApp(t *testing.T) {
 	if _, err := f.repo.LookupOperatorApp(f.ctx, f.app); !errors.Is(err, submission.ErrAppPaused) {
 		t.Fatalf("lookup: %v", err)
 	}
-	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1); !errors.Is(err, submission.ErrAppPaused) {
+	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1, true); !errors.Is(err, submission.ErrAppPaused) {
 		t.Fatalf("reserve: %v", err)
 	}
 	if _, err := f.repo.Commit(f.ctx, f.record(f.app, "sender@example.com", 1)); !errors.Is(err, submission.ErrAppPaused) {
@@ -185,18 +185,18 @@ func TestLookupOperatorApp(t *testing.T) {
 func TestOperatorReservationUsesTheSubmissionRate(t *testing.T) {
 	f := newHoldFixture(t)
 	// The default is disabled, exactly as for keys.
-	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1); !errors.Is(err, submission.ErrRateLimited) {
+	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1, true); !errors.Is(err, submission.ErrRateLimited) {
 		t.Fatalf("disabled rate: %v", err)
 	}
 	if _, err := f.repo.SetSubmissionRate(f.ctx, "fixture", f.app, 1, 2); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1); err != nil {
+		if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1, true); err != nil {
 			t.Fatalf("reservation %d: %v", i, err)
 		}
 	}
-	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1); !errors.Is(err, submission.ErrRateLimited) {
+	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1, true); !errors.Is(err, submission.ErrRateLimited) {
 		t.Fatalf("burst not enforced: %v", err)
 	}
 	// Operator and key submissions draw on one bucket.
@@ -204,11 +204,11 @@ func TestOperatorReservationUsesTheSubmissionRate(t *testing.T) {
 		t.Fatalf("key reservation did not see the operator charges: %v", err)
 	}
 	for _, messages := range []int{0, 101} {
-		if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, messages); !errors.Is(err, submission.ErrInvalidMessage) {
+		if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, messages, true); !errors.Is(err, submission.ErrInvalidMessage) {
 			t.Fatalf("%d messages: %v", messages, err)
 		}
 	}
-	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.id(), 1); !errors.Is(err, submission.ErrInvalidMessage) {
+	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.id(), 1, true); !errors.Is(err, submission.ErrInvalidMessage) {
 		t.Fatalf("unknown app: %v", err)
 	}
 }
@@ -232,7 +232,7 @@ func TestOperatorPathsFailWhenTheGateIsClosed(t *testing.T) {
 	if _, err := f.repo.LookupOperatorApp(f.ctx, f.app); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("lookup: %v", err)
 	}
-	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1); !errors.Is(err, ErrRuntimeClosed) {
+	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1, true); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("reserve: %v", err)
 	}
 	if _, err := f.repo.Commit(f.ctx, f.record(f.app, "sender@example.com", 1)); !errors.Is(err, ErrRuntimeClosed) {
@@ -271,7 +271,7 @@ func TestOperatorSubmissionThroughAcceptance(t *testing.T) {
 		t.Fatal(err)
 	}
 	var parsed map[string]any
-	if err := json.Unmarshal([]byte(details), &parsed); err != nil || len(parsed) != 1 || parsed["recipient_count"] != float64(2) {
+	if err := json.Unmarshal([]byte(details), &parsed); err != nil || len(parsed) != 3 || parsed["recipient_count"] != float64(2) || parsed["bypass_limits"] != false || parsed["bypass_recipient_policy"] != false {
 		t.Fatalf("audit details: %s", details)
 	}
 	// An idempotency key is refused before anything is reserved or stored.
@@ -300,7 +300,7 @@ func TestOperatorSubmissionThroughAcceptance(t *testing.T) {
 // reservation succeeded, the window the 409 app_paused answer must cover.
 func TestOperatorPausedBetweenReserveAndCommit(t *testing.T) {
 	f := newOperatorFixture(t)
-	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1); err != nil {
+	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1, true); err != nil {
 		t.Fatal(err)
 	}
 	f.exec(`UPDATE apps SET active=false WHERE id=$1`, f.app)

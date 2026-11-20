@@ -123,7 +123,9 @@ func (p *Provider) prepare(ctx context.Context, claim delivery.Claim, caps deliv
 	if err != nil {
 		return nil, nil, err
 	}
-	if !p.Recipients.Allows(recipient.Address) {
+	// The console test send may skip the allowlist, once, at acceptance and
+	// here. Everything after this line (the route's egress filter) still runs.
+	if !claim.RecipientPolicyOverride && !p.Recipients.Allows(recipient.Address) {
 		return nil, nil, delivery.ErrRecipientPolicyDenied
 	}
 	route, err := p.Routes.ForRecipient(ctx, recipient.Address, claim.DeliveryID, claim.RouteAttempt)

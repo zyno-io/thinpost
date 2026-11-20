@@ -544,7 +544,27 @@ type Request struct {
 	// counted like any accepted message, but not prepared or sent until the app
 	// releases it. It is part of the idempotency fingerprint.
 	Hold bool
+	// Overrides are operator-only relaxations of acceptance policy. They are
+	// accepted only for an operator principal on the console adapter; Accept
+	// refuses them for any other principal. They are part of the fingerprint
+	// only when set, which no idempotent route can do.
+	Overrides Overrides
 }
+
+// Overrides are the operator-only options of a console test send. The zero
+// value relaxes nothing. They never relax the verified sender domain, DKIM
+// signing, suppressions, the paused state, the admission gate, any size or
+// profile limit, the egress policy or Enhanced Protection TLS.
+type Overrides struct {
+	// Limits skips, and does not count, the submission rate bucket, the daily
+	// recipient quota and the pending-message limit.
+	Limits bool
+	// RecipientPolicy skips the deployment recipient allowlist only.
+	RecipientPolicy bool
+}
+
+// Any reports whether any override is set.
+func (o Overrides) Any() bool { return o.Limits || o.RecipientPolicy }
 
 // MaxHold is how long a message submitted on hold waits for release. After it
 // the hold expires and the message is never sent.

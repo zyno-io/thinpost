@@ -42,20 +42,39 @@ type nativeInput struct {
 	EnhancedProtection bool            `json:"enhanced_protection"`
 	Tracking           json.RawMessage `json:"tracking"`
 	Hold               bool            `json:"hold"`
+	// BypassLimits and BypassRecipientPolicy are the operator test-send
+	// overrides. They are in testKeys only: every other route rejects them.
+	BypassLimits          bool `json:"bypass_limits"`
+	BypassRecipientPolicy bool `json:"bypass_recipient_policy"`
 }
 
 // nativeOptions carries what a decoded body asked for beyond the message, and
 // which optional parts it used, so a narrower profile can refuse them.
 type nativeOptions struct {
 	Hold bool
+	// Overrides are the operator test-send overrides. They are only ever set
+	// by decoding with testKeys, so a native request cannot carry them.
+	Overrides submission.Overrides
 	// Headers, Attachments and Tracking report that the body contained the field.
 	Headers, Attachments, Tracking bool
 	// Present holds the top-level keys the body contained.
 	Present map[string]bool
 }
 
-// nativeKeys are the accepted top-level keys, matched exactly.
+// nativeKeys are the keys the native app-key route accepts, matched exactly.
+// The override flags are deliberately absent: the native route rejects them
+// with 400 even when false, so a client cannot discover or probe a bypass.
 var nativeKeys = map[string]bool{"from": true, "to": true, "cc": true, "bcc": true, "reply_to": true, "subject": true, "text": true, "html": true, "headers": true, "attachments": true, "enhanced_protection": true, "tracking": true, "hold": true}
+
+// testKeys are the keys of the operator test send: the native keys plus the
+// two operator-only overrides.
+var testKeys = func() map[string]bool {
+	keys := map[string]bool{"bypass_limits": true, "bypass_recipient_policy": true}
+	for key := range nativeKeys {
+		keys[key] = true
+	}
+	return keys
+}()
 
 // testForbiddenKeys may not appear at all in an operator test send, even empty.
 var testForbiddenKeys = []string{"cc", "bcc", "reply_to", "headers", "attachments", "tracking", "hold"}
@@ -63,7 +82,7 @@ var testForbiddenKeys = []string{"cc", "bcc", "reply_to", "headers", "attachment
 // decodeNative strictly decodes a native request body: no duplicate, unknown
 // or null-valued optional objects. Errors never include request content. A body
 // that cannot be decoded is submission.ErrInvalidRequest.
-func decodeNative(data []byte, lim limits) (submission.Message, nativeOptions, error) {
+func decodeNative(data []byte, lim limits, keys map[string]bool) (submission.Message, nativeOptions, error) {
 	var opts nativeOptions
 	if len(data) > lim.body || !utf8.Valid(data) {
 		return submission.Message{}, opts, submission.ErrInvalidRequest
@@ -76,7 +95,7 @@ func decodeNative(data []byte, lim limits) (submission.Message, nativeOptions, e
 	}
 	opts.Present = make(map[string]bool, len(fields))
 	for key, value := range fields {
-		if !nativeKeys[key] || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		if !keys[key] || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return submission.Message{}, opts, submission.ErrInvalidRequest
 		}
 		opts.Present[key] = true
@@ -87,6 +106,7 @@ func decodeNative(data []byte, lim limits) (submission.Message, nativeOptions, e
 	}
 	message := submission.Message{From: input.From, To: nilIfEmpty(input.To), Cc: nilIfEmpty(input.Cc), Bcc: nilIfEmpty(input.Bcc), ReplyTo: nilIfEmpty(input.ReplyTo), Subject: input.Subject, Text: input.Text, HTML: input.HTML, EnhancedProtection: input.EnhancedProtection}
 	opts.Hold = input.Hold
+	opts.Overrides = submission.Overrides{Limits: input.BypassLimits, RecipientPolicy: input.BypassRecipientPolicy}
 	if input.Headers != nil {
 		opts.Headers = true
 		pairs, err := objectHeaders(input.Headers)
@@ -150,7 +170,7 @@ func (s *Server) acceptNative(ctx context.Context, app submission.App, msg submi
 	if !s.admits(msg) || msg.Tracking != nil && !s.tracking {
 		return submission.Receipt{}, submission.ErrInvalidRequest
 	}
-	return s.service.Accept(ctx, app, submission.Request{Message: msg, IdempotencyKey: idem, Adapter: adapter, Hold: opts.Hold})
+	return s.service.Accept(ctx, app, submission.Request{Message: msg, IdempotencyKey: idem, Adapter: adapter, Hold: opts.Hold, Overrides: opts.Overrides})
 }
 
 // SubmitTestMessage submits a message as the app on behalf of the
@@ -159,8 +179,10 @@ func (s *Server) acceptNative(ctx context.Context, app submission.App, msg submi
 // constrained profile (1 to 5 To recipients; no Cc, Bcc, reply addresses,
 // headers, attachments, tracking choice or hold), and it is accepted through
 // the same Service.Accept as every other submission, so quotas, rate limits,
-// sender-domain and recipient policy all apply. It never uses an idempotency
-// key.
+// sender-domain and recipient policy all apply unless the body sets one of the
+// two operator-only options: bypass_limits skips, and does not count, the
+// sending limits; bypass_recipient_policy skips the recipient allowlist. Nothing
+// else is relaxed. It never uses an idempotency key.
 func (s *Server) SubmitTestMessage(ctx context.Context, actor, appID string, body []byte) (submission.Receipt, error) {
 	if s.service == nil {
 		return submission.Receipt{}, submission.ErrUnavailable
@@ -173,7 +195,7 @@ func (s *Server) SubmitTestMessage(ctx context.Context, actor, appID string, bod
 	if err != nil {
 		return submission.Receipt{}, err
 	}
-	msg, opts, err := decodeNative(body, limits{body: maxTestBody, attachment: s.attachmentLimit})
+	msg, opts, err := decodeNative(body, limits{body: maxTestBody, attachment: s.attachmentLimit}, testKeys)
 	if err != nil {
 		return submission.Receipt{}, err
 	}

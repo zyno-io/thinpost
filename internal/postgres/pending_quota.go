@@ -14,12 +14,15 @@ const maxPendingMessages = 100000
 // cleared transactionally only when all deliveries are terminal. A prepared
 // message missing deliveries stays pending. LIMIT bounds counted rows;
 // concurrent completions can make the count temporarily conservative.
+// Messages submitted with the console limits override are excluded: they were
+// never counted against the limit, so they must not consume it for later
+// submissions either. The operations backlog still counts them.
 // Any future operation that changes a terminal message back to pending must
 // hold the same application lock and enforce the limit before doing so.
 func countPendingMessages(ctx context.Context, q rowQueryer, appID string, limit int) (int, error) {
 	var pending int
 	err := q.QueryRowContext(ctx, `SELECT count(*) FROM (
-		SELECT 1 FROM messages WHERE app_id=$1 AND pending LIMIT $2
+		SELECT 1 FROM messages WHERE app_id=$1 AND pending AND NOT limits_override LIMIT $2
 	) pending_messages`, appID, limit).Scan(&pending)
 	return pending, err
 }

@@ -271,6 +271,7 @@ func run() error {
 	if config.Tracking != nil {
 		runtimeInfo.Tracking = &admin.RuntimeTracking{Origin: config.Tracking.Origin, LinkEventLimit: config.Tracking.EventLimit}
 	}
+	runtimeInfo.Features.RecipientPolicy = recipients.Mode()
 	operator.Runtime = runtimeInfo
 	operatorHealth := controlapp.StartOperatorHealth(ctx, db.PingContext)
 	defer operatorHealth.Close()

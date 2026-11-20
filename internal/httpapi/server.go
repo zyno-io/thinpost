@@ -281,7 +281,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "thinpost":
 		var data []byte
 		if data, err = readBody(r, lim); err == nil {
-			msg, nativeOpts, err = decodeNative(data, lim)
+			msg, nativeOpts, err = decodeNative(data, lim, nativeKeys)
 		}
 	}
 	if errors.Is(err, errBodyRead) {

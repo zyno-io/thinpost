@@ -344,3 +344,89 @@ func mergeHeaders(a, b map[string]string) map[string]string {
 	}
 	return merged
 }
+
+// The two operator-only options exist on the console test send alone. Every
+// other route rejects them with 400, even when false, so they cannot be probed.
+func TestOverrideFlagsAreRejectedOnTheNativeRoute(t *testing.T) {
+	for _, extra := range []string{
+		`,"bypass_limits":true`, `,"bypass_limits":false`, `,"bypass_recipient_policy":true`, `,"bypass_recipient_policy":false`,
+		`,"bypass_limits":true,"bypass_recipient_policy":true`, `,"Bypass_Limits":true`, `,"BYPASS_RECIPIENT_POLICY":false`, `,"bypass_limits":null`,
+	} {
+		f := newNativeFake()
+		body := `{"from":"a@example.com","to":["b@example.net"],"subject":"s","text":"t"` + extra + `}`
+		w := nativeRequest(t, New(f), body, nativeAuth)
+		if w.Code != http.StatusBadRequest || len(f.requests) != 0 {
+			t.Fatalf("%s: status %d, %d accepted", extra, w.Code, len(f.requests))
+		}
+	}
+	// And the decoder itself, which is what the route calls: nativeKeys has no flag.
+	for _, key := range []string{"bypass_limits", "bypass_recipient_policy"} {
+		if nativeKeys[key] || !testKeys[key] {
+			t.Fatalf("%s is in the wrong key set", key)
+		}
+	}
+}
+
+func TestOverrideFlagsAreRejectedByProviderAdapters(t *testing.T) {
+	routes := []struct{ name, path, body, auth, value string }{
+		{"postmark", "/email", `{"From":"sender@example.com","To":"one@example.net","Subject":"Hello","TextBody":"body","bypass_limits":false}`, "X-Postmark-Server-Token", "valid-key"},
+		{"resend", "/emails", `{"from":"sender@example.com","to":"one@example.net","subject":"Hello","text":"body","bypass_recipient_policy":false}`, "Authorization", "Bearer valid-key"},
+		{"sendgrid", "/v3/mail/send", `{"from":{"email":"sender@example.com"},"personalizations":[{"to":[{"email":"one@example.net"}]}],"subject":"Hello","content":[{"type":"text/plain","value":"body"}],"bypass_limits":true}`, "Authorization", "Bearer valid-key"},
+	}
+	for _, route := range routes {
+		f := &fakeService{app: submission.App{ID: "app"}}
+		w := request(t, New(f), route.path, route.body, map[string]string{route.auth: route.value})
+		if w.Code != http.StatusBadRequest || len(f.requests) != 0 {
+			t.Fatalf("%s: status %d, %d accepted", route.name, w.Code, len(f.requests))
+		}
+	}
+	for _, field := range []string{"bypass_limits", "bypass_recipient_policy"} {
+		f := &fakeService{app: submission.App{ID: "app"}}
+		r := httptest.NewRequest(http.MethodPost, "/v3/example.com/messages", strings.NewReader("from=sender%40example.com&to=one%40example.net&subject=Hello&text=body&"+field+"=false"))
+		r.SetBasicAuth("api", "valid-key")
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		New(f).ServeHTTP(w, r)
+		if w.Code != http.StatusBadRequest || len(f.requests) != 0 {
+			t.Fatalf("mailgun %s: status %d, %d accepted", field, w.Code, len(f.requests))
+		}
+	}
+}
+
+func TestSubmitTestMessagePassesOverrides(t *testing.T) {
+	const base = `{"from":"a@example.com","to":["b@example.net"],"subject":"s","text":"t"`
+	for name, tc := range map[string]struct {
+		extra string
+		want  submission.Overrides
+	}{
+		"none":         {``, submission.Overrides{}},
+		"both false":   {`,"bypass_limits":false,"bypass_recipient_policy":false`, submission.Overrides{}},
+		"limits":       {`,"bypass_limits":true`, submission.Overrides{Limits: true}},
+		"recipients":   {`,"bypass_recipient_policy":true`, submission.Overrides{RecipientPolicy: true}},
+		"both":         {`,"bypass_limits":true,"bypass_recipient_policy":true`, submission.Overrides{Limits: true, RecipientPolicy: true}},
+		"explicit off": {`,"bypass_limits":true,"bypass_recipient_policy":false`, submission.Overrides{Limits: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newNativeFake()
+			if _, err := New(f).SubmitTestMessage(context.Background(), "subject-1", "app-a", []byte(base+tc.extra+`}`)); err != nil || len(f.requests) != 1 {
+				t.Fatal(err)
+			}
+			if f.requests[0].Overrides != tc.want || f.requests[0].Adapter != submission.AdapterConsole || f.apps[0].Operator != "subject-1" {
+				t.Fatalf("request %#v", f.requests[0])
+			}
+		})
+	}
+	for name, extra := range map[string]string{
+		"case variant":    `,"Bypass_Limits":true`,
+		"null":            `,"bypass_limits":null`,
+		"string":          `,"bypass_limits":"true"`,
+		"number":          `,"bypass_recipient_policy":1`,
+		"duplicate":       `,"bypass_limits":true,"bypass_limits":true`,
+		"unknown sibling": `,"bypass_all":true`,
+	} {
+		f := newNativeFake()
+		if _, err := New(f).SubmitTestMessage(context.Background(), "subject-1", "app-a", []byte(base+extra+`}`)); !errors.Is(err, submission.ErrInvalidRequest) || len(f.requests) != 0 {
+			t.Fatalf("%s: got %v, %d accepted", name, err, len(f.requests))
+		}
+	}
+}

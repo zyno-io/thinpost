@@ -18,6 +18,8 @@ type operatorRepository struct {
 	operatorErr    error
 	lookups        []string
 	operatorCharge []int
+	// operatorCharged records the charge flag of each reservation.
+	operatorCharged []bool
 }
 
 func (r *operatorRepository) LookupOperatorApp(_ context.Context, appID string) (submission.App, error) {
@@ -30,8 +32,9 @@ func (r *operatorRepository) LookupOperatorApp(_ context.Context, appID string) 
 	return app, nil
 }
 
-func (r *operatorRepository) ReserveOperatorSubmission(_ context.Context, _ string, messages int) error {
+func (r *operatorRepository) ReserveOperatorSubmission(_ context.Context, _ string, messages int, charge bool) error {
 	r.operatorCharge = append(r.operatorCharge, messages)
+	r.operatorCharged = append(r.operatorCharged, charge)
 	return r.operatorErr
 }
 
@@ -147,5 +150,89 @@ func TestBatchRejectsOperator(t *testing.T) {
 	req := batchRequest()
 	if _, err := service.AcceptBatch(context.Background(), submission.App{ID: "app", Operator: "subject-1"}, req); !errors.Is(err, submission.ErrInvalidMessage) || repo.calls != 0 {
 		t.Fatalf("batch accepted an operator: %v", err)
+	}
+}
+
+func TestOverridesAreRefusedForKeyPrincipalsAndNonConsoleAdapters(t *testing.T) {
+	repo := &operatorRepository{memoryRepository: &memoryRepository{}}
+	service := testService(t, repo, &memoryObjects{})
+	for _, override := range []submission.Overrides{{Limits: true}, {RecipientPolicy: true}, {Limits: true, RecipientPolicy: true}} {
+		for _, adapter := range []string{submission.AdapterNative, "resend", "postmark", "sendgrid", "mailgun"} {
+			req := validRequest()
+			req.Adapter = adapter
+			req.Overrides = override
+			if _, err := service.Accept(context.Background(), submission.App{ID: "app-a", KeyID: "key-1"}, req); !errors.Is(err, submission.ErrInvalidMessage) {
+				t.Fatalf("%s %+v: key principal accepted an override: %v", adapter, override, err)
+			}
+		}
+		// The console adapter is bound to the operator principal, so a key cannot reach it either.
+		req := consoleRequest()
+		req.Overrides = override
+		if _, err := service.Accept(context.Background(), submission.App{ID: "app-a", KeyID: "key-1"}, req); !errors.Is(err, submission.ErrInvalidMessage) {
+			t.Fatalf("console adapter with a key accepted an override: %v", err)
+		}
+		// An operator on a provider adapter is refused before any override matters.
+		req = consoleRequest()
+		req.Adapter = "resend"
+		req.Overrides = override
+		if _, err := service.Accept(context.Background(), submission.App{ID: "app-a", Operator: "subject-1"}, req); !errors.Is(err, submission.ErrInvalidMessage) {
+			t.Fatalf("operator on a provider adapter accepted an override: %v", err)
+		}
+	}
+	if len(repo.records) != 0 || len(repo.operatorCharge) != 0 || len(repo.memoryRepository.reservations) != 0 {
+		t.Fatal("a refused override reserved or committed")
+	}
+}
+
+func TestLimitsOverrideReservesWithoutCharge(t *testing.T) {
+	repo := &operatorRepository{memoryRepository: &memoryRepository{}}
+	service := testService(t, repo, &memoryObjects{})
+	operator := submission.App{ID: "app-a", Operator: "subject-1"}
+	if _, err := service.Accept(context.Background(), operator, consoleRequest()); err != nil {
+		t.Fatal(err)
+	}
+	req := consoleRequest()
+	req.Overrides = submission.Overrides{Limits: true}
+	if _, err := service.Accept(context.Background(), operator, req); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.operatorCharged) != 2 || !repo.operatorCharged[0] || repo.operatorCharged[1] {
+		t.Fatalf("charge flags %v", repo.operatorCharged)
+	}
+	if repo.records[0].LimitsOverride || repo.records[0].RecipientPolicyOverride || !repo.records[1].LimitsOverride || repo.records[1].RecipientPolicyOverride {
+		t.Fatalf("records carry wrong overrides: %#v", repo.records)
+	}
+	// A recipient-policy-only override still charges.
+	req.Overrides = submission.Overrides{RecipientPolicy: true}
+	if _, err := service.Accept(context.Background(), operator, req); err != nil || !repo.operatorCharged[2] || !repo.records[2].RecipientPolicyOverride || repo.records[2].LimitsOverride {
+		t.Fatalf("recipient override changed charging: %v %v", err, repo.operatorCharged)
+	}
+}
+
+func TestRecipientPolicyOverrideSkipsOnlyTheAllowlist(t *testing.T) {
+	repo := &operatorRepository{memoryRepository: &memoryRepository{}}
+	service, err := New(repo, &memoryObjects{}, []byte("0123456789abcdef0123456789abcdef"), allowRecipients(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	operator := submission.App{ID: "app-a", Operator: "subject-1"}
+	if _, err = service.Accept(context.Background(), operator, consoleRequest()); !errors.Is(err, submission.ErrInvalidMessage) || len(repo.records) != 0 {
+		t.Fatalf("allowlist did not apply to a console send: %v", err)
+	}
+	req := consoleRequest()
+	req.Overrides = submission.Overrides{RecipientPolicy: true}
+	if _, err = service.Accept(context.Background(), operator, req); err != nil || len(repo.records) != 1 || !repo.records[0].RecipientPolicyOverride {
+		t.Fatalf("override did not skip the allowlist: %v", err)
+	}
+	// A limits override alone does not skip the allowlist.
+	req.Overrides = submission.Overrides{Limits: true}
+	if _, err = service.Accept(context.Background(), operator, req); !errors.Is(err, submission.ErrInvalidMessage) || len(repo.records) != 1 {
+		t.Fatalf("limits override skipped the allowlist: %v", err)
+	}
+	// Everything else still applies with both overrides set: a reservation refusal stops the send.
+	req.Overrides = submission.Overrides{Limits: true, RecipientPolicy: true}
+	repo.operatorErr = submission.ErrAppPaused
+	if _, err = service.Accept(context.Background(), operator, req); !errors.Is(err, submission.ErrAppPaused) || len(repo.records) != 1 {
+		t.Fatalf("a paused app was bypassed: %v", err)
 	}
 }

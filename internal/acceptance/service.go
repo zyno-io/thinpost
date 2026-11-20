@@ -31,16 +31,20 @@ type Record struct {
 	AppID string
 	// KeyID or Operator identifies the principal; exactly one is set. Operator
 	// is the administrator subject of a console submission.
-	KeyID              string
-	Operator           string
-	ObjectKey          string
-	RequestHash        [32]byte
-	PreviousHashes     [][32]byte
-	IdempotencyKey     string
-	Adapter            string
-	SendingDomain      string
-	From               string
-	EnhancedProtection bool
+	KeyID    string
+	Operator string
+	// LimitsOverride and RecipientPolicyOverride record the operator test-send
+	// overrides; valid only with Operator set.
+	LimitsOverride          bool
+	RecipientPolicyOverride bool
+	ObjectKey               string
+	RequestHash             [32]byte
+	PreviousHashes          [][32]byte
+	IdempotencyKey          string
+	Adapter                 string
+	SendingDomain           string
+	From                    string
+	EnhancedProtection      bool
 	// Hold commits the message (every item of a batch) on hold: stored and
 	// counted, but not prepared until the app releases it.
 	Hold           bool
@@ -85,10 +89,13 @@ type SuppressionChecker interface {
 // submissions (see submission.OperatorService). LookupOperatorApp reads the
 // app as LookupKey does, without a key, returning submission.ErrAppPaused for
 // an inactive app. ReserveOperatorSubmission is ReserveSubmission without the
-// key check. Commit must accept a record with Operator set and no KeyID.
+// key check; charge false is the limits override: it still gates on the app
+// being active but neither checks nor consumes the rate bucket. Commit must
+// accept a record with Operator set and no KeyID, and applies the overrides
+// recorded on it only for such a record.
 type OperatorRepository interface {
 	LookupOperatorApp(ctx context.Context, appID string) (submission.App, error)
-	ReserveOperatorSubmission(ctx context.Context, appID string, messages int) error
+	ReserveOperatorSubmission(ctx context.Context, appID string, messages int, charge bool) error
 }
 
 type Service struct {
@@ -221,6 +228,11 @@ func (s *Service) Accept(ctx context.Context, app submission.App, req submission
 	if operator && (app.KeyID != "" || !validOperator(app.Operator) || req.Adapter != submission.AdapterConsole || req.IdempotencyKey != "") || !operator && req.Adapter == submission.AdapterConsole {
 		return submission.Receipt{}, submission.ErrInvalidMessage
 	}
+	// Overrides exist only for the operator test send. A key principal, and so
+	// every native and provider route, can never carry one.
+	if req.Overrides.Any() && !operator {
+		return submission.Receipt{}, submission.ErrInvalidMessage
+	}
 	var operators OperatorRepository
 	if operator {
 		var ok bool
@@ -234,7 +246,7 @@ func (s *Service) Accept(ctx context.Context, app submission.App, req submission
 		return submission.Receipt{}, submission.ErrInvalidMessage
 	}
 	for _, recipient := range req.Message.Envelope() {
-		if !s.recipients.Allows(recipient) {
+		if !req.Overrides.RecipientPolicy && !s.recipients.Allows(recipient) {
 			return submission.Receipt{}, submission.ErrInvalidMessage
 		}
 	}
@@ -246,12 +258,14 @@ func (s *Service) Accept(ctx context.Context, app submission.App, req submission
 		Message       submission.Message `json:"message"`
 		SendingDomain string             `json:"sending_domain"`
 		Hold          bool               `json:"hold,omitempty"`
-	}{app.ID, req.Adapter, req.Message, req.SendingDomain, req.Hold})
+		Limits        bool               `json:"bypass_limits,omitempty"`
+		Recipients    bool               `json:"bypass_recipient_policy,omitempty"`
+	}{app.ID, req.Adapter, req.Message, req.SendingDomain, req.Hold, req.Overrides.Limits, req.Overrides.RecipientPolicy})
 	if err != nil {
 		return submission.Receipt{}, fmt.Errorf("fingerprint submission: %w", err)
 	}
 	if operator {
-		if err := operators.ReserveOperatorSubmission(ctx, app.ID, 1); err != nil {
+		if err := operators.ReserveOperatorSubmission(ctx, app.ID, 1, !req.Overrides.Limits); err != nil {
 			return submission.Receipt{}, err
 		}
 	} else if err := s.repository.ReserveSubmission(ctx, app.ID, app.KeyID, 1); err != nil {
@@ -326,7 +340,7 @@ func (s *Service) Accept(ctx context.Context, app submission.App, req submission
 		_, _ = mac.Write(fingerprint)
 		copy(hashes[i][:], mac.Sum(nil))
 	}
-	receipt, err := s.repository.Commit(ctx, Record{AppID: app.ID, KeyID: app.KeyID, Operator: app.Operator, ObjectKey: objectKey, RequestHash: hashes[0], PreviousHashes: hashes[1:], IdempotencyKey: req.IdempotencyKey, Adapter: req.Adapter, SendingDomain: req.SendingDomain, From: req.Message.From, EnhancedProtection: req.Message.EnhancedProtection, Hold: req.Hold, RecipientCount: len(req.Message.Envelope()), Subject: metadata.Subject, Recipients: metadata.Recipients, RecipientKinds: metadata.RecipientKinds, SenderDomain: metadata.SenderDomain, SenderAddress: metadata.SenderAddress, SenderName: metadata.SenderName})
+	receipt, err := s.repository.Commit(ctx, Record{AppID: app.ID, KeyID: app.KeyID, Operator: app.Operator, LimitsOverride: req.Overrides.Limits, RecipientPolicyOverride: req.Overrides.RecipientPolicy, ObjectKey: objectKey, RequestHash: hashes[0], PreviousHashes: hashes[1:], IdempotencyKey: req.IdempotencyKey, Adapter: req.Adapter, SendingDomain: req.SendingDomain, From: req.Message.From, EnhancedProtection: req.Message.EnhancedProtection, Hold: req.Hold, RecipientCount: len(req.Message.Envelope()), Subject: metadata.Subject, Recipients: metadata.Recipients, RecipientKinds: metadata.RecipientKinds, SenderDomain: metadata.SenderDomain, SenderAddress: metadata.SenderAddress, SenderName: metadata.SenderName})
 	if err == nil && !receipt.Replayed {
 		oplog.Message(app.ID, receipt.ID, oplog.StatusAccepted)
 		if req.Hold {

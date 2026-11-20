@@ -45,3 +45,29 @@ func TestAllowlistIsExactAndFailClosed(t *testing.T) {
 		t.Fatal("bad unrestricted policy", err)
 	}
 }
+
+func TestModeNamesThePolicy(t *testing.T) {
+	var none *Policy
+	if none.Mode() != "" || none.Unrestricted() {
+		t.Fatal("nil policy")
+	}
+	open, err := Load(func(key string) string {
+		if key == "THINPOST_RECIPIENT_POLICY" {
+			return "unrestricted"
+		}
+		return ""
+	})
+	if err != nil || open.Mode() != "unrestricted" || !open.Unrestricted() {
+		t.Fatal("unrestricted", err)
+	}
+	path := filepath.Join(t.TempDir(), "recipients")
+	if err = os.WriteFile(path, []byte("alice@example.com\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := Load(func(key string) string {
+		return map[string]string{"THINPOST_RECIPIENT_POLICY": "allowlist", "THINPOST_RECIPIENT_ALLOWLIST_FILE": path}[key]
+	})
+	if err != nil || listed.Mode() != "allowlist" || listed.Unrestricted() {
+		t.Fatal("allowlist", err)
+	}
+}

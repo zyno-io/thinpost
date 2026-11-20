@@ -25,16 +25,19 @@ func (r *Repository) ReserveSubmission(ctx context.Context, appID, keyID string,
 	if keyID == "" || len(keyID) > 256 {
 		return submission.ErrInvalidMessage
 	}
-	return r.reserveSubmission(ctx, appID, keyID, false, messages)
+	return r.reserveSubmission(ctx, appID, keyID, false, true, messages)
 }
 
 // ReserveOperatorSubmission is ReserveSubmission for an operator submission:
 // the same bucket and rate checks, without a key. An inactive app is paused.
-func (r *Repository) ReserveOperatorSubmission(ctx context.Context, appID string, messages int) error {
-	return r.reserveSubmission(ctx, appID, "", true, messages)
+// charge false is the console limits override: the runtime gate and the app's
+// active state are still checked, but the bucket is neither checked nor
+// consumed, so a bypassed send leaves submission_tokens exactly as it was.
+func (r *Repository) ReserveOperatorSubmission(ctx context.Context, appID string, messages int, charge bool) error {
+	return r.reserveSubmission(ctx, appID, "", true, charge, messages)
 }
 
-func (r *Repository) reserveSubmission(ctx context.Context, appID, keyID string, operator bool, messages int) error {
+func (r *Repository) reserveSubmission(ctx context.Context, appID, keyID string, operator, charge bool, messages int) error {
 	if appID == "" || len(appID) > 256 || messages < 1 || messages > 100 {
 		return submission.ErrInvalidMessage
 	}
@@ -70,6 +73,9 @@ func (r *Repository) reserveSubmission(ctx context.Context, appID, keyID string,
 		if err != nil {
 			return err
 		}
+	}
+	if !charge {
+		return tx.Commit()
 	}
 	if rate < 1 || rate > maxSubmissionRate || burst < 1 || burst > maxSubmissionBurst || tokens < 0 || tokens > int64(burst)*submissionTokenUnit {
 		return submission.ErrRateLimited

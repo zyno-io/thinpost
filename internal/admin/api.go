@@ -81,6 +81,16 @@ type MessageSummary struct {
 	// SuppressedCount is the failed deliveries dropped because the recipient
 	// was on the suppression list; they are also counted in FailedCount.
 	SuppressedCount int `json:"suppressed_count"`
+	// OperatorTest is present exactly when an administrator submitted the
+	// message through the console test send, and records which operator-only
+	// options that send used.
+	OperatorTest *OperatorTest `json:"operator_test,omitempty"`
+}
+
+// OperatorTest tags a console test message with the options it was sent with.
+type OperatorTest struct {
+	BypassLimits          bool `json:"bypass_limits"`
+	BypassRecipientPolicy bool `json:"bypass_recipient_policy"`
 }
 
 // DeriveMessageStatus folds the preparation state and delivery counts into one

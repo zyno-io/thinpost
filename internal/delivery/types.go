@@ -58,6 +58,10 @@ type Claim struct {
 	EnhancedProtection bool
 	AcceptedAt         time.Time
 	TrackingSendCutoff time.Time
+	// RecipientPolicyOverride is set when the message was submitted through the
+	// console test send with the recipient allowlist skipped. The dispatch
+	// recheck then does not apply the allowlist; the egress policy still runs.
+	RecipientPolicyOverride bool
 	// The sending IP chosen at claim time. SourceAddress and HeloName are set
 	// only when the worker reported per-delivery sources and the app resolves to
 	// a named IP; both are empty for an app on the worker's primary address with
