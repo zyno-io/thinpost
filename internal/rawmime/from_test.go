@@ -55,7 +55,7 @@ func TestDecideFromMatrix(t *testing.T) {
 		{name: "domain invalid from not permitted", from: "a@example.org, b@example.org", policy: domainT, wantErr: ErrFromNotPermitted},
 		{name: "domain missing from uses mail from", mailFrom: "scan@Office.Example.org", policy: domainT, addr: "scan=office.example.org@example.net", rewrite: true, original: "scan@Office.Example.org", strip: true},
 		{name: "domain missing from and mail from", mailFrom: "<>", policy: domainT, wantErr: ErrFromNotPermitted},
-		{name: "domain invalid from no fallback", from: "a@example.org, b@example.org", policy: domainT, wantErr: ErrFromNotPermitted},
+		{name: "domain invalid from is not permitted", from: "a@example.org, b@example.org", policy: domainT, wantErr: ErrFromNotPermitted},
 		{name: "domain unverified target", from: "al@example.org", policy: Policy{Mode: FromDomain, Domain: "example.org"}, wantErr: ErrMisconfigured},
 		{name: "domain target not LDH", from: "al@example.org", policy: Policy{Mode: FromDomain, Domain: "Example.Net"}, wantErr: ErrMisconfigured},
 		{name: "domain keeps display name", from: "Al Smith <al@example.org>", policy: domainT, addr: "al=example.org@example.net", rewrite: true, original: "al@example.org", strip: true},
