@@ -58,7 +58,6 @@ CREATE TABLE smtp_replay_secret (
 ALTER TABLE apps
   ADD COLUMN smtp_from_mode text NOT NULL DEFAULT 'off' CHECK (smtp_from_mode IN ('off','domain','address')),
   ADD COLUMN smtp_from_domain text CHECK (smtp_from_domain IS NULL OR (smtp_from_domain ~ '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$' AND octet_length(smtp_from_domain) BETWEEN 1 AND 253)),
-  ADD COLUMN smtp_from_keep_origin boolean NOT NULL DEFAULT false,
   ADD COLUMN smtp_from_address text CHECK (smtp_from_address IS NULL OR (
       smtp_from_address ~ '^[A-Za-z0-9!#$%&''*+/=?^_`{|}~-]+(\.[A-Za-z0-9!#$%&''*+/=?^_`{|}~-]+)*@[a-z0-9]([a-z0-9.-]*[a-z0-9])?$'
       AND octet_length(smtp_from_address) BETWEEN 3 AND 254
@@ -66,8 +65,7 @@ ALTER TABLE apps
   ADD COLUMN smtp_from_only_unauthorized boolean NOT NULL DEFAULT true,
   ADD CONSTRAINT apps_smtp_from_policy CHECK (
     (smtp_from_mode <> 'domain'  OR smtp_from_domain  IS NOT NULL) AND
-    (smtp_from_mode <> 'address' OR smtp_from_address IS NOT NULL) AND
-    (smtp_from_mode = 'domain' OR NOT smtp_from_keep_origin));
+    (smtp_from_mode <> 'address' OR smtp_from_address IS NOT NULL));
 ALTER TABLE messages
   ADD COLUMN smtp_credential_id text,
   ADD COLUMN original_from_address text,
