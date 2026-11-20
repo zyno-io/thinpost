@@ -158,7 +158,7 @@ func bindSubmission(c edgeapp.Config, client bounce.Submission, listeners []edge
 }
 
 func internalSubmissionTLS(c edgeapp.Config, internal edgeapp.SubmissionInternal) (*tls.Config, error) {
-	caPEM, err := os.ReadFile(internal.CA)
+	caPEM, err := os.ReadFile(internal.CAFile)
 	if err != nil {
 		return nil, errors.New("cannot load internal submission CA")
 	}

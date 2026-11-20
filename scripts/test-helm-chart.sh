@@ -214,7 +214,7 @@ grep -q 'containerPort: 587' "$tmp/edge_submission.yaml" && grep -q 'containerPo
 if grep -q 'THINPOST_EDGE_SUBMISSION_INTERNAL\|kind: Service' "$tmp/edge_submission.yaml"; then fail "public submission must not render the internal listener or a Service"; fi
 internal='smtpSubmission.internal'
 render edge_internal --set workload=edge --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" \
-  --set "$internal.clientCidrs[0]=10.0.0.0/8" --set "$internal.clientNamespaceSelector.matchLabels.team=apps"
+  --set "$internal.clientCidrs[0]=10.0.0.0/8" --set "$internal.clientNamespaceSelector.matchLabels.tier=apps"
 if grep -q 'name: THINPOST_EDGE_SUBMISSION$' "$tmp/edge_internal.yaml"; then fail "the internal listener alone must not open the public ports"; fi
 grep -A1 'name: THINPOST_EDGE_SUBMISSION_INTERNAL_LISTEN' "$tmp/edge_internal.yaml" | grep -q 'value: "$(POD_IP):587"' || fail "internal listen env"
 grep -A1 'name: THINPOST_EDGE_SUBMISSION_INTERNAL_HOSTNAME' "$tmp/edge_internal.yaml" | grep -q 'value: "thinpost-edge-submission.mail.svc"' || fail "internal hostname env"
@@ -225,13 +225,13 @@ if grep -q 'subPath' "$tmp/edge_internal.yaml"; then fail "internal certificate 
 [ "$(grep -c '^kind: Service$' "$tmp/edge_internal.yaml")" = 1 ] || fail "exactly one submission Service"
 grep -q 'name: thinpost-edge-submission$' "$tmp/edge_internal.yaml" && grep -q 'type: ClusterIP' "$tmp/edge_internal.yaml" || fail "submission Service"
 grep -q 'targetPort: submission-int' "$tmp/edge_internal.yaml" || fail "submission Service target"
-grep -q 'cidr: "10.0.0.0/8"' "$tmp/edge_internal.yaml" && grep -q 'team: apps' "$tmp/edge_internal.yaml" || fail "internal ingress sources"
+grep -q 'cidr: "10.0.0.0/8"' "$tmp/edge_internal.yaml" && grep -q 'tier: apps' "$tmp/edge_internal.yaml" || fail "internal ingress sources"
 grep -q 'port: 587' "$tmp/edge_internal.yaml" || fail "internal ingress port"
 render edge_internal_port --set workload=edge --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" --set "$internal.clientCidrs[0]=10.0.0.0/8" --set "$internal.port=2587"
 grep -A1 'name: THINPOST_EDGE_SUBMISSION_INTERNAL_LISTEN' "$tmp/edge_internal_port.yaml" | grep -q 'value: "$(POD_IP):2587"' || fail "internal port env"
 grep -q 'port: 587$' "$tmp/edge_internal_port.yaml" && grep -q 'targetPort: submission-int' "$tmp/edge_internal_port.yaml" || fail "Service port stays 587"
 helm lint "$chart" --set workload=edge --set smtpSubmission.enabled=true --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" --set "$internal.clientCidrs[0]=10.0.0.0/8"
-for bad in "$internal.hostname=Bad.Name" "$internal.hostname=" "$internal.port=25" "$internal.port=7443" "$internal.port=70000" "$internal.certificateSecret=Bad_Name" "$internal.clientCidrs[0]=not-a-cidr"; do
+for bad in "$internal.hostname=Bad.Example.com" "$internal.hostname=" "$internal.port=25" "$internal.port=7443" "$internal.port=70000" "$internal.certificateSecret=Bad_Name" "$internal.clientCidrs[0]=not-a-cidr"; do
   if helm template thinpost "$chart" --set workload=edge --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" --set "$internal.clientCidrs[0]=10.0.0.0/8" --set "$bad" >/dev/null 2>&1; then fail "accepted invalid $bad"; fi
 done
 if helm template thinpost "$chart" --set workload=edge --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" >/dev/null 2>&1; then fail "accepted the internal listener with no allowed clients"; fi

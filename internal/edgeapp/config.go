@@ -58,9 +58,9 @@ type SubmissionInternal struct {
 	Listen netip.AddrPort
 	// Hostname is the name it greets with and its certificate is issued for.
 	Hostname string
-	// Cert and Key are the certificate files; CA is the cluster-local CA that
-	// verifies the certificate.
-	Cert, Key, CA string
+	// Cert and Key are the certificate files; CAFile is the cluster-local CA
+	// bundle that verifies the certificate.
+	Cert, Key, CAFile string
 }
 
 // Enabled reports whether the internal listener is configured.
@@ -259,7 +259,7 @@ func (c *Config) loadSubmission(getenv func(string) string, controlAddr netip.Ad
 	if !ok || normalized != hostname || len(hostname) > 219 || cert == "" || key == "" || ca == "" {
 		return errors.New("the internal submission listener needs a hostname, certificate, key and CA")
 	}
-	c.SubmissionInternal = SubmissionInternal{Listen: netip.AddrPortFrom(address, mustPort(port)), Hostname: hostname, Cert: cert, Key: key, CA: ca}
+	c.SubmissionInternal = SubmissionInternal{Listen: netip.AddrPortFrom(address, mustPort(port)), Hostname: hostname, Cert: cert, Key: key, CAFile: ca}
 	return nil
 }
 

@@ -67,10 +67,10 @@ func (l *loadSubmission) Submit(_ context.Context, m bounce.SubmissionMessage) (
 }
 
 type testPKI struct {
-	ca     *x509.Certificate
-	caKey  *ecdsa.PrivateKey
-	roots  *x509.CertPool
-	serial int64
+	authority *x509.Certificate
+	caKey     *ecdsa.PrivateKey
+	roots     *x509.CertPool
+	serial    int64
 }
 
 func newTestPKI(t *testing.T) *testPKI {
@@ -87,7 +87,7 @@ func newTestPKI(t *testing.T) *testPKI {
 	ca, _ := x509.ParseCertificate(der)
 	roots := x509.NewCertPool()
 	roots.AddCert(ca)
-	return &testPKI{ca: ca, caKey: key, roots: roots, serial: 1}
+	return &testPKI{authority: ca, caKey: key, roots: roots, serial: 1}
 }
 
 // issue writes a certificate for name and returns its cert and key paths.
@@ -99,7 +99,7 @@ func (p *testPKI) issue(t *testing.T, dir, name string) (string, string) {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{SerialNumber: big.NewInt(p.serial), Subject: pkix.Name{CommonName: name}, DNSNames: []string{name}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
-	der, err := x509.CreateCertificate(rand.Reader, template, p.ca, &key.PublicKey, p.caKey)
+	der, err := x509.CreateCertificate(rand.Reader, template, p.authority, &key.PublicKey, p.caKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,10 +148,10 @@ func startFixture(t *testing.T, addresses []string, internal bool) *submissionFi
 	if internal {
 		certPath, keyPath := pki.issue(t, dir, "submission.cluster.example")
 		caPath := filepath.Join(dir, "ca.crt")
-		if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pki.ca.Raw}), 0o600); err != nil {
+		if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pki.authority.Raw}), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		c.SubmissionInternal = edgeapp.SubmissionInternal{Listen: netip.MustParseAddrPort("127.0.0.1:0"), Hostname: "submission.cluster.example", Cert: certPath, Key: keyPath, CA: caPath}
+		c.SubmissionInternal = edgeapp.SubmissionInternal{Listen: netip.MustParseAddrPort("127.0.0.1:0"), Hostname: "submission.cluster.example", Cert: certPath, Key: keyPath, CAFile: caPath}
 	}
 	rt, err := bindSubmission(c, f.submit, listeners, bounceListeners, submissionBind{starttls: "0", implicit: "0"}, f.budget)
 	if err != nil {
