@@ -15,6 +15,7 @@ import Apps from './screens/apps.vue';
 import MessageDetail from './screens/message-detail.vue';
 import NotFound from './screens/not-found.vue';
 import AppTracking from './screens/app-tracking.vue';
+import AppSmtp from './screens/app-smtp.vue';
 import Operations from './screens/operations.vue';
 
 /** Global links go straight to the remembered app's section; the picker remains when none is remembered. */
@@ -37,7 +38,8 @@ const routes: RouteRecordRaw[] = [
         'app-tracking': AppTracking,
         'app-suppressions': AppSuppressions,
         'app-inbound': AppInbound,
-        'app-inbound-message': InboundDetail
+        'app-inbound-message': InboundDetail,
+        'app-smtp': AppSmtp
     }),
     {
         path: '/domains',

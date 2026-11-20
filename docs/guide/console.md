@@ -28,8 +28,23 @@ The Applications screen lists apps and creates new ones. An app opens into its o
 | **Tracking** | Open and click defaults, one-click unsubscribe, the daily event budget, deployment state and the day's recorded and unrecorded events. See [Open and click tracking](/guide/tracking). |
 | **Suppressions** | Search, filter, add and remove entries. See [Suppressions](/guide/suppressions). |
 | **Inbound** | Receiving domains, per-app limits, received messages and their webhook history. See [Inbound mail](/guide/inbound). |
+| **SMTP** | The settings for sending over SMTP, and the app's SMTP credentials and From address policy (see [SMTP](#smtp)). Shown only when the server reports that SMTP submission is available. |
 
 The app area stays mounted as you move between tabs. The console remembers the last app you used so that the shortcuts `/domains`, `/messages` and `/webhooks` go straight to it. The app picker appears only when none is remembered.
+
+### SMTP
+
+::: warning Not available yet
+SMTP submission is being added in stages. The SMTP tab and the admin API behind it are here so that credentials and the From policy can be managed, but the tab stays hidden until your deployment reports the `smtp_submission` runtime feature, which no release sets yet. Until then no mail can be sent over SMTP. A direct link to `/apps/<id>/smtp` shows a notice instead.
+:::
+
+The tab has three panels. The wording is meant for the developers and support staff who set up the sending software, not only for administrators.
+
+- **How to connect.** The server name to enter in the sending software, and ports 465 (SSL/TLS) and 587 (STARTTLS), each with a copy field and a badge saying whether Thinpost last saw that port available. Port 465 is recommended; with 587 the software must require STARTTLS. If the app has no server name yet, the panel says so and links to **Operations → Sending IPs**, where an administrator names the sending IP (see [Sending IPs](/guide/sending-ips)). The server name comes from the app's sending IP, or the main IP when it has none, and never from what the sending worker reports about itself.
+- **Credentials.** A table of the app's credentials with status, created time, last used (at most a minute stale) and username. **Create credential** asks for a name, then shows the username and password once in a dialog. The password is held only in memory and is never written to browser storage or the URL, and closing the dialog without copying it asks first. **Revoke** asks for confirmation. An app can have 10 active credentials.
+- **From address.** What happens to the From address of mail sent over SMTP: accept only addresses on the app's verified sender domains, move other addresses onto a chosen domain (optionally keeping the original address inside the new one), or always send from one address. Examples show the effect, the form checks the address before saving, and a warning appears when mail from the chosen domain would not be DKIM-signed yet. A change applies to mail sent from then on.
+
+A message sent over SMTP shows an **SMTP** badge in the list and, on its detail page, the credential's name and, when the From policy replaced the sender's address, an **Original From** line.
 
 ### App limits
 

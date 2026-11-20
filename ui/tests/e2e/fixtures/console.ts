@@ -15,6 +15,9 @@ export const MSG_EP = 'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2';
 export const MSG_OLD = 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3';
 /** A message whose subject, sender and recipients were not recorded. */
 export const MSG_BARE = 'd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4';
+export const SMTP_CREDENTIAL_ID = 'a7'.repeat(16);
+/** A fabricated SMTP password returned by the mocked create endpoint. */
+export const SMTP_PASSWORD = 'tps_e2e_fabricated_password_0123456789abcdefg';
 export const DELIVERY_A = 'd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4';
 export const DELIVERY_B = 'e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5';
 
@@ -72,6 +75,7 @@ interface MessageSeed {
     accepted_count: number;
     failed_count: number;
     uncertain_count: number;
+    smtp?: { credential_id: string; credential_name: string; original_from?: string };
 }
 
 const messages: MessageSeed[] = [
@@ -120,7 +124,8 @@ const messages: MessageSeed[] = [
         delivery_count: 1,
         accepted_count: 0,
         failed_count: 0,
-        uncertain_count: 0
+        uncertain_count: 0,
+        smtp: { credential_id: SMTP_CREDENTIAL_ID, credential_name: 'Office printer', original_from: 'printer@office.example.net' }
     },
     {
         id: MSG_BARE,
@@ -232,7 +237,7 @@ export async function installMocks(page: Page, options: MockOptions = {}) {
         }
         if (path === '/runtime') {
             return json(route, {
-                features: { submission: true, tracking: true },
+                features: { submission: true, tracking: true, smtp_submission: true },
                 tracking: { origin: 'https://t.example.test', link_event_limit: 25 }
             });
         }
@@ -268,6 +273,38 @@ export async function installMocks(page: Page, options: MockOptions = {}) {
         const rest = m[2] ?? '';
 
         if (rest === '/keys') return json(route, { keys: [{ id: 'f6'.repeat(16), name: 'Production sender', active: true, created_at: '2026-10-03T12:00:00Z' }] });
+        if (rest === '/smtp') {
+            return json(route, {
+                settings: { from: { mode: 'off', keep_origin: false, only_unauthorized: true }, signing_ready: [] },
+                credentials: [{ id: SMTP_CREDENTIAL_ID, name: 'Office printer', username: SMTP_CREDENTIAL_ID, active: true, created_at: '2026-10-03T12:00:00Z' }],
+                connection: {
+                    host: 'smtp.example.test',
+                    host_source: 'primary',
+                    primary_unnamed: false,
+                    ports: [
+                        { port: 465, security: 'tls' },
+                        { port: 587, security: 'starttls' }
+                    ],
+                    observed_ports: [465, 587],
+                    observed_at: '2026-11-11T12:00:00Z'
+                }
+            });
+        }
+        if (rest === '/smtp/settings' && method === 'PUT') {
+            return json(route, { from: (request.postDataJSON() as { from: object }).from, signing_ready: [{ domain: 'billing.example.com', ready: false }] });
+        }
+        if (rest === '/smtp/credentials' && method === 'POST') {
+            const { name } = request.postDataJSON() as { name: string };
+            return json(
+                route,
+                {
+                    credential: { id: 'b8'.repeat(16), name, username: 'b8'.repeat(16), active: true, created_at: new Date().toISOString() },
+                    username: 'b8'.repeat(16),
+                    password: SMTP_PASSWORD
+                },
+                201
+            );
+        }
         if (rest === '/submission-rate') return json(route, { per_minute: 6, burst: 4 });
         if (rest === '/recipient-quota') return json(route, method === 'PUT' ? { ...(request.postDataJSON() as object), used: 12, day: '2026-11-11' } : { daily_limit: 1000, used: 12, day: '2026-11-11' });
         if (rest === '/pending-quota') return json(route, method === 'PUT' ? { ...(request.postDataJSON() as object), pending: 3, truncated: false } : { limit: 500, pending: 3, truncated: false });

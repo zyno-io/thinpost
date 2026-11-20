@@ -13,7 +13,7 @@ declare module 'vue-router' {
     }
 }
 
-export type AppScreenName = 'app-keys' | 'app-domains' | 'app-messages' | 'app-message' | 'app-webhooks' | 'app-tracking' | 'app-suppressions' | 'app-inbound' | 'app-inbound-message';
+export type AppScreenName = 'app-keys' | 'app-domains' | 'app-messages' | 'app-message' | 'app-webhooks' | 'app-tracking' | 'app-suppressions' | 'app-inbound' | 'app-inbound-message' | 'app-smtp';
 
 /**
  * The nested `/apps/:appId` record. The shell loads the app once and the
@@ -47,7 +47,8 @@ export function appRoute(screens: Record<AppScreenName, Component>): RouteRecord
                 name: 'app-inbound-message',
                 component: screens['app-inbound-message'],
                 meta: { title: 'Inbound message', section: 'inbound', nav: 'inbound' }
-            }
+            },
+            { path: 'smtp', name: 'app-smtp', component: screens['app-smtp'], meta: { title: 'SMTP', section: 'smtp', nav: 'apps' } }
         ]
     };
 }

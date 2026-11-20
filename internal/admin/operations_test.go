@@ -42,7 +42,7 @@ func TestRuntimeRoute(t *testing.T) {
 	}
 	h.Authenticator = fakeAuth{admin: true}
 	w := send(h, "GET", "/api/v1/runtime", "", "valid")
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"features":{"submission":true,"tracking":true}`) || !strings.Contains(w.Body.String(), `"link_event_limit":10`) {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"features":{"submission":true,"tracking":true,"smtp_submission":false}`) || !strings.Contains(w.Body.String(), `"link_event_limit":10`) {
 		t.Fatal("runtime", w.Code, w.Body.String())
 	}
 	if w = send(h, "POST", "/api/v1/runtime", "", "valid"); w.Code != 405 {

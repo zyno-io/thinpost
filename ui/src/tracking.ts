@@ -18,7 +18,10 @@ export function parseRuntimeInfo(data: unknown): RuntimeInfo {
     ) {
         throw new InvalidResponseError();
     }
-    const info: RuntimeInfo = { features: { submission: features.submission, tracking: features.tracking } };
+    const info: RuntimeInfo = {
+        // A server that predates SMTP submission omits the flag, which means it is off.
+        features: { submission: features.submission, tracking: features.tracking, smtp_submission: features.smtp_submission === true }
+    };
     // Informational: an unknown or missing value only means the allowlist bypass is not offered.
     const policy = (features as { recipient_policy?: unknown }).recipient_policy;
     if (policy === 'allowlist' || policy === 'unrestricted') info.features.recipient_policy = policy;

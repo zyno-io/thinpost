@@ -13,6 +13,7 @@ import (
 	"errors"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/zyno-io/thinpost/internal/admin"
@@ -34,13 +35,33 @@ type Resolver struct {
 	domains Domains
 	dns     DNS
 	keys    map[string]Entry
+	// now is replaced in tests.
+	now   func() time.Time
+	mu    sync.Mutex
+	ready map[string]readiness
 }
+
+// readiness is a cached Ready result.
+type readiness struct {
+	ok      bool
+	expires time.Time
+}
+
+// Ready results are cached per (app, domain): a success for 60 seconds, a
+// failure for 10, so the SMTP tab neither hammers DNS nor stays red for long.
+const (
+	readyTTL         = 60 * time.Second
+	readyFailTTL     = 10 * time.Second
+	errNotReady      = "sender signing is not ready"
+	errNoSigningKey  = "sender signing key unavailable"
+	errDomainUnavail = "sender domain unavailable"
+)
 
 func New(domains Domains, dns DNS, entries []Entry) (*Resolver, error) {
 	if domains == nil || dns == nil || len(entries) == 0 || len(entries) > 1024 {
 		return nil, errors.New("invalid signing configuration")
 	}
-	r := &Resolver{domains: domains, dns: dns, keys: make(map[string]Entry, len(entries))}
+	r := &Resolver{domains: domains, dns: dns, keys: make(map[string]Entry, len(entries)), now: time.Now, ready: map[string]readiness{}}
 	for _, e := range entries {
 		domain, ok := admin.NormalizeDomain(e.Domain)
 		if !ok || domain != e.Domain || !selector(e.Selector) || len(e.Selector)+len("._domainkey.")+len(e.Domain) > 253 || len(e.AppID) != 32 || e.Signer == nil {
@@ -86,25 +107,66 @@ func (r *Resolver) ForSender(parent context.Context, appID, from string) (prepar
 		return preparation.SigningKey{}, errors.New("invalid sender")
 	}
 	domain := strings.ToLower(address.Address[at+1:])
+	entry, err := r.verify(parent, appID, domain)
+	if err != nil {
+		return preparation.SigningKey{}, err
+	}
+	return preparation.SigningKey{Domain: domain, Selector: entry.Selector, Signer: entry.Signer}, nil
+}
+
+// verify is the check ForSender and Ready share: the catalog entry, the app's
+// active sender domain and the published DKIM key.
+func (r *Resolver) verify(parent context.Context, appID, domain string) (Entry, error) {
 	entry, ok := r.keys[appID+"\x00"+domain]
 	if !ok {
-		return preparation.SigningKey{}, errors.New("sender signing key unavailable")
+		return Entry{}, errors.New(errNoSigningKey)
 	}
 	active, err := r.domains.SigningDomainActive(parent, appID, domain)
 	if err != nil || !active {
-		return preparation.SigningKey{}, errors.New("sender domain unavailable")
+		return Entry{}, errors.New(errDomainUnavail)
 	}
 	publicDER, err := x509.MarshalPKIXPublicKey(entry.Signer.Public())
 	if err != nil {
-		return preparation.SigningKey{}, errors.New("invalid signing key")
+		return Entry{}, errors.New("invalid signing key")
 	}
 	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 	records, err := r.dns.LookupTXT(ctx, entry.Selector+"._domainkey."+domain)
 	if err != nil || len(records) != 1 || !matches(records[0], publicDER) {
-		return preparation.SigningKey{}, errors.New("DKIM public key not verified")
+		return Entry{}, errors.New("DKIM public key not verified")
 	}
-	return preparation.SigningKey{Domain: domain, Selector: entry.Selector, Signer: entry.Signer}, nil
+	return entry, nil
+}
+
+// Ready reports whether mail from the app's domain would be signed now: the
+// same checks as ForSender, cached per (app, domain) for 60 seconds on success
+// and 10 on failure. Any failure is an error; callers treat it as
+// misconfigured. A domain with no catalog entry is never cached, so the cache
+// is bounded by the catalog.
+func (r *Resolver) Ready(ctx context.Context, appID, domain string) error {
+	domain = strings.ToLower(domain)
+	id := appID + "\x00" + domain
+	if _, ok := r.keys[id]; !ok {
+		return errors.New(errNoSigningKey)
+	}
+	r.mu.Lock()
+	cached, hit := r.ready[id]
+	r.mu.Unlock()
+	if hit && r.now().Before(cached.expires) {
+		if cached.ok {
+			return nil
+		}
+		return errors.New(errNotReady)
+	}
+	_, err := r.verify(ctx, appID, domain)
+	ttl := readyTTL
+	if err != nil {
+		ttl = readyFailTTL
+	}
+	r.mu.Lock()
+	r.ready[id] = readiness{ok: err == nil, expires: r.now().Add(ttl)}
+	r.mu.Unlock()
+	return err
 }
 
 func matches(record string, expected []byte) bool {

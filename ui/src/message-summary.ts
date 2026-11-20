@@ -24,6 +24,23 @@ export interface MessageRow {
     sender: { address: string; name: string | null } | null;
     /** Set when an administrator sent it from the console; records the options that send used. */
     operatorTest: OperatorTestView | null;
+    /** Set when the message was submitted over SMTP; null for every other message. */
+    smtp: SmtpView | null;
+}
+
+/** How an SMTP message was submitted. */
+export interface SmtpView {
+    credentialName: string;
+    /** The From address the client sent when the app's From policy replaced it. */
+    originalFrom: string | null;
+}
+
+/** Null when absent or malformed: the badge is informational, so a bad value shows none rather than failing the row. */
+function readSmtp(raw: unknown): SmtpView | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const v = raw as Record<string, unknown>;
+    if (typeof v.credential_name !== 'string') return null;
+    return { credentialName: v.credential_name, originalFrom: typeof v.original_from === 'string' && v.original_from ? v.original_from : null };
 }
 
 /** The operator-only options of a console test send. */
@@ -110,7 +127,8 @@ export function readMessageSummary(raw: unknown, options: { maxRecipients?: numb
         recipients,
         senderDomain,
         sender,
-        operatorTest: readOperatorTest(v.operator_test)
+        operatorTest: readOperatorTest(v.operator_test),
+        smtp: readSmtp(v.smtp)
     };
 }
 
