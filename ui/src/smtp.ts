@@ -149,20 +149,33 @@ export function validateFromForm(form: FromForm, verifiedDomains: readonly strin
     if (form.mode === 'domain') {
         if (!form.domain) return { ...none, domainError: 'Choose a domain.' };
         if (!verifiedDomains.includes(form.domain)) return { ...none, domainError: 'That domain isn\'t a verified sending domain of this app.' };
-        return { ...none, policy: { mode: 'domain', domain: form.domain, keep_origin: form.keepOrigin, only_unauthorized: form.onlyUnauthorized } };
+        const policy: SmtpFromPolicy = { mode: 'domain', domain: form.domain, keep_origin: form.keepOrigin, only_unauthorized: form.onlyUnauthorized };
+        // The fallback address is optional; when it is filled in it must be as valid as a fixed address.
+        if (form.address.trim()) {
+            const checked = checkAddress(form.address.trim(), verifiedDomains);
+            if ('error' in checked) return { ...none, addressError: checked.error };
+            policy.address = checked.address;
+        }
+        return { ...none, policy };
     }
-    const address = form.address.trim();
-    if (!address) return { ...none, addressError: 'Enter the address to send from.' };
+    const checked = checkAddress(form.address.trim(), verifiedDomains);
+    if ('error' in checked) return { ...none, addressError: checked.error };
+    return { ...none, policy: { mode: 'address', address: checked.address, keep_origin: false, only_unauthorized: form.onlyUnauthorized } };
+}
+
+/** Checks an address typed into the form and returns it with a lowercased domain, or the message to show. */
+function checkAddress(address: string, verifiedDomains: readonly string[]): { address: string } | { error: string } {
+    if (!address) return { error: 'Enter the address to send from.' };
     const parts = splitAddress(address);
-    if (!parts || parts.local.includes('@')) return { ...none, addressError: 'Enter a full address, such as no-reply@example.com.' };
-    if (/[^\x00-\x7f]/.test(address)) return { ...none, addressError: 'Use plain letters, numbers and symbols only; accented and non-Latin characters aren\'t supported.' };
+    if (!parts || parts.local.includes('@')) return { error: 'Enter a full address, such as no-reply@example.com.' };
+    if (/[^\x00-\x7f]/.test(address)) return { error: 'Use plain letters, numbers and symbols only; accented and non-Latin characters aren\'t supported.' };
     if (!DOT_ATOM.test(parts.local) || byteLength(parts.local) > MAX_LOCAL_PART_BYTES) {
-        return { ...none, addressError: 'The part before the @ can use letters, numbers and these symbols: ! # $ % & \' * + / = ? ^ _ ` { | } ~ - . It can\'t start, end or double up dots, or run over 64 characters.' };
+        return { error: 'The part before the @ can use letters, numbers and these symbols: ! # $ % & \' * + / = ? ^ _ ` { | } ~ - . It can\'t start, end or double up dots, or run over 64 characters.' };
     }
-    if (byteLength(address) > MAX_ADDRESS_BYTES) return { ...none, addressError: 'That address is too long.' };
+    if (byteLength(address) > MAX_ADDRESS_BYTES) return { error: 'That address is too long.' };
     const domain = parts.domain.toLowerCase();
-    if (!verifiedDomains.includes(domain)) return { ...none, addressError: `${domain} isn't a verified sending domain of this app. Verify it on Sending domains first.` };
-    return { ...none, policy: { mode: 'address', address: `${parts.local}@${domain}`, keep_origin: false, only_unauthorized: form.onlyUnauthorized } };
+    if (!verifiedDomains.includes(domain)) return { error: `${domain} isn't a verified sending domain of this app. Verify it on Sending domains first.` };
+    return { address: `${parts.local}@${domain}` };
 }
 
 export interface FromExample {
@@ -180,6 +193,8 @@ export function fromExamples(form: FromForm, verifiedDomains: readonly string[])
     if (form.mode === 'domain' && form.domain) {
         const target = form.domain;
         examples.push({ sent, becomes: form.keepOrigin ? `${EXAMPLE_ORIGIN.local}+${EXAMPLE_ORIGIN.domain}@${target}` : `${EXAMPLE_ORIGIN.local}@${target}` });
+        const fallback = form.address.trim();
+        if (fallback) examples.push({ sent: '"print room"@office.example.net', becomes: fallback });
     } else if (form.mode === 'address' && form.address.trim()) {
         examples.push({ sent, becomes: form.address.trim() });
     }
