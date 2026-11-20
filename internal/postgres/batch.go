@@ -42,7 +42,7 @@ func (r *Repository) CommitBatch(ctx context.Context, record acceptance.BatchRec
 		}
 		domain := strings.ToLower(address.Address[at+1:])
 		// Validate every recorded value before any INSERT (see Commit).
-		if !validRecordedSubject(item.Subject) || !validRecordedDomain(item.SenderDomain) || item.SenderDomain != domain || !validRecordedSender(item.SenderAddress, item.SenderName, domain) || !recipients.add(parsed.ID, item.Recipients, item.RecipientKinds, item.RecipientCount) {
+		if !validRecordedSubject(item.Subject) || !validRecordedDomain(item.SenderDomain) || item.SenderDomain != domain || !validRecordedSender(item.SenderAddress, item.SenderName, domain) || !recipients.add(parsed.ID, item.Recipients, item.RecipientKinds, item.RecipientCount, false) {
 			return submission.BatchReceipt{}, submission.ErrInvalidMessage
 		}
 		domains[domain] = true

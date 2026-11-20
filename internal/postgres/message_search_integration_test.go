@@ -41,7 +41,7 @@ func (f *searchFixture) message(app, id, subject string, protected bool, sender 
 	}
 	if subject != "" {
 		var rows recipientRows
-		if !rows.add(id, recipients, toKinds(len(recipients)), len(recipients)) {
+		if !rows.add(id, recipients, toKinds(len(recipients)), len(recipients), false) {
 			f.t.Fatal("fixture recipients invalid")
 		}
 		if err = insertRecipients(f.ctx, tx, app, &rows); err != nil {

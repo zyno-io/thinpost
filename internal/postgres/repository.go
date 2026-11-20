@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/hmac"
 	"database/sql"
 	"embed"
 	"errors"
@@ -103,7 +104,8 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 	domain := strings.ToLower(address.Address[at+1:])
 	// Validate every recorded value before any INSERT so a CHECK violation,
 	// whose diagnostics quote the row, cannot occur. Values are never logged.
-	if !validRecordedSubject(record.Subject) || !validRecordedDomain(record.SenderDomain) || record.SenderDomain != domain || !validRecordedSender(record.SenderAddress, record.SenderName, domain) {
+	smtp := record.SMTPCredentialID != ""
+	if !(validRecordedSubject(record.Subject) || smtp && validRecordedSMTPSubject(record.Subject)) || !validRecordedDomain(record.SenderDomain) || record.SenderDomain != domain || !validRecordedSender(record.SenderAddress, record.SenderName, domain) {
 		return receipt, submission.ErrInvalidMessage
 	}
 	tx, err := r.beginRuntime(ctx)
@@ -114,9 +116,9 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 	var pendingLimit int
 	err = tx.QueryRowContext(ctx, `SELECT pending_message_limit FROM apps WHERE id=$1 AND active FOR UPDATE`, record.AppID).Scan(&pendingLimit)
 	if errors.Is(err, sql.ErrNoRows) {
-		// An operator submission has no key whose revocation explains this: the
-		// app was paused after authorization, which is reported as such.
-		if record.Operator != "" && record.KeyID == "" {
+		// An operator or SMTP submission has no key whose revocation explains
+		// this: the app was paused after authorization, which is reported as such.
+		if (record.Operator != "" || smtp) && record.KeyID == "" {
 			var exists bool
 			if tx.QueryRowContext(ctx, `SELECT true FROM apps WHERE id=$1`, record.AppID).Scan(&exists) == nil {
 				return receipt, submission.ErrAppPaused
@@ -130,12 +132,32 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 	var exists bool
 	// Exactly one principal. A key submission rechecks its key; an operator
 	// submission has no key and is bound to the console adapter and to no
-	// idempotency key. Any other combination is refused, so a stray operator
-	// value can never open a keyless path for a provider adapter.
+	// idempotency key; an SMTP submission rechecks its credential's digest and
+	// is bound to the SMTP adapter, the raw path and no override. Any other
+	// combination is refused, so a stray operator or credential value can never
+	// open a keyless path for a provider adapter.
 	switch {
-	case record.KeyID != "" && record.Operator == "":
+	case smtp && record.KeyID == "" && record.Operator == "":
+		// Overrides are an operator privilege, and only the SMTP principal may
+		// use the SMTP adapter and the raw path.
+		if record.Adapter != submission.AdapterSMTP || !record.Raw || record.LimitsOverride || record.RecipientPolicyOverride {
+			return receipt, submission.ErrInvalidKey
+		}
+		var stored []byte
+		err = tx.QueryRowContext(ctx, `SELECT digest FROM smtp_credentials WHERE id=$1 AND app_id=$2 AND revoked_at IS NULL FOR SHARE`, record.SMTPCredentialID, record.AppID).Scan(&stored)
+		if errors.Is(err, sql.ErrNoRows) {
+			return receipt, submission.ErrInvalidKey
+		}
+		if err != nil {
+			return receipt, err
+		}
+		if !hmac.Equal(stored, record.SMTPCredentialDigest[:]) {
+			return receipt, submission.ErrInvalidKey
+		}
+	case record.KeyID != "" && record.Operator == "" && !smtp:
 		// Overrides are an operator privilege: a key principal never carries one.
-		if record.Adapter == submission.AdapterConsole || record.LimitsOverride || record.RecipientPolicyOverride {
+		// The SMTP adapter and the raw path belong to the SMTP principal alone.
+		if record.Adapter == submission.AdapterConsole || record.Adapter == submission.AdapterSMTP || record.Raw || record.IdempotencyTTL != 0 || record.Fence != (submission.Fence{}) || record.LimitsOverride || record.RecipientPolicyOverride {
 			return receipt, submission.ErrInvalidKey
 		}
 		err = tx.QueryRowContext(ctx, `SELECT true FROM api_keys WHERE id=$1 AND app_id=$2 AND active FOR SHARE`, record.KeyID, record.AppID).Scan(&exists)
@@ -145,7 +167,7 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 		if err != nil {
 			return receipt, err
 		}
-	case record.KeyID == "" && adminText(record.Operator, 256) && record.Adapter == submission.AdapterConsole && record.IdempotencyKey == "":
+	case record.KeyID == "" && !smtp && !record.Raw && record.IdempotencyTTL == 0 && record.Fence == (submission.Fence{}) && adminText(record.Operator, 256) && record.Adapter == submission.AdapterConsole && record.IdempotencyKey == "":
 	default:
 		return receipt, submission.ErrInvalidKey
 	}
@@ -168,7 +190,7 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 	}
 	messageID := object.ID
 	var recipients recipientRows
-	if !recipients.add(messageID, record.Recipients, record.RecipientKinds, record.RecipientCount) {
+	if !recipients.add(messageID, record.Recipients, record.RecipientKinds, record.RecipientCount, smtp) {
 		return receipt, submission.ErrInvalidMessage
 	}
 	if record.IdempotencyKey != "" {
