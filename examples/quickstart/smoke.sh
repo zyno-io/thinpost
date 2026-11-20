@@ -35,6 +35,15 @@ api() { # method path [json body]; prints the body; returns 1 (and explains on s
 json() { # what text: abort unless the text is JSON (a proxy error page is not)
   jq -e . >/dev/null 2>&1 <<<"$2" || fail "$1 did not return JSON: $(printf %s "$2" | head -c 300)"
 }
+# The seeded app is reused and capped at 10 active SMTP credentials, so the one
+# the SMTP leg creates is always revoked, even when the run fails.
+CID=""
+rawfile=""
+cleanup() {
+  [ -z "$rawfile" ] || rm -f "$rawfile"
+  [ -z "$CID" ] || api DELETE "/api/v1/apps/$APP/smtp/credentials/$CID" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 retry() { # seconds description command...
   local deadline=$((SECONDS + $1)) what=$2; shift 2
   until "$@"; do [ "$SECONDS" -lt "$deadline" ] || fail "timed out waiting for $what"; sleep 1; done
@@ -113,7 +122,7 @@ find_message() {
   [ -n "$mp_id" ]
 }
 retry 120 "delivery to Mailpit" find_message
-rawfile="$(mktemp)"; trap 'rm -f "$rawfile"' EXIT
+rawfile="$(mktemp)"
 curl -sf "$MAILPIT/api/v1/message/$mp_id/raw" -o "$rawfile" || fail "could not fetch the raw message from Mailpit"
 dkim="$(tr -d '\r' <"$rawfile" | awk 'BEGIN{h=0} /^$/{exit} /^DKIM-Signature:/{h=1} h&&/^[ \t]/{print; next} h&&!/^DKIM-Signature:/{h=0} /^DKIM-Signature:/{print}')"
 [ -n "$dkim" ] || fail "no DKIM-Signature header on the delivered message"
@@ -132,5 +141,72 @@ delivered() {
 }
 retry 120 "the operator API to show the message delivered" delivered
 echo "operator API reports the message delivered"
+
+step "SMTP submission (587 STARTTLS and 465 implicit TLS)"
+# The Edge listens on the same sending IP and certificate as port 25. Port 587
+# and 465 need the sending IP's row to name the host clients connect to.
+SMTP_HOST=smtp.quickstart.example
+smtp_info="$(api GET "/api/v1/apps/$APP/smtp")" || fail "reading the SMTP tab data failed"; json "SMTP connection info" "$smtp_info"
+if jq -e '.connection.primary_unnamed == true' >/dev/null <<<"$smtp_info"; then
+  api POST /api/v1/sending-ips "{\"name\":\"quickstart-primary\",\"address\":\"11.42.51.10\",\"helo_name\":\"$SMTP_HOST\",\"bounce_domain\":\"$SMTP_HOST\"}" >/dev/null || fail "naming the primary sending IP failed"
+  smtp_info="$(api GET "/api/v1/apps/$APP/smtp")" || fail "reading the SMTP tab data failed"
+fi
+jq -e --arg h "$SMTP_HOST" '.connection.host == $h' >/dev/null <<<"$smtp_info" || fail "unexpected SMTP host: $(jq -c .connection <<<"$smtp_info")"
+echo "clients connect to $SMTP_HOST"
+ports_reported() { # the Edge reports 465 and 587 when it negotiates submission/1
+  jq -e '(.connection.observed_ports // []) | (index(465) != null and index(587) != null)' >/dev/null <<<"$(api GET "/api/v1/apps/$APP/smtp" 2>/dev/null)"
+}
+retry 60 "the Edge to report ports 465 and 587" ports_reported
+echo "the Edge reports ports 465 and 587"
+
+cred="$(api POST "/api/v1/apps/$APP/smtp/credentials" "{\"name\":\"smoke-$nonce\"}")" || fail "creating an SMTP credential failed"; json "SMTP credential" "$cred"
+CID="$(jq -r '.credential.id // empty' <<<"$cred")"
+SMTP_USER="$(jq -r '.username // empty' <<<"$cred")"
+SMTP_PASS="$(jq -r '.password // empty' <<<"$cred")"
+[ -n "$CID" ] && [ -n "$SMTP_USER" ] && [ -n "$SMTP_PASS" ] || fail "incomplete SMTP credential response"
+echo "created SMTP credential $CID"
+
+smtp_message() { # subject: a raw message with headers the SMTP path must remove or replace
+  printf '%s\r\n' "From: Quickstart <hello@$DOMAIN>" "To: $RECIPIENT" "Bcc: hidden@$DOMAIN" \
+    "Received: from smtp-client.marker.example by relay.marker.example; Mon, 01 Jan 2024 00:00:00 +0000" \
+    "Message-ID: <client-$nonce@client.example.net>" "Subject: $1" "MIME-Version: 1.0" "Content-Type: text/plain; charset=utf-8" "" "Hello over SMTP."
+}
+# curl runs inside the tools container on the Edge's public network, trusting
+# the quickstart CA, and reaches the Edge's sending IP by name.
+smtp_send() { # url port mechanism subject password; prints curl's verbose log
+  smtp_message "$4" | compose run --rm --no-deps -T --entrypoint curl tools-smtp -sSv --ssl-reqd --cacert /pki/ca.crt \
+    --resolve "$SMTP_HOST:$2:11.42.51.10" "$1" --mail-from "hello@$DOMAIN" --mail-rcpt "$RECIPIENT" \
+    --user "$SMTP_USER:$5" --login-options "AUTH=$3" -T - 2>&1
+}
+for leg in "smtp://$SMTP_HOST:587 587 PLAIN starttls" "smtps://$SMTP_HOST:465 465 LOGIN tls"; do
+  set -- $leg
+  subject="Quickstart SMTP $4 $nonce"
+  log="$(smtp_send "$1" "$2" "$3" "$subject" "$SMTP_PASS")" || fail "SMTP submission on port $2 failed: $(printf %s "$log" | tail -n 15)"
+  smtp_id="$(sed -n 's/.*250 2\.0\.0 OK: queued as \([0-9a-f]\{32\}\).*/\1/p' <<<"$log" | tail -n 1)"
+  [ -n "$smtp_id" ] || fail "port $2 did not answer 250 with a message ID: $(printf %s "$log" | tail -n 15)"
+  echo "port $2 ($3): accepted, message ID $smtp_id"
+  mp_id=""
+  find_smtp_message() {
+    local found
+    found="$(curl -sf -G "$MAILPIT/api/v1/search" --data-urlencode "query=subject:\"$subject\"")" || return 1
+    mp_id="$(jq -r '.messages[0].ID // empty' <<<"$found" 2>/dev/null)" || return 1
+    [ -n "$mp_id" ]
+  }
+  retry 120 "the SMTP message on port $2 in Mailpit" find_smtp_message
+  curl -sf "$MAILPIT/api/v1/message/$mp_id/raw" -o "$rawfile" || fail "could not fetch the SMTP message from Mailpit"
+  headers="$(tr -d '\r' <"$rawfile" | awk '/^$/{exit} {print}')"
+  if grep -qi '^Bcc:' <<<"$headers"; then fail "the Bcc header was not removed (port $2)"; fi
+  if grep -q 'marker.example' <<<"$headers"; then fail "the client's Received header was not removed (port $2)"; fi
+  grep -q "^Message-ID: <" <<<"$headers" || fail "no Message-ID on the delivered message (port $2)"
+  if grep -q "client-$nonce@client.example.net" <<<"$headers"; then fail "the client's Message-ID was kept (port $2)"; fi
+  grep -q "^Message-ID: <[^>]*@$DOMAIN>" <<<"$headers" || fail "the Message-ID is not Thinpost's (port $2): $(grep '^Message-ID' <<<"$headers")"
+  grep -q "d=$DOMAIN" <<<"$headers" || fail "no DKIM-Signature for $DOMAIN on the SMTP message (port $2)"
+  compose run --rm --no-deps -T --entrypoint dkimverify tools-dns <"$rawfile" || fail "DKIM verification of the SMTP message failed (port $2)"
+  echo "port $2: Bcc and the client Received header removed, Thinpost Message-ID set, DKIM verified"
+done
+
+# A wrong password is refused and never delivered.
+if smtp_send "smtp://$SMTP_HOST:587" 587 PLAIN "Quickstart SMTP bad $nonce" "tps_$(printf 'A%.0s' $(seq 1 43))" >/dev/null 2>&1; then fail "a wrong SMTP password was accepted"; fi
+echo "a wrong SMTP password is refused"
 
 printf '\nSMOKE PASSED\n'
