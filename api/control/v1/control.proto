@@ -24,6 +24,10 @@ message ControlFrame {
     // when the worker reported the capability in Ready.
     InboundRoutes routes = 10;
     InboundAcknowledgement inbound_ack = 11;
+    // SMTP submission (capability "submission/1"), additive at protocol 7. Sent
+    // only when the worker reported the capability in Ready.
+    SubmissionAuthResult auth_result = 12;
+    SubmissionAcknowledgement submission_ack = 13;
   }
 }
 message EdgeFrame {
@@ -39,6 +43,11 @@ message EdgeFrame {
     // Sent only when control advertised "inbound/1" in Open.
     InboundStart inbound = 9;
     DataChunk inbound_chunk = 10;
+    // Sent only when control advertised "submission/1" in Open, and only after
+    // ReconciliationComplete.
+    SubmissionAuth auth = 11;
+    SubmissionStart submission = 12;
+    DataChunk submission_chunk = 13;
   }
 }
 
@@ -74,6 +83,10 @@ message Ready {
   // per source_addresses entry in the same order. Absent from an older worker;
   // control then uses the name it has stored for the address.
   repeated string source_hostnames = 9;
+  // Additive (submission/1): public ports on which this worker currently accepts
+  // AUTH (465, 587). Observed availability only: never used to tell clients
+  // where to connect. Ignored unless the worker also reported "submission/1".
+  repeated uint32 submission_ports = 10;
 }
 // Sent after all replayed results have been durably acknowledged.
 message ReplayComplete {}
@@ -216,3 +229,81 @@ enum InboundVerdict {
   // Permanently refused: 554.
   INBOUND_VERDICT_REJECTED = 3;
 }
+
+// SMTP submission (capability "submission/1"). Both sides send these frames only
+// after the peer advertised the capability, and the worker only after
+// ReconciliationComplete. The worker never spools a message: it answers 250 only
+// after an ACCEPTED acknowledgement that control sends after its durable commit
+// and while its lease is valid. Control never sends free text; the worker maps
+// each verdict to a fixed reply.
+
+// SubmissionAuth asks control to check an SMTP credential (and nothing else).
+// The secret is never logged.
+message SubmissionAuth {
+  // 32 lowercase hex.
+  string request_id = 1;
+  // 32 lowercase hex (the SMTP username).
+  string credential_id = 2;
+  // Exactly "tps_" followed by 43 base64url characters.
+  string secret = 3;
+  // Empty or a valid IP address.
+  string client_ip = 4;
+}
+// The credential only. App state is never reported here, so a client can always
+// reach DATA, where control resolves exact replays first.
+enum SubmissionAuthVerdict {
+  SUBMISSION_AUTH_VERDICT_UNSPECIFIED = 0;
+  SUBMISSION_AUTH_VERDICT_OK = 1;
+  // Unknown id and wrong secret are indistinguishable.
+  SUBMISSION_AUTH_VERDICT_INVALID = 2;
+  // Database error or draining.
+  SUBMISSION_AUTH_VERDICT_TEMPFAIL = 3;
+  // Per-session verify rate or pending cap exceeded.
+  SUBMISSION_AUTH_VERDICT_THROTTLED = 4;
+  // The control runtime gate is closed.
+  SUBMISSION_AUTH_VERDICT_UNAVAILABLE = 5;
+}
+message SubmissionAuthResult { string request_id = 1; SubmissionAuthVerdict verdict = 2; }
+// SubmissionStart precedes the decoded message as ordered DataChunks carrying
+// the same id. The envelope and connection facts are what the SMTP receiver
+// observed; the credential is checked again by control.
+message SubmissionStart {
+  // 32 lowercase hex transfer ID; not the message ID.
+  string submission_id = 1;
+  // Decoded message bytes, 1..7864320.
+  uint64 expected_size = 2;
+  bytes sha256 = 3;
+  string credential_id = 4;
+  string secret = 5;
+  // Empty for the null reverse path; otherwise printable ASCII, at most 320.
+  string mail_from = 6;
+  // 1..100 recipients.
+  repeated string rcpt_to = 7;
+  // Empty or a valid IP address.
+  string client_ip = 8;
+  string tls_version = 9;
+  int64 received_unix_ms = 10;
+  // 465 or 587; 0 for the internal listener.
+  uint32 port = 11;
+}
+enum SubmissionVerdict {
+  SUBMISSION_VERDICT_UNSPECIFIED = 0;
+  SUBMISSION_VERDICT_ACCEPTED = 1;
+  SUBMISSION_VERDICT_TEMPFAIL = 2;
+  SUBMISSION_VERDICT_RATE_LIMITED = 3;
+  SUBMISSION_VERDICT_QUOTA_EXCEEDED = 4;
+  SUBMISSION_VERDICT_BACKLOG = 5;
+  SUBMISSION_VERDICT_UNAVAILABLE = 6;
+  SUBMISSION_VERDICT_CREDENTIAL_INVALID = 7;
+  SUBMISSION_VERDICT_APP_PAUSED = 8;
+  SUBMISSION_VERDICT_FROM_NOT_PERMITTED = 9;
+  SUBMISSION_VERDICT_MESSAGE_INVALID = 10;
+  SUBMISSION_VERDICT_TOO_LARGE = 11;
+  SUBMISSION_VERDICT_RECIPIENT_NOT_PERMITTED = 12;
+  SUBMISSION_VERDICT_ENCRYPTION_REQUIRED = 13;
+  SUBMISSION_VERDICT_MISCONFIGURED = 14;
+  SUBMISSION_VERDICT_CONTENT_NOT_SUPPORTED = 15;
+}
+// message_id is set only with ACCEPTED. held reports an accepted message stored
+// on hold (the worker replies "held as <id>").
+message SubmissionAcknowledgement { string submission_id = 1; SubmissionVerdict verdict = 2; string message_id = 3; bool held = 4; }

@@ -240,6 +240,158 @@ func (InboundVerdict) EnumDescriptor() ([]byte, []int) {
 	return file_api_control_v1_control_proto_rawDescGZIP(), []int{3}
 }
 
+// The credential only. App state is never reported here, so a client can always
+// reach DATA, where control resolves exact replays first.
+type SubmissionAuthVerdict int32
+
+const (
+	SubmissionAuthVerdict_SUBMISSION_AUTH_VERDICT_UNSPECIFIED SubmissionAuthVerdict = 0
+	SubmissionAuthVerdict_SUBMISSION_AUTH_VERDICT_OK          SubmissionAuthVerdict = 1
+	// Unknown id and wrong secret are indistinguishable.
+	SubmissionAuthVerdict_SUBMISSION_AUTH_VERDICT_INVALID SubmissionAuthVerdict = 2
+	// Database error or draining.
+	SubmissionAuthVerdict_SUBMISSION_AUTH_VERDICT_TEMPFAIL SubmissionAuthVerdict = 3
+	// Per-session verify rate or pending cap exceeded.
+	SubmissionAuthVerdict_SUBMISSION_AUTH_VERDICT_THROTTLED SubmissionAuthVerdict = 4
+	// The control runtime gate is closed.
+	SubmissionAuthVerdict_SUBMISSION_AUTH_VERDICT_UNAVAILABLE SubmissionAuthVerdict = 5
+)
+
+// Enum value maps for SubmissionAuthVerdict.
+var (
+	SubmissionAuthVerdict_name = map[int32]string{
+		0: "SUBMISSION_AUTH_VERDICT_UNSPECIFIED",
+		1: "SUBMISSION_AUTH_VERDICT_OK",
+		2: "SUBMISSION_AUTH_VERDICT_INVALID",
+		3: "SUBMISSION_AUTH_VERDICT_TEMPFAIL",
+		4: "SUBMISSION_AUTH_VERDICT_THROTTLED",
+		5: "SUBMISSION_AUTH_VERDICT_UNAVAILABLE",
+	}
+	SubmissionAuthVerdict_value = map[string]int32{
+		"SUBMISSION_AUTH_VERDICT_UNSPECIFIED": 0,
+		"SUBMISSION_AUTH_VERDICT_OK":          1,
+		"SUBMISSION_AUTH_VERDICT_INVALID":     2,
+		"SUBMISSION_AUTH_VERDICT_TEMPFAIL":    3,
+		"SUBMISSION_AUTH_VERDICT_THROTTLED":   4,
+		"SUBMISSION_AUTH_VERDICT_UNAVAILABLE": 5,
+	}
+)
+
+func (x SubmissionAuthVerdict) Enum() *SubmissionAuthVerdict {
+	p := new(SubmissionAuthVerdict)
+	*p = x
+	return p
+}
+
+func (x SubmissionAuthVerdict) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SubmissionAuthVerdict) Descriptor() protoreflect.EnumDescriptor {
+	return file_api_control_v1_control_proto_enumTypes[4].Descriptor()
+}
+
+func (SubmissionAuthVerdict) Type() protoreflect.EnumType {
+	return &file_api_control_v1_control_proto_enumTypes[4]
+}
+
+func (x SubmissionAuthVerdict) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SubmissionAuthVerdict.Descriptor instead.
+func (SubmissionAuthVerdict) EnumDescriptor() ([]byte, []int) {
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{4}
+}
+
+type SubmissionVerdict int32
+
+const (
+	SubmissionVerdict_SUBMISSION_VERDICT_UNSPECIFIED             SubmissionVerdict = 0
+	SubmissionVerdict_SUBMISSION_VERDICT_ACCEPTED                SubmissionVerdict = 1
+	SubmissionVerdict_SUBMISSION_VERDICT_TEMPFAIL                SubmissionVerdict = 2
+	SubmissionVerdict_SUBMISSION_VERDICT_RATE_LIMITED            SubmissionVerdict = 3
+	SubmissionVerdict_SUBMISSION_VERDICT_QUOTA_EXCEEDED          SubmissionVerdict = 4
+	SubmissionVerdict_SUBMISSION_VERDICT_BACKLOG                 SubmissionVerdict = 5
+	SubmissionVerdict_SUBMISSION_VERDICT_UNAVAILABLE             SubmissionVerdict = 6
+	SubmissionVerdict_SUBMISSION_VERDICT_CREDENTIAL_INVALID      SubmissionVerdict = 7
+	SubmissionVerdict_SUBMISSION_VERDICT_APP_PAUSED              SubmissionVerdict = 8
+	SubmissionVerdict_SUBMISSION_VERDICT_FROM_NOT_PERMITTED      SubmissionVerdict = 9
+	SubmissionVerdict_SUBMISSION_VERDICT_MESSAGE_INVALID         SubmissionVerdict = 10
+	SubmissionVerdict_SUBMISSION_VERDICT_TOO_LARGE               SubmissionVerdict = 11
+	SubmissionVerdict_SUBMISSION_VERDICT_RECIPIENT_NOT_PERMITTED SubmissionVerdict = 12
+	SubmissionVerdict_SUBMISSION_VERDICT_ENCRYPTION_REQUIRED     SubmissionVerdict = 13
+	SubmissionVerdict_SUBMISSION_VERDICT_MISCONFIGURED           SubmissionVerdict = 14
+	SubmissionVerdict_SUBMISSION_VERDICT_CONTENT_NOT_SUPPORTED   SubmissionVerdict = 15
+)
+
+// Enum value maps for SubmissionVerdict.
+var (
+	SubmissionVerdict_name = map[int32]string{
+		0:  "SUBMISSION_VERDICT_UNSPECIFIED",
+		1:  "SUBMISSION_VERDICT_ACCEPTED",
+		2:  "SUBMISSION_VERDICT_TEMPFAIL",
+		3:  "SUBMISSION_VERDICT_RATE_LIMITED",
+		4:  "SUBMISSION_VERDICT_QUOTA_EXCEEDED",
+		5:  "SUBMISSION_VERDICT_BACKLOG",
+		6:  "SUBMISSION_VERDICT_UNAVAILABLE",
+		7:  "SUBMISSION_VERDICT_CREDENTIAL_INVALID",
+		8:  "SUBMISSION_VERDICT_APP_PAUSED",
+		9:  "SUBMISSION_VERDICT_FROM_NOT_PERMITTED",
+		10: "SUBMISSION_VERDICT_MESSAGE_INVALID",
+		11: "SUBMISSION_VERDICT_TOO_LARGE",
+		12: "SUBMISSION_VERDICT_RECIPIENT_NOT_PERMITTED",
+		13: "SUBMISSION_VERDICT_ENCRYPTION_REQUIRED",
+		14: "SUBMISSION_VERDICT_MISCONFIGURED",
+		15: "SUBMISSION_VERDICT_CONTENT_NOT_SUPPORTED",
+	}
+	SubmissionVerdict_value = map[string]int32{
+		"SUBMISSION_VERDICT_UNSPECIFIED":             0,
+		"SUBMISSION_VERDICT_ACCEPTED":                1,
+		"SUBMISSION_VERDICT_TEMPFAIL":                2,
+		"SUBMISSION_VERDICT_RATE_LIMITED":            3,
+		"SUBMISSION_VERDICT_QUOTA_EXCEEDED":          4,
+		"SUBMISSION_VERDICT_BACKLOG":                 5,
+		"SUBMISSION_VERDICT_UNAVAILABLE":             6,
+		"SUBMISSION_VERDICT_CREDENTIAL_INVALID":      7,
+		"SUBMISSION_VERDICT_APP_PAUSED":              8,
+		"SUBMISSION_VERDICT_FROM_NOT_PERMITTED":      9,
+		"SUBMISSION_VERDICT_MESSAGE_INVALID":         10,
+		"SUBMISSION_VERDICT_TOO_LARGE":               11,
+		"SUBMISSION_VERDICT_RECIPIENT_NOT_PERMITTED": 12,
+		"SUBMISSION_VERDICT_ENCRYPTION_REQUIRED":     13,
+		"SUBMISSION_VERDICT_MISCONFIGURED":           14,
+		"SUBMISSION_VERDICT_CONTENT_NOT_SUPPORTED":   15,
+	}
+)
+
+func (x SubmissionVerdict) Enum() *SubmissionVerdict {
+	p := new(SubmissionVerdict)
+	*p = x
+	return p
+}
+
+func (x SubmissionVerdict) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SubmissionVerdict) Descriptor() protoreflect.EnumDescriptor {
+	return file_api_control_v1_control_proto_enumTypes[5].Descriptor()
+}
+
+func (SubmissionVerdict) Type() protoreflect.EnumType {
+	return &file_api_control_v1_control_proto_enumTypes[5]
+}
+
+func (x SubmissionVerdict) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SubmissionVerdict.Descriptor instead.
+func (SubmissionVerdict) EnumDescriptor() ([]byte, []int) {
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{5}
+}
+
 type ControlFrame struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Body:
@@ -255,6 +407,8 @@ type ControlFrame struct {
 	//	*ControlFrame_ReconciliationComplete
 	//	*ControlFrame_Routes
 	//	*ControlFrame_InboundAck
+	//	*ControlFrame_AuthResult
+	//	*ControlFrame_SubmissionAck
 	Body          isControlFrame_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -396,6 +550,24 @@ func (x *ControlFrame) GetInboundAck() *InboundAcknowledgement {
 	return nil
 }
 
+func (x *ControlFrame) GetAuthResult() *SubmissionAuthResult {
+	if x != nil {
+		if x, ok := x.Body.(*ControlFrame_AuthResult); ok {
+			return x.AuthResult
+		}
+	}
+	return nil
+}
+
+func (x *ControlFrame) GetSubmissionAck() *SubmissionAcknowledgement {
+	if x != nil {
+		if x, ok := x.Body.(*ControlFrame_SubmissionAck); ok {
+			return x.SubmissionAck
+		}
+	}
+	return nil
+}
+
 type isControlFrame_Body interface {
 	isControlFrame_Body()
 }
@@ -446,6 +618,16 @@ type ControlFrame_InboundAck struct {
 	InboundAck *InboundAcknowledgement `protobuf:"bytes,11,opt,name=inbound_ack,json=inboundAck,proto3,oneof"`
 }
 
+type ControlFrame_AuthResult struct {
+	// SMTP submission (capability "submission/1"), additive at protocol 7. Sent
+	// only when the worker reported the capability in Ready.
+	AuthResult *SubmissionAuthResult `protobuf:"bytes,12,opt,name=auth_result,json=authResult,proto3,oneof"`
+}
+
+type ControlFrame_SubmissionAck struct {
+	SubmissionAck *SubmissionAcknowledgement `protobuf:"bytes,13,opt,name=submission_ack,json=submissionAck,proto3,oneof"`
+}
+
 func (*ControlFrame_Open) isControlFrame_Body() {}
 
 func (*ControlFrame_Wake) isControlFrame_Body() {}
@@ -468,6 +650,10 @@ func (*ControlFrame_Routes) isControlFrame_Body() {}
 
 func (*ControlFrame_InboundAck) isControlFrame_Body() {}
 
+func (*ControlFrame_AuthResult) isControlFrame_Body() {}
+
+func (*ControlFrame_SubmissionAck) isControlFrame_Body() {}
+
 type EdgeFrame struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Body:
@@ -482,6 +668,9 @@ type EdgeFrame struct {
 	//	*EdgeFrame_StartRequest
 	//	*EdgeFrame_Inbound
 	//	*EdgeFrame_InboundChunk
+	//	*EdgeFrame_Auth
+	//	*EdgeFrame_Submission
+	//	*EdgeFrame_SubmissionChunk
 	Body          isEdgeFrame_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -614,6 +803,33 @@ func (x *EdgeFrame) GetInboundChunk() *DataChunk {
 	return nil
 }
 
+func (x *EdgeFrame) GetAuth() *SubmissionAuth {
+	if x != nil {
+		if x, ok := x.Body.(*EdgeFrame_Auth); ok {
+			return x.Auth
+		}
+	}
+	return nil
+}
+
+func (x *EdgeFrame) GetSubmission() *SubmissionStart {
+	if x != nil {
+		if x, ok := x.Body.(*EdgeFrame_Submission); ok {
+			return x.Submission
+		}
+	}
+	return nil
+}
+
+func (x *EdgeFrame) GetSubmissionChunk() *DataChunk {
+	if x != nil {
+		if x, ok := x.Body.(*EdgeFrame_SubmissionChunk); ok {
+			return x.SubmissionChunk
+		}
+	}
+	return nil
+}
+
 type isEdgeFrame_Body interface {
 	isEdgeFrame_Body()
 }
@@ -659,6 +875,20 @@ type EdgeFrame_InboundChunk struct {
 	InboundChunk *DataChunk `protobuf:"bytes,10,opt,name=inbound_chunk,json=inboundChunk,proto3,oneof"`
 }
 
+type EdgeFrame_Auth struct {
+	// Sent only when control advertised "submission/1" in Open, and only after
+	// ReconciliationComplete.
+	Auth *SubmissionAuth `protobuf:"bytes,11,opt,name=auth,proto3,oneof"`
+}
+
+type EdgeFrame_Submission struct {
+	Submission *SubmissionStart `protobuf:"bytes,12,opt,name=submission,proto3,oneof"`
+}
+
+type EdgeFrame_SubmissionChunk struct {
+	SubmissionChunk *DataChunk `protobuf:"bytes,13,opt,name=submission_chunk,json=submissionChunk,proto3,oneof"`
+}
+
 func (*EdgeFrame_Ready) isEdgeFrame_Body() {}
 
 func (*EdgeFrame_Pull) isEdgeFrame_Body() {}
@@ -678,6 +908,12 @@ func (*EdgeFrame_StartRequest) isEdgeFrame_Body() {}
 func (*EdgeFrame_Inbound) isEdgeFrame_Body() {}
 
 func (*EdgeFrame_InboundChunk) isEdgeFrame_Body() {}
+
+func (*EdgeFrame_Auth) isEdgeFrame_Body() {}
+
+func (*EdgeFrame_Submission) isEdgeFrame_Body() {}
+
+func (*EdgeFrame_SubmissionChunk) isEdgeFrame_Body() {}
 
 // First frame. The worker verifies the mTLS controller identity, worker ID,
 // and monotonic epoch before admitting work. Epochs are allocated by the
@@ -921,6 +1157,10 @@ type Ready struct {
 	// per source_addresses entry in the same order. Absent from an older worker;
 	// control then uses the name it has stored for the address.
 	SourceHostnames []string `protobuf:"bytes,9,rep,name=source_hostnames,json=sourceHostnames,proto3" json:"source_hostnames,omitempty"`
+	// Additive (submission/1): public ports on which this worker currently accepts
+	// AUTH (465, 587). Observed availability only: never used to tell clients
+	// where to connect. Ignored unless the worker also reported "submission/1".
+	SubmissionPorts []uint32 `protobuf:"varint,10,rep,packed,name=submission_ports,json=submissionPorts,proto3" json:"submission_ports,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1014,6 +1254,13 @@ func (x *Ready) GetCapabilities() []string {
 func (x *Ready) GetSourceHostnames() []string {
 	if x != nil {
 		return x.SourceHostnames
+	}
+	return nil
+}
+
+func (x *Ready) GetSubmissionPorts() []uint32 {
+	if x != nil {
+		return x.SubmissionPorts
 	}
 	return nil
 }
@@ -2147,11 +2394,340 @@ func (x *InboundAcknowledgement) GetVerdict() InboundVerdict {
 	return InboundVerdict_INBOUND_VERDICT_UNSPECIFIED
 }
 
+// SubmissionAuth asks control to check an SMTP credential (and nothing else).
+// The secret is never logged.
+type SubmissionAuth struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 32 lowercase hex.
+	RequestId string `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	// 32 lowercase hex (the SMTP username).
+	CredentialId string `protobuf:"bytes,2,opt,name=credential_id,json=credentialId,proto3" json:"credential_id,omitempty"`
+	// Exactly "tps_" followed by 43 base64url characters.
+	Secret string `protobuf:"bytes,3,opt,name=secret,proto3" json:"secret,omitempty"`
+	// Empty or a valid IP address.
+	ClientIp      string `protobuf:"bytes,4,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubmissionAuth) Reset() {
+	*x = SubmissionAuth{}
+	mi := &file_api_control_v1_control_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmissionAuth) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmissionAuth) ProtoMessage() {}
+
+func (x *SubmissionAuth) ProtoReflect() protoreflect.Message {
+	mi := &file_api_control_v1_control_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmissionAuth.ProtoReflect.Descriptor instead.
+func (*SubmissionAuth) Descriptor() ([]byte, []int) {
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *SubmissionAuth) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *SubmissionAuth) GetCredentialId() string {
+	if x != nil {
+		return x.CredentialId
+	}
+	return ""
+}
+
+func (x *SubmissionAuth) GetSecret() string {
+	if x != nil {
+		return x.Secret
+	}
+	return ""
+}
+
+func (x *SubmissionAuth) GetClientIp() string {
+	if x != nil {
+		return x.ClientIp
+	}
+	return ""
+}
+
+type SubmissionAuthResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Verdict       SubmissionAuthVerdict  `protobuf:"varint,2,opt,name=verdict,proto3,enum=thinpost.control.v1.SubmissionAuthVerdict" json:"verdict,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubmissionAuthResult) Reset() {
+	*x = SubmissionAuthResult{}
+	mi := &file_api_control_v1_control_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmissionAuthResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmissionAuthResult) ProtoMessage() {}
+
+func (x *SubmissionAuthResult) ProtoReflect() protoreflect.Message {
+	mi := &file_api_control_v1_control_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmissionAuthResult.ProtoReflect.Descriptor instead.
+func (*SubmissionAuthResult) Descriptor() ([]byte, []int) {
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *SubmissionAuthResult) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *SubmissionAuthResult) GetVerdict() SubmissionAuthVerdict {
+	if x != nil {
+		return x.Verdict
+	}
+	return SubmissionAuthVerdict_SUBMISSION_AUTH_VERDICT_UNSPECIFIED
+}
+
+// SubmissionStart precedes the decoded message as ordered DataChunks carrying
+// the same id. The envelope and connection facts are what the SMTP receiver
+// observed; the credential is checked again by control.
+type SubmissionStart struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 32 lowercase hex transfer ID; not the message ID.
+	SubmissionId string `protobuf:"bytes,1,opt,name=submission_id,json=submissionId,proto3" json:"submission_id,omitempty"`
+	// Decoded message bytes, 1..7864320.
+	ExpectedSize uint64 `protobuf:"varint,2,opt,name=expected_size,json=expectedSize,proto3" json:"expected_size,omitempty"`
+	Sha256       []byte `protobuf:"bytes,3,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	CredentialId string `protobuf:"bytes,4,opt,name=credential_id,json=credentialId,proto3" json:"credential_id,omitempty"`
+	Secret       string `protobuf:"bytes,5,opt,name=secret,proto3" json:"secret,omitempty"`
+	// Empty for the null reverse path; otherwise printable ASCII, at most 320.
+	MailFrom string `protobuf:"bytes,6,opt,name=mail_from,json=mailFrom,proto3" json:"mail_from,omitempty"`
+	// 1..100 recipients.
+	RcptTo []string `protobuf:"bytes,7,rep,name=rcpt_to,json=rcptTo,proto3" json:"rcpt_to,omitempty"`
+	// Empty or a valid IP address.
+	ClientIp       string `protobuf:"bytes,8,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`
+	TlsVersion     string `protobuf:"bytes,9,opt,name=tls_version,json=tlsVersion,proto3" json:"tls_version,omitempty"`
+	ReceivedUnixMs int64  `protobuf:"varint,10,opt,name=received_unix_ms,json=receivedUnixMs,proto3" json:"received_unix_ms,omitempty"`
+	// 465 or 587; 0 for the internal listener.
+	Port          uint32 `protobuf:"varint,11,opt,name=port,proto3" json:"port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubmissionStart) Reset() {
+	*x = SubmissionStart{}
+	mi := &file_api_control_v1_control_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmissionStart) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmissionStart) ProtoMessage() {}
+
+func (x *SubmissionStart) ProtoReflect() protoreflect.Message {
+	mi := &file_api_control_v1_control_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmissionStart.ProtoReflect.Descriptor instead.
+func (*SubmissionStart) Descriptor() ([]byte, []int) {
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *SubmissionStart) GetSubmissionId() string {
+	if x != nil {
+		return x.SubmissionId
+	}
+	return ""
+}
+
+func (x *SubmissionStart) GetExpectedSize() uint64 {
+	if x != nil {
+		return x.ExpectedSize
+	}
+	return 0
+}
+
+func (x *SubmissionStart) GetSha256() []byte {
+	if x != nil {
+		return x.Sha256
+	}
+	return nil
+}
+
+func (x *SubmissionStart) GetCredentialId() string {
+	if x != nil {
+		return x.CredentialId
+	}
+	return ""
+}
+
+func (x *SubmissionStart) GetSecret() string {
+	if x != nil {
+		return x.Secret
+	}
+	return ""
+}
+
+func (x *SubmissionStart) GetMailFrom() string {
+	if x != nil {
+		return x.MailFrom
+	}
+	return ""
+}
+
+func (x *SubmissionStart) GetRcptTo() []string {
+	if x != nil {
+		return x.RcptTo
+	}
+	return nil
+}
+
+func (x *SubmissionStart) GetClientIp() string {
+	if x != nil {
+		return x.ClientIp
+	}
+	return ""
+}
+
+func (x *SubmissionStart) GetTlsVersion() string {
+	if x != nil {
+		return x.TlsVersion
+	}
+	return ""
+}
+
+func (x *SubmissionStart) GetReceivedUnixMs() int64 {
+	if x != nil {
+		return x.ReceivedUnixMs
+	}
+	return 0
+}
+
+func (x *SubmissionStart) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+// message_id is set only with ACCEPTED. held reports an accepted message stored
+// on hold (the worker replies "held as <id>").
+type SubmissionAcknowledgement struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SubmissionId  string                 `protobuf:"bytes,1,opt,name=submission_id,json=submissionId,proto3" json:"submission_id,omitempty"`
+	Verdict       SubmissionVerdict      `protobuf:"varint,2,opt,name=verdict,proto3,enum=thinpost.control.v1.SubmissionVerdict" json:"verdict,omitempty"`
+	MessageId     string                 `protobuf:"bytes,3,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	Held          bool                   `protobuf:"varint,4,opt,name=held,proto3" json:"held,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubmissionAcknowledgement) Reset() {
+	*x = SubmissionAcknowledgement{}
+	mi := &file_api_control_v1_control_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmissionAcknowledgement) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmissionAcknowledgement) ProtoMessage() {}
+
+func (x *SubmissionAcknowledgement) ProtoReflect() protoreflect.Message {
+	mi := &file_api_control_v1_control_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmissionAcknowledgement.ProtoReflect.Descriptor instead.
+func (*SubmissionAcknowledgement) Descriptor() ([]byte, []int) {
+	return file_api_control_v1_control_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *SubmissionAcknowledgement) GetSubmissionId() string {
+	if x != nil {
+		return x.SubmissionId
+	}
+	return ""
+}
+
+func (x *SubmissionAcknowledgement) GetVerdict() SubmissionVerdict {
+	if x != nil {
+		return x.Verdict
+	}
+	return SubmissionVerdict_SUBMISSION_VERDICT_UNSPECIFIED
+}
+
+func (x *SubmissionAcknowledgement) GetMessageId() string {
+	if x != nil {
+		return x.MessageId
+	}
+	return ""
+}
+
+func (x *SubmissionAcknowledgement) GetHeld() bool {
+	if x != nil {
+		return x.Held
+	}
+	return false
+}
+
 var File_api_control_v1_control_proto protoreflect.FileDescriptor
 
 const file_api_control_v1_control_proto_rawDesc = "" +
 	"\n" +
-	"\x1capi/control/v1/control.proto\x12\x13thinpost.control.v1\"\x9c\x06\n" +
+	"\x1capi/control/v1/control.proto\x12\x13thinpost.control.v1\"\xc3\a\n" +
 	"\fControlFrame\x12/\n" +
 	"\x04open\x18\x01 \x01(\v2\x19.thinpost.control.v1.OpenH\x00R\x04open\x12/\n" +
 	"\x04wake\x18\x02 \x01(\v2\x19.thinpost.control.v1.WakeH\x00R\x04wake\x12@\n" +
@@ -2168,8 +2744,11 @@ const file_api_control_v1_control_proto_rawDesc = "" +
 	"\x06routes\x18\n" +
 	" \x01(\v2\".thinpost.control.v1.InboundRoutesH\x00R\x06routes\x12N\n" +
 	"\vinbound_ack\x18\v \x01(\v2+.thinpost.control.v1.InboundAcknowledgementH\x00R\n" +
-	"inboundAckB\x06\n" +
-	"\x04body\"\xa5\x05\n" +
+	"inboundAck\x12L\n" +
+	"\vauth_result\x18\f \x01(\v2).thinpost.control.v1.SubmissionAuthResultH\x00R\n" +
+	"authResult\x12W\n" +
+	"\x0esubmission_ack\x18\r \x01(\v2..thinpost.control.v1.SubmissionAcknowledgementH\x00R\rsubmissionAckB\x06\n" +
+	"\x04body\"\xf5\x06\n" +
 	"\tEdgeFrame\x122\n" +
 	"\x05ready\x18\x01 \x01(\v2\x1a.thinpost.control.v1.ReadyH\x00R\x05ready\x12/\n" +
 	"\x04pull\x18\x02 \x01(\v2\x19.thinpost.control.v1.PullH\x00R\x04pull\x12=\n" +
@@ -2181,7 +2760,12 @@ const file_api_control_v1_control_proto_rawDesc = "" +
 	"\rstart_request\x18\b \x01(\v2!.thinpost.control.v1.StartRequestH\x00R\fstartRequest\x12=\n" +
 	"\ainbound\x18\t \x01(\v2!.thinpost.control.v1.InboundStartH\x00R\ainbound\x12E\n" +
 	"\rinbound_chunk\x18\n" +
-	" \x01(\v2\x1e.thinpost.control.v1.DataChunkH\x00R\finboundChunkB\x06\n" +
+	" \x01(\v2\x1e.thinpost.control.v1.DataChunkH\x00R\finboundChunk\x129\n" +
+	"\x04auth\x18\v \x01(\v2#.thinpost.control.v1.SubmissionAuthH\x00R\x04auth\x12F\n" +
+	"\n" +
+	"submission\x18\f \x01(\v2$.thinpost.control.v1.SubmissionStartH\x00R\n" +
+	"submission\x12K\n" +
+	"\x10submission_chunk\x18\r \x01(\v2\x1e.thinpost.control.v1.DataChunkH\x00R\x0fsubmissionChunkB\x06\n" +
 	"\x04body\"\xb9\x02\n" +
 	"\x04Open\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12#\n" +
@@ -2200,7 +2784,7 @@ const file_api_control_v1_control_proto_rawDesc = "" +
 	"\x0flease_signature\x18\x02 \x01(\fR\x0eleaseSignature\"L\n" +
 	"\rLeaseAccepted\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12%\n" +
-	"\x0epayload_sha256\x18\x02 \x01(\fR\rpayloadSha256\"\xc4\x02\n" +
+	"\x0epayload_sha256\x18\x02 \x01(\fR\rpayloadSha256\"\xef\x02\n" +
 	"\x05Ready\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x04R\x05epoch\x12\x1d\n" +
@@ -2212,7 +2796,9 @@ const file_api_control_v1_control_proto_rawDesc = "" +
 	"\x10source_addresses\x18\x06 \x03(\tR\x0fsourceAddresses\x12%\n" +
 	"\x0ebounce_domains\x18\a \x03(\tR\rbounceDomains\x12\"\n" +
 	"\fcapabilities\x18\b \x03(\tR\fcapabilities\x12)\n" +
-	"\x10source_hostnames\x18\t \x03(\tR\x0fsourceHostnames\"\x10\n" +
+	"\x10source_hostnames\x18\t \x03(\tR\x0fsourceHostnames\x12)\n" +
+	"\x10submission_ports\x18\n" +
+	" \x03(\rR\x0fsubmissionPorts\"\x10\n" +
 	"\x0eReplayComplete\"\x89\x01\n" +
 	"\x16ReconciliationComplete\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x1d\n" +
@@ -2309,7 +2895,37 @@ const file_api_control_v1_control_proto_rawDesc = "" +
 	"\x16InboundAcknowledgement\x12\x1d\n" +
 	"\n" +
 	"inbound_id\x18\x01 \x01(\tR\tinboundId\x12=\n" +
-	"\averdict\x18\x02 \x01(\x0e2#.thinpost.control.v1.InboundVerdictR\averdict*\xe4\x01\n" +
+	"\averdict\x18\x02 \x01(\x0e2#.thinpost.control.v1.InboundVerdictR\averdict\"\x89\x01\n" +
+	"\x0eSubmissionAuth\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12#\n" +
+	"\rcredential_id\x18\x02 \x01(\tR\fcredentialId\x12\x16\n" +
+	"\x06secret\x18\x03 \x01(\tR\x06secret\x12\x1b\n" +
+	"\tclient_ip\x18\x04 \x01(\tR\bclientIp\"{\n" +
+	"\x14SubmissionAuthResult\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12D\n" +
+	"\averdict\x18\x02 \x01(\x0e2*.thinpost.control.v1.SubmissionAuthVerdictR\averdict\"\xe2\x02\n" +
+	"\x0fSubmissionStart\x12#\n" +
+	"\rsubmission_id\x18\x01 \x01(\tR\fsubmissionId\x12#\n" +
+	"\rexpected_size\x18\x02 \x01(\x04R\fexpectedSize\x12\x16\n" +
+	"\x06sha256\x18\x03 \x01(\fR\x06sha256\x12#\n" +
+	"\rcredential_id\x18\x04 \x01(\tR\fcredentialId\x12\x16\n" +
+	"\x06secret\x18\x05 \x01(\tR\x06secret\x12\x1b\n" +
+	"\tmail_from\x18\x06 \x01(\tR\bmailFrom\x12\x17\n" +
+	"\arcpt_to\x18\a \x03(\tR\x06rcptTo\x12\x1b\n" +
+	"\tclient_ip\x18\b \x01(\tR\bclientIp\x12\x1f\n" +
+	"\vtls_version\x18\t \x01(\tR\n" +
+	"tlsVersion\x12(\n" +
+	"\x10received_unix_ms\x18\n" +
+	" \x01(\x03R\x0ereceivedUnixMs\x12\x12\n" +
+	"\x04port\x18\v \x01(\rR\x04port\"\xb5\x01\n" +
+	"\x19SubmissionAcknowledgement\x12#\n" +
+	"\rsubmission_id\x18\x01 \x01(\tR\fsubmissionId\x12@\n" +
+	"\averdict\x18\x02 \x01(\x0e2&.thinpost.control.v1.SubmissionVerdictR\averdict\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x03 \x01(\tR\tmessageId\x12\x12\n" +
+	"\x04held\x18\x04 \x01(\bR\x04held*\xe4\x01\n" +
 	"\x0fDeliveryOutcome\x12 \n" +
 	"\x1cDELIVERY_OUTCOME_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19DELIVERY_OUTCOME_ACCEPTED\x10\x01\x12\x1d\n" +
@@ -2330,7 +2946,32 @@ const file_api_control_v1_control_proto_rawDesc = "" +
 	"\x1bINBOUND_VERDICT_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18INBOUND_VERDICT_ACCEPTED\x10\x01\x12\x1c\n" +
 	"\x18INBOUND_VERDICT_TEMPFAIL\x10\x02\x12\x1c\n" +
-	"\x18INBOUND_VERDICT_REJECTED\x10\x032_\n" +
+	"\x18INBOUND_VERDICT_REJECTED\x10\x03*\xfb\x01\n" +
+	"\x15SubmissionAuthVerdict\x12'\n" +
+	"#SUBMISSION_AUTH_VERDICT_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aSUBMISSION_AUTH_VERDICT_OK\x10\x01\x12#\n" +
+	"\x1fSUBMISSION_AUTH_VERDICT_INVALID\x10\x02\x12$\n" +
+	" SUBMISSION_AUTH_VERDICT_TEMPFAIL\x10\x03\x12%\n" +
+	"!SUBMISSION_AUTH_VERDICT_THROTTLED\x10\x04\x12'\n" +
+	"#SUBMISSION_AUTH_VERDICT_UNAVAILABLE\x10\x05*\xfc\x04\n" +
+	"\x11SubmissionVerdict\x12\"\n" +
+	"\x1eSUBMISSION_VERDICT_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bSUBMISSION_VERDICT_ACCEPTED\x10\x01\x12\x1f\n" +
+	"\x1bSUBMISSION_VERDICT_TEMPFAIL\x10\x02\x12#\n" +
+	"\x1fSUBMISSION_VERDICT_RATE_LIMITED\x10\x03\x12%\n" +
+	"!SUBMISSION_VERDICT_QUOTA_EXCEEDED\x10\x04\x12\x1e\n" +
+	"\x1aSUBMISSION_VERDICT_BACKLOG\x10\x05\x12\"\n" +
+	"\x1eSUBMISSION_VERDICT_UNAVAILABLE\x10\x06\x12)\n" +
+	"%SUBMISSION_VERDICT_CREDENTIAL_INVALID\x10\a\x12!\n" +
+	"\x1dSUBMISSION_VERDICT_APP_PAUSED\x10\b\x12)\n" +
+	"%SUBMISSION_VERDICT_FROM_NOT_PERMITTED\x10\t\x12&\n" +
+	"\"SUBMISSION_VERDICT_MESSAGE_INVALID\x10\n" +
+	"\x12 \n" +
+	"\x1cSUBMISSION_VERDICT_TOO_LARGE\x10\v\x12.\n" +
+	"*SUBMISSION_VERDICT_RECIPIENT_NOT_PERMITTED\x10\f\x12*\n" +
+	"&SUBMISSION_VERDICT_ENCRYPTION_REQUIRED\x10\r\x12$\n" +
+	" SUBMISSION_VERDICT_MISCONFIGURED\x10\x0e\x12,\n" +
+	"(SUBMISSION_VERDICT_CONTENT_NOT_SUPPORTED\x10\x0f2_\n" +
 	"\vEdgeControl\x12P\n" +
 	"\aConnect\x12!.thinpost.control.v1.ControlFrame\x1a\x1e.thinpost.control.v1.EdgeFrame(\x010\x01B6Z4github.com/zyno-io/thinpost/api/control/v1;controlv1b\x06proto3"
 
@@ -2346,72 +2987,85 @@ func file_api_control_v1_control_proto_rawDescGZIP() []byte {
 	return file_api_control_v1_control_proto_rawDescData
 }
 
-var file_api_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_api_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_api_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_api_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_api_control_v1_control_proto_goTypes = []any{
-	(DeliveryOutcome)(0),           // 0: thinpost.control.v1.DeliveryOutcome
-	(SmtpStage)(0),                 // 1: thinpost.control.v1.SmtpStage
-	(InboundRouteState)(0),         // 2: thinpost.control.v1.InboundRouteState
-	(InboundVerdict)(0),            // 3: thinpost.control.v1.InboundVerdict
-	(*ControlFrame)(nil),           // 4: thinpost.control.v1.ControlFrame
-	(*EdgeFrame)(nil),              // 5: thinpost.control.v1.EdgeFrame
-	(*Open)(nil),                   // 6: thinpost.control.v1.Open
-	(*LeaseRenewal)(nil),           // 7: thinpost.control.v1.LeaseRenewal
-	(*LeaseAccepted)(nil),          // 8: thinpost.control.v1.LeaseAccepted
-	(*Ready)(nil),                  // 9: thinpost.control.v1.Ready
-	(*ReplayComplete)(nil),         // 10: thinpost.control.v1.ReplayComplete
-	(*ReconciliationComplete)(nil), // 11: thinpost.control.v1.ReconciliationComplete
-	(*Wake)(nil),                   // 12: thinpost.control.v1.Wake
-	(*Pull)(nil),                   // 13: thinpost.control.v1.Pull
-	(*DeliveryStart)(nil),          // 14: thinpost.control.v1.DeliveryStart
-	(*DataChunk)(nil),              // 15: thinpost.control.v1.DataChunk
-	(*StartRequest)(nil),           // 16: thinpost.control.v1.StartRequest
-	(*StartPermit)(nil),            // 17: thinpost.control.v1.StartPermit
-	(*DeliveryResult)(nil),         // 18: thinpost.control.v1.DeliveryResult
-	(*ResultAcknowledgement)(nil),  // 19: thinpost.control.v1.ResultAcknowledgement
-	(*BounceStart)(nil),            // 20: thinpost.control.v1.BounceStart
-	(*BounceAcknowledgement)(nil),  // 21: thinpost.control.v1.BounceAcknowledgement
-	(*InboundRoutes)(nil),          // 22: thinpost.control.v1.InboundRoutes
-	(*InboundRoute)(nil),           // 23: thinpost.control.v1.InboundRoute
-	(*InboundStart)(nil),           // 24: thinpost.control.v1.InboundStart
-	(*InboundAcknowledgement)(nil), // 25: thinpost.control.v1.InboundAcknowledgement
+	(DeliveryOutcome)(0),              // 0: thinpost.control.v1.DeliveryOutcome
+	(SmtpStage)(0),                    // 1: thinpost.control.v1.SmtpStage
+	(InboundRouteState)(0),            // 2: thinpost.control.v1.InboundRouteState
+	(InboundVerdict)(0),               // 3: thinpost.control.v1.InboundVerdict
+	(SubmissionAuthVerdict)(0),        // 4: thinpost.control.v1.SubmissionAuthVerdict
+	(SubmissionVerdict)(0),            // 5: thinpost.control.v1.SubmissionVerdict
+	(*ControlFrame)(nil),              // 6: thinpost.control.v1.ControlFrame
+	(*EdgeFrame)(nil),                 // 7: thinpost.control.v1.EdgeFrame
+	(*Open)(nil),                      // 8: thinpost.control.v1.Open
+	(*LeaseRenewal)(nil),              // 9: thinpost.control.v1.LeaseRenewal
+	(*LeaseAccepted)(nil),             // 10: thinpost.control.v1.LeaseAccepted
+	(*Ready)(nil),                     // 11: thinpost.control.v1.Ready
+	(*ReplayComplete)(nil),            // 12: thinpost.control.v1.ReplayComplete
+	(*ReconciliationComplete)(nil),    // 13: thinpost.control.v1.ReconciliationComplete
+	(*Wake)(nil),                      // 14: thinpost.control.v1.Wake
+	(*Pull)(nil),                      // 15: thinpost.control.v1.Pull
+	(*DeliveryStart)(nil),             // 16: thinpost.control.v1.DeliveryStart
+	(*DataChunk)(nil),                 // 17: thinpost.control.v1.DataChunk
+	(*StartRequest)(nil),              // 18: thinpost.control.v1.StartRequest
+	(*StartPermit)(nil),               // 19: thinpost.control.v1.StartPermit
+	(*DeliveryResult)(nil),            // 20: thinpost.control.v1.DeliveryResult
+	(*ResultAcknowledgement)(nil),     // 21: thinpost.control.v1.ResultAcknowledgement
+	(*BounceStart)(nil),               // 22: thinpost.control.v1.BounceStart
+	(*BounceAcknowledgement)(nil),     // 23: thinpost.control.v1.BounceAcknowledgement
+	(*InboundRoutes)(nil),             // 24: thinpost.control.v1.InboundRoutes
+	(*InboundRoute)(nil),              // 25: thinpost.control.v1.InboundRoute
+	(*InboundStart)(nil),              // 26: thinpost.control.v1.InboundStart
+	(*InboundAcknowledgement)(nil),    // 27: thinpost.control.v1.InboundAcknowledgement
+	(*SubmissionAuth)(nil),            // 28: thinpost.control.v1.SubmissionAuth
+	(*SubmissionAuthResult)(nil),      // 29: thinpost.control.v1.SubmissionAuthResult
+	(*SubmissionStart)(nil),           // 30: thinpost.control.v1.SubmissionStart
+	(*SubmissionAcknowledgement)(nil), // 31: thinpost.control.v1.SubmissionAcknowledgement
 }
 var file_api_control_v1_control_proto_depIdxs = []int32{
-	6,  // 0: thinpost.control.v1.ControlFrame.open:type_name -> thinpost.control.v1.Open
-	12, // 1: thinpost.control.v1.ControlFrame.wake:type_name -> thinpost.control.v1.Wake
-	14, // 2: thinpost.control.v1.ControlFrame.delivery:type_name -> thinpost.control.v1.DeliveryStart
-	15, // 3: thinpost.control.v1.ControlFrame.mime_chunk:type_name -> thinpost.control.v1.DataChunk
-	19, // 4: thinpost.control.v1.ControlFrame.result_ack:type_name -> thinpost.control.v1.ResultAcknowledgement
-	21, // 5: thinpost.control.v1.ControlFrame.bounce_ack:type_name -> thinpost.control.v1.BounceAcknowledgement
-	7,  // 6: thinpost.control.v1.ControlFrame.lease_renewal:type_name -> thinpost.control.v1.LeaseRenewal
-	17, // 7: thinpost.control.v1.ControlFrame.start_permit:type_name -> thinpost.control.v1.StartPermit
-	11, // 8: thinpost.control.v1.ControlFrame.reconciliation_complete:type_name -> thinpost.control.v1.ReconciliationComplete
-	22, // 9: thinpost.control.v1.ControlFrame.routes:type_name -> thinpost.control.v1.InboundRoutes
-	25, // 10: thinpost.control.v1.ControlFrame.inbound_ack:type_name -> thinpost.control.v1.InboundAcknowledgement
-	9,  // 11: thinpost.control.v1.EdgeFrame.ready:type_name -> thinpost.control.v1.Ready
-	13, // 12: thinpost.control.v1.EdgeFrame.pull:type_name -> thinpost.control.v1.Pull
-	18, // 13: thinpost.control.v1.EdgeFrame.result:type_name -> thinpost.control.v1.DeliveryResult
-	20, // 14: thinpost.control.v1.EdgeFrame.bounce:type_name -> thinpost.control.v1.BounceStart
-	15, // 15: thinpost.control.v1.EdgeFrame.bounce_chunk:type_name -> thinpost.control.v1.DataChunk
-	8,  // 16: thinpost.control.v1.EdgeFrame.lease_accepted:type_name -> thinpost.control.v1.LeaseAccepted
-	10, // 17: thinpost.control.v1.EdgeFrame.replay_complete:type_name -> thinpost.control.v1.ReplayComplete
-	16, // 18: thinpost.control.v1.EdgeFrame.start_request:type_name -> thinpost.control.v1.StartRequest
-	24, // 19: thinpost.control.v1.EdgeFrame.inbound:type_name -> thinpost.control.v1.InboundStart
-	15, // 20: thinpost.control.v1.EdgeFrame.inbound_chunk:type_name -> thinpost.control.v1.DataChunk
-	16, // 21: thinpost.control.v1.StartPermit.request:type_name -> thinpost.control.v1.StartRequest
-	0,  // 22: thinpost.control.v1.DeliveryResult.outcome:type_name -> thinpost.control.v1.DeliveryOutcome
-	1,  // 23: thinpost.control.v1.DeliveryResult.smtp_stage:type_name -> thinpost.control.v1.SmtpStage
-	18, // 24: thinpost.control.v1.ResultAcknowledgement.result:type_name -> thinpost.control.v1.DeliveryResult
-	23, // 25: thinpost.control.v1.InboundRoutes.routes:type_name -> thinpost.control.v1.InboundRoute
-	2,  // 26: thinpost.control.v1.InboundRoute.state:type_name -> thinpost.control.v1.InboundRouteState
-	3,  // 27: thinpost.control.v1.InboundAcknowledgement.verdict:type_name -> thinpost.control.v1.InboundVerdict
-	4,  // 28: thinpost.control.v1.EdgeControl.Connect:input_type -> thinpost.control.v1.ControlFrame
-	5,  // 29: thinpost.control.v1.EdgeControl.Connect:output_type -> thinpost.control.v1.EdgeFrame
-	29, // [29:30] is the sub-list for method output_type
-	28, // [28:29] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	8,  // 0: thinpost.control.v1.ControlFrame.open:type_name -> thinpost.control.v1.Open
+	14, // 1: thinpost.control.v1.ControlFrame.wake:type_name -> thinpost.control.v1.Wake
+	16, // 2: thinpost.control.v1.ControlFrame.delivery:type_name -> thinpost.control.v1.DeliveryStart
+	17, // 3: thinpost.control.v1.ControlFrame.mime_chunk:type_name -> thinpost.control.v1.DataChunk
+	21, // 4: thinpost.control.v1.ControlFrame.result_ack:type_name -> thinpost.control.v1.ResultAcknowledgement
+	23, // 5: thinpost.control.v1.ControlFrame.bounce_ack:type_name -> thinpost.control.v1.BounceAcknowledgement
+	9,  // 6: thinpost.control.v1.ControlFrame.lease_renewal:type_name -> thinpost.control.v1.LeaseRenewal
+	19, // 7: thinpost.control.v1.ControlFrame.start_permit:type_name -> thinpost.control.v1.StartPermit
+	13, // 8: thinpost.control.v1.ControlFrame.reconciliation_complete:type_name -> thinpost.control.v1.ReconciliationComplete
+	24, // 9: thinpost.control.v1.ControlFrame.routes:type_name -> thinpost.control.v1.InboundRoutes
+	27, // 10: thinpost.control.v1.ControlFrame.inbound_ack:type_name -> thinpost.control.v1.InboundAcknowledgement
+	29, // 11: thinpost.control.v1.ControlFrame.auth_result:type_name -> thinpost.control.v1.SubmissionAuthResult
+	31, // 12: thinpost.control.v1.ControlFrame.submission_ack:type_name -> thinpost.control.v1.SubmissionAcknowledgement
+	11, // 13: thinpost.control.v1.EdgeFrame.ready:type_name -> thinpost.control.v1.Ready
+	15, // 14: thinpost.control.v1.EdgeFrame.pull:type_name -> thinpost.control.v1.Pull
+	20, // 15: thinpost.control.v1.EdgeFrame.result:type_name -> thinpost.control.v1.DeliveryResult
+	22, // 16: thinpost.control.v1.EdgeFrame.bounce:type_name -> thinpost.control.v1.BounceStart
+	17, // 17: thinpost.control.v1.EdgeFrame.bounce_chunk:type_name -> thinpost.control.v1.DataChunk
+	10, // 18: thinpost.control.v1.EdgeFrame.lease_accepted:type_name -> thinpost.control.v1.LeaseAccepted
+	12, // 19: thinpost.control.v1.EdgeFrame.replay_complete:type_name -> thinpost.control.v1.ReplayComplete
+	18, // 20: thinpost.control.v1.EdgeFrame.start_request:type_name -> thinpost.control.v1.StartRequest
+	26, // 21: thinpost.control.v1.EdgeFrame.inbound:type_name -> thinpost.control.v1.InboundStart
+	17, // 22: thinpost.control.v1.EdgeFrame.inbound_chunk:type_name -> thinpost.control.v1.DataChunk
+	28, // 23: thinpost.control.v1.EdgeFrame.auth:type_name -> thinpost.control.v1.SubmissionAuth
+	30, // 24: thinpost.control.v1.EdgeFrame.submission:type_name -> thinpost.control.v1.SubmissionStart
+	17, // 25: thinpost.control.v1.EdgeFrame.submission_chunk:type_name -> thinpost.control.v1.DataChunk
+	18, // 26: thinpost.control.v1.StartPermit.request:type_name -> thinpost.control.v1.StartRequest
+	0,  // 27: thinpost.control.v1.DeliveryResult.outcome:type_name -> thinpost.control.v1.DeliveryOutcome
+	1,  // 28: thinpost.control.v1.DeliveryResult.smtp_stage:type_name -> thinpost.control.v1.SmtpStage
+	20, // 29: thinpost.control.v1.ResultAcknowledgement.result:type_name -> thinpost.control.v1.DeliveryResult
+	25, // 30: thinpost.control.v1.InboundRoutes.routes:type_name -> thinpost.control.v1.InboundRoute
+	2,  // 31: thinpost.control.v1.InboundRoute.state:type_name -> thinpost.control.v1.InboundRouteState
+	3,  // 32: thinpost.control.v1.InboundAcknowledgement.verdict:type_name -> thinpost.control.v1.InboundVerdict
+	4,  // 33: thinpost.control.v1.SubmissionAuthResult.verdict:type_name -> thinpost.control.v1.SubmissionAuthVerdict
+	5,  // 34: thinpost.control.v1.SubmissionAcknowledgement.verdict:type_name -> thinpost.control.v1.SubmissionVerdict
+	6,  // 35: thinpost.control.v1.EdgeControl.Connect:input_type -> thinpost.control.v1.ControlFrame
+	7,  // 36: thinpost.control.v1.EdgeControl.Connect:output_type -> thinpost.control.v1.EdgeFrame
+	36, // [36:37] is the sub-list for method output_type
+	35, // [35:36] is the sub-list for method input_type
+	35, // [35:35] is the sub-list for extension type_name
+	35, // [35:35] is the sub-list for extension extendee
+	0,  // [0:35] is the sub-list for field type_name
 }
 
 func init() { file_api_control_v1_control_proto_init() }
@@ -2431,6 +3085,8 @@ func file_api_control_v1_control_proto_init() {
 		(*ControlFrame_ReconciliationComplete)(nil),
 		(*ControlFrame_Routes)(nil),
 		(*ControlFrame_InboundAck)(nil),
+		(*ControlFrame_AuthResult)(nil),
+		(*ControlFrame_SubmissionAck)(nil),
 	}
 	file_api_control_v1_control_proto_msgTypes[1].OneofWrappers = []any{
 		(*EdgeFrame_Ready)(nil),
@@ -2443,14 +3099,17 @@ func file_api_control_v1_control_proto_init() {
 		(*EdgeFrame_StartRequest)(nil),
 		(*EdgeFrame_Inbound)(nil),
 		(*EdgeFrame_InboundChunk)(nil),
+		(*EdgeFrame_Auth)(nil),
+		(*EdgeFrame_Submission)(nil),
+		(*EdgeFrame_SubmissionChunk)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_control_v1_control_proto_rawDesc), len(file_api_control_v1_control_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   22,
+			NumEnums:      6,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
