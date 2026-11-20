@@ -238,7 +238,7 @@ describe.each(cases)('$title panel', c => {
         await flushPromises();
         const change = panelButton(c, 'Change limit');
         expect(change.attributes('disabled')).toBeDefined();
-        expect(panel(c).find(`#${CSS.escape(change.attributes('aria-describedby')!)}`).text()).toBe(`Sign in again to change the ${c.noun}.`);
+        expect(panel(c).find(`#${CSS.escape(change.attributes('aria-describedby')!.split(' ').find(ref => ref.endsWith('-blocker'))!)}`).text()).toBe(`Sign in again to change the ${c.noun}.`);
     });
 
     it('validates accessibly and focuses the field without sending', async () => {

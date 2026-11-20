@@ -171,7 +171,7 @@ test('no screen or modal overflows horizontally at 360px', async ({ page }) => {
     }
 
     await openSignedIn(page, `/apps/${APP_ID}`);
-    await page.getByRole('button', { name: 'Issue key' }).click();
+    await page.getByRole('button', { name: 'Create key' }).click();
     const modal = page.locator('.vf-modal');
     await expect(modal).toBeVisible();
     const box = (await modal.boundingBox())!;

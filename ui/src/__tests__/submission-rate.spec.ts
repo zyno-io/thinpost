@@ -194,7 +194,7 @@ describe('submission rate panel', () => {
         await flushPromises();
         const change = panelButton('Change limit');
         expect(change.attributes('disabled')).toBeDefined();
-        const hint = panel().find(`#${CSS.escape(change.attributes('aria-describedby')!)}`);
+        const hint = panel().find(`#${CSS.escape(change.attributes('aria-describedby')!.split(' ').find(ref => ref.endsWith('-blocker'))!)}`);
         expect(hint.text()).toBe('Sign in again to change the sending limit.');
     });
 });

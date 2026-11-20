@@ -93,7 +93,7 @@ export function describeTestRefusal(err: unknown): ApiErrorDescription {
             return {
                 kind: 'unavailable',
                 status,
-                message: `This app has reached its daily recipient limit, or none is set. Set one in the Daily recipient limit panel on the API keys tab, then try again.${NOT_SENT}`
+                message: `This message would take the app over its daily recipient limit, or none is set. Raise it in the Daily recipient limit panel on the API keys tab, or wait for the next UTC day, then try again. Skip sending limits also bypasses it for a test.${NOT_SENT}`
             };
         case 'pending_limit_exceeded':
             return {

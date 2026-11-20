@@ -269,6 +269,8 @@ export async function installMocks(page: Page, options: MockOptions = {}) {
 
         if (rest === '/keys') return json(route, { keys: [{ id: 'f6'.repeat(16), name: 'Production sender', active: true, created_at: '2026-10-03T12:00:00Z' }] });
         if (rest === '/submission-rate') return json(route, { per_minute: 6, burst: 4 });
+        if (rest === '/recipient-quota') return json(route, method === 'PUT' ? { ...(request.postDataJSON() as object), used: 12, day: '2026-11-11' } : { daily_limit: 1000, used: 12, day: '2026-11-11' });
+        if (rest === '/pending-quota') return json(route, method === 'PUT' ? { ...(request.postDataJSON() as object), pending: 3, truncated: false } : { limit: 500, pending: 3, truncated: false });
         if (rest === '/sending-ip') return json(route, { sending_ip_id: null, name: null });
         if (rest === '/tracking-defaults') return json(route, method === 'PUT' ? (request.postDataJSON() as object) : { opens: false, clicks: true });
         if (rest === '/tracking-quota') return json(route, { daily_limit: 500, used: 120, suppressed: 7, day: '2026-11-11' });

@@ -33,13 +33,13 @@ The app area stays mounted as you move between tabs. The console remembers the l
 
 ### App limits
 
-The **API keys** tab has three panels that show and set an app's submission limits. Each shows the current setting and when it was loaded, has **Reload limit** and **Change limit**,. A failed load or save says why, and a change with an unknown outcome is flagged until you reload.
+The **API keys** tab has three panels that show and set an app's submission limits. Each shows the current setting and when it was loaded, has **Reload limit** and **Change limit** buttons. A failed load or save says why, and a change with an unknown outcome is flagged until you reload.
 
 - **Sending limit.** The submission rate: messages per minute and a burst size.
 - **Daily recipient limit.** The number of recipients the app can send to each UTC day. The panel shows how many have been used today (UTC) and the day. Changing the limit does not reset today's count.
 - **Pending-message limit.** The number of the app's messages that can be pending at once. The panel shows the pending count, which is a snapshot. When more messages are pending than Thinpost counts, it shows a lower bound ("or more") and says it is approximate.
 
-A limit of **zero blocks all new messages** for the app, and every new app starts at zero for all three. In the dialog, choose **Block all new messages** to set zero (it asks you to acknowledge), or **Allow, up to a limit** and enter a whole number from 1 up to the maximum (1,000,000 recipients per day, 100,000 pending messages). Changes take effect immediately and are audited. Messages already accepted are not affected. The admin API equivalents are `GET` and `PUT` on `/api/v1/apps/{appId}/submission-rate`, `/recipient-quota` and `/pending-quota`.
+A limit of **zero blocks all new messages** for the app, and every new app starts at zero for all three. In the dialog, choose **Block all new messages** to set zero (it asks you to acknowledge), or **Allow, up to a limit**. For the daily recipient and pending-message limits, enter a whole number from 1 up to the maximum (1,000,000 recipients per day, 100,000 pending messages); the sending limit takes a rate from 1 to 60,000 messages per minute and a burst from 1 to 10,000. Changes take effect immediately and are audited. Messages already accepted are not affected. The admin API equivalents are `GET` and `PUT` on `/api/v1/apps/{appId}/submission-rate`, `/recipient-quota` and `/pending-quota`.
 
 ### Messages
 

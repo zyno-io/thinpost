@@ -37,7 +37,7 @@
                 </HelpButton>
             </div>
             <div class="limit-actions">
-                <button type="button" class="btn sm" :disabled="isLoading || isSubmitting || !isSignedIn" @click="reload">
+                <button type="button" class="btn sm" :aria-describedby="`${id}-heading`" :disabled="isLoading || isSubmitting || !isSignedIn" @click="reload">
                     <i class="fa-solid fa-rotate" :class="{ 'fa-spin': isLoading && !!current }" aria-hidden="true" />
                     {{ isLoading && current ? 'Reloading…' : 'Reload limit' }}
                 </button>
@@ -45,7 +45,7 @@
                     class="btn primary"
                     type="button"
                     :disabled="!current || !!blocker || isLoading || isSubmitting"
-                    :aria-describedby="current && blocker ? `${id}-blocker` : undefined"
+                    :aria-describedby="current && blocker ? `${id}-heading ${id}-blocker` : `${id}-heading`"
                     @click="open"
                 >
                     <i class="fa-solid fa-gauge-high" aria-hidden="true" />

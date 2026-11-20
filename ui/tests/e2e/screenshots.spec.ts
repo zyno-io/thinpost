@@ -43,7 +43,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
 
             // Modal and tab states.
             await openSignedIn(page, `/apps/${APP_ID}`);
-            await page.getByRole('button', { name: 'Issue key' }).click();
+            await page.getByRole('button', { name: 'Create key' }).click();
             await expect(page.locator('.vf-modal')).toBeVisible();
             await page.screenshot({ path: testInfo.outputPath(`keys-modal-${colorScheme}-${width}.png`) });
             await page.getByRole('button', { name: 'Cancel' }).click();
