@@ -175,9 +175,10 @@ const EXAMPLE_ORIGIN = { local: 'scanner', domain: 'office.example.net' };
  * the target domain leaves less room (64 octets for the name part, 254 for the
  * whole address). The real hash depends on the address, so it's shown as <hash>.
  */
-function encodedExampleLocal(target: string): string {
+function encodedExampleLocal(target: string): string | null {
     const local = `${EXAMPLE_ORIGIN.local}=${EXAMPLE_ORIGIN.domain}`;
     const limit = Math.min(64, MAX_ADDRESS_BYTES - 1 - byteLength(target));
+    if (limit < 10) return null; // like the server: no room for a dash and an 8-character hash
     if (byteLength(local) <= limit) return local;
     const prefix = local.slice(0, Math.max(0, limit - 9)).replace(/\.+$/, '');
     return `${prefix}-<hash>`;
@@ -190,7 +191,8 @@ export function fromExamples(form: FromForm, verifiedDomains: readonly string[])
     const examples: FromExample[] = [];
     if (form.mode === 'domain' && form.domain) {
         const target = form.domain;
-        examples.push({ sent, becomes: `${encodedExampleLocal(target)}@${target}` });
+        const local = encodedExampleLocal(target);
+        examples.push({ sent, becomes: local === null ? 'Refused: this domain is too long to send from' : `${local}@${target}` });
     } else if (form.mode === 'address' && form.address.trim()) {
         examples.push({ sent, becomes: form.address.trim() });
     }
