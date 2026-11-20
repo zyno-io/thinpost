@@ -69,8 +69,8 @@ What control enforces when it resolves a recipient's route:
 
 - **Numeric public addresses only.** Control resolves the MX name and hands the edge a validated IP. The edge dials that IP on port 25, keeps the MX name for TLS validation, and binds the connection to a source address it owns. A bind failure fails the dial. The kernel never substitutes another source.
 - **Special-use ranges are denied.** Private, loopback, link-local, carrier-grade NAT, documentation, benchmarking, multicast, reserved, and the IPv6 translation and transition ranges are refused. IPv6 destinations must be global unicast.
-- **Your own infrastructure is denied.** You supply infrastructure ranges, including public addresses you own. Destinations inside them are refused, and a source address must lie inside them. This stops mail being relayed into your own network.
-- **Exceptions are exact.** An operator-supplied exception allows one recipient, one MX host name and one public IP together. Special-use and source addresses stay denied even when listed.
+- **Your own infrastructure is denied.** You supply infrastructure ranges, including public addresses you own. Destinations inside them are refused. Control also checks every source address the edge reports when its session starts: a source outside the ranges, or one that a route exception names, ends the session as an invalid readiness. Control never routes mail to an address the edge reports as a source, primary or additional. This stops mail being relayed into your own network or back to the edge.
+- **Exceptions are exact.** An operator-supplied exception allows one recipient, one MX host name and one public IP together. Special-use addresses and every source address stay denied even when listed.
 - **A source must exist for the family.** An address family without a configured source is not routed.
 
 The edge itself only checks that a requested source is one of its own addresses of the destination's family. DNS answers are not DNSSEC-validated, so the MX data is unauthenticated, and a recipient policy or allowlist is the control for restricting recipients.

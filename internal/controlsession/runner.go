@@ -71,6 +71,11 @@ type Bounces interface {
 	Forward(context.Context, string, string, []byte) error
 }
 
+// SourcePolicy checks the sending sources an Edge reports.
+type SourcePolicy interface {
+	CheckSources([]netip.Addr) error
+}
+
 type Runner struct {
 	WorkerID, ControllerID, JournalID   string
 	Issuer                              Issuer
@@ -84,6 +89,12 @@ type Runner struct {
 	// Legacy is what a worker that reports no sources can serve: its primary
 	// address (control's own configuration) and the global bounce domain.
 	Legacy delivery.EdgeCapabilities
+	// Sources is optional. When set, an Edge whose Ready reports a source the
+	// policy refuses (outside the infrastructure ranges, or named by a route
+	// exception) is refused like any invalid Ready. The Edge applies no
+	// destination policy, so this is what keeps extra sources from being
+	// routed to as destinations.
+	Sources SourcePolicy
 	// Reports is optional.
 	Reports Reports
 	// Inbound is optional. When set, the session advertises the inbound
@@ -394,6 +405,9 @@ func (r *Runner) RunDraining(parent context.Context, drain <-chan struct{}) erro
 				}
 				reported, valid := capabilitiesFromReady(body.Ready, r.Legacy)
 				if !valid || !edgeprotocol.ValidCapabilities(body.Ready.GetCapabilities()) {
+					return errors.New("invalid edge readiness")
+				}
+				if r.Sources != nil && reported.Explicit && r.Sources.CheckSources(reported.Addresses) != nil {
 					return errors.New("invalid edge readiness")
 				}
 				inboundOn = r.Inbound != nil && edgeprotocol.HasCapability(body.Ready.GetCapabilities(), edgeprotocol.CapInbound)

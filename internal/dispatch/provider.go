@@ -135,6 +135,12 @@ func (p *Provider) prepare(ctx context.Context, claim delivery.Claim, caps deliv
 	if err != nil || route.MXName == "" || strings.ContainsAny(route.MXName, "\r\n ") || !route.Address.IsValid() || route.Address.Zone() != "" {
 		return nil, nil, errors.New("recipient route unavailable")
 	}
+	// Never route to an address this worker sends from, primary or extra: the
+	// Edge applies no destination policy, so this is the only check against
+	// delivering to the worker itself or to its own network's gateway.
+	if caps.Has(route.Address.Unmap().String()) {
+		return nil, nil, errors.New("recipient route targets an edge source address")
+	}
 	from, err := p.Envelopes.ForDelivery(ctx, claim)
 	if err != nil || from == "" {
 		return nil, nil, errors.New("bounce address unavailable")

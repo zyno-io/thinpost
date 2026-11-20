@@ -177,3 +177,22 @@ func TestLocalOutcomeLogsIDsAfterCommit(t *testing.T) {
 		t.Fatalf("logged without a committed result: %q %v", lines, err)
 	}
 }
+
+// The Edge applies no destination policy, so control never routes to an
+// address the worker reports as a source, primary or extra, even when the
+// resolver's filter allowed it.
+func TestRouteToAnEdgeSourceIsRefused(t *testing.T) {
+	for _, source := range []string{"8.8.8.8"} {
+		p, r, _, lease := setup(t)
+		caps := delivery.EdgeCapabilities{Explicit: true, Addresses: []netip.Addr{netip.MustParseAddr("45.0.1.22"), netip.MustParseAddr(source)}}
+		start, _, err := p.Next(context.Background(), lease, caps)
+		if !errors.Is(err, delivery.ErrNoWork) || start != nil || len(r.results) != 1 || r.results[0].Outcome != "rejected" {
+			t.Fatalf("route to extra source %s was dispatched: %v %+v", source, err, r.results)
+		}
+	}
+	p, _, _, lease := setup(t)
+	caps := delivery.EdgeCapabilities{Explicit: true, Addresses: []netip.Addr{netip.MustParseAddr("45.0.1.22")}}
+	if start, _, err := p.Next(context.Background(), lease, caps); err != nil || start == nil {
+		t.Fatal("an ordinary route was refused", err)
+	}
+}

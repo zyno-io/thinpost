@@ -149,6 +149,39 @@ func (p *Policy) AllowedFor(address netip.Addr, recipient, mx string) bool {
 	return ok
 }
 
+// CheckSources reports whether every address an Edge reports as a sending
+// source is acceptable to this policy: each must lie inside an infrastructure
+// range, so mail is never routed to it as a destination, and none may be named
+// by a route exception. NewPolicy applies the same rules to the sources it is
+// built with; this applies them to sources only known once an Edge reports
+// them. The Edge applies no destination policy, so this is the only check.
+func (p *Policy) CheckSources(sources []netip.Addr) error {
+	if p == nil || len(p.local) == 0 || len(sources) == 0 {
+		return errors.New("SMTP source policy is not configured")
+	}
+	for _, source := range sources {
+		if !source.IsValid() || source.Zone() != "" || source.Is4In6() || !publicAddress(source) {
+			return errors.New("invalid SMTP source address")
+		}
+		inside := false
+		for _, prefix := range p.local {
+			if prefix.Contains(source) {
+				inside = true
+				break
+			}
+		}
+		if !inside {
+			return errors.New("SMTP source is outside the infrastructure ranges")
+		}
+		for key := range p.exceptions {
+			if key.address == source {
+				return errors.New("a route exception names an SMTP source")
+			}
+		}
+	}
+	return nil
+}
+
 func (p *Policy) isExceptionAddress(address netip.Addr) bool {
 	if p == nil || !address.IsValid() || address.Zone() != "" || address.Is4In6() || !publicAddress(address) || p.isSource(address) {
 		return false

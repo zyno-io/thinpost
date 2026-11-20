@@ -112,3 +112,34 @@ func TestSourceDialerPinsSourceAndDoesNotFilterDestinations(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckSourcesRestoresTheInfrastructureGuarantees(t *testing.T) {
+	infra := []netip.Prefix{netip.MustParsePrefix("45.0.1.0/24"), netip.MustParsePrefix("45.0.0.0/24")}
+	exception := Exception{Recipient: "a@mailhost.example", MX: "mx.mailhost.example", Address: netip.MustParseAddr("45.0.0.50")}
+	p, err := NewPolicy(infra, []netip.Addr{netip.MustParseAddr("45.0.1.22")}, exception)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := func(addrs ...string) error {
+		var list []netip.Addr
+		for _, a := range addrs {
+			list = append(list, netip.MustParseAddr(a))
+		}
+		return p.CheckSources(list)
+	}
+	if err := ok("45.0.1.22", "45.0.0.10"); err != nil {
+		t.Fatal("sources inside the ranges refused", err)
+	}
+	for name, addrs := range map[string][]string{
+		"outside the ranges":         {"45.0.1.22", "8.8.8.8"},
+		"named by a route exception": {"45.0.1.22", "45.0.0.50"},
+		"special-use":                {"10.1.2.3"},
+	} {
+		if ok(addrs...) == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if p.CheckSources(nil) == nil || (*Policy)(nil).CheckSources([]netip.Addr{netip.MustParseAddr("45.0.1.22")}) == nil {
+		t.Error("an empty list or nil policy was accepted")
+	}
+}
