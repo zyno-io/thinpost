@@ -36,6 +36,8 @@ PostgreSQL can log bind values unless you configure it not to. Set `log_paramete
 | Received bounces and inbound messages | Object store | Encrypted. Inbound objects live under the `inbound/` prefix |
 | Recipient addresses, sender domain, From address and name, subject | PostgreSQL, plaintext | Database access control. Enhanced Protection subjects are withheld from console reads |
 | API keys | PostgreSQL | A digest only. The secret is shown once at creation |
+| SMTP credentials | PostgreSQL | A SHA-256 digest only. The password is shown once at creation. The credential ID (its username), name and last-used time are plaintext |
+| The From address a client sent over SMTP, when the app's policy replaced it (`original_from`) | PostgreSQL, plaintext | Database access control, like the other sender metadata. Shown in the console even for Enhanced Protection messages |
 | Webhook signing secrets | PostgreSQL | Sealed with the object keyring, never returned |
 | Delivery and webhook history, suppressions | PostgreSQL | Contains IDs, states and codes. Suppression audit rows record the reason and origin but never the address |
 | Edge journal | A volume on the Edge | Attempt metadata only, with no content |
@@ -69,7 +71,7 @@ EP is a request-time choice by the sender. It limits who sees content in the con
 
 ## Audit events
 
-Operator actions that change state, such as creating an app, issuing or revoking a key, pausing an app, changing suppressions, tracking defaults, the retry policy and feedback-loop settings, write audit events in the same database transaction. Records name IDs and old and new values, never addresses or subjects. An app's release or cancel of a [held message](/guide/holding-messages) is audited the same way, with the actor `key:<key ID>`. An administrator's console test send is audited as `message.test.submitted` in the transaction that commits the message: the actor is the administrator's subject, the resource is the message ID, and the only details are `recipient_count` and the two operator option flags `bypass_limits` and `bypass_recipient_policy`, with no subject, domain or addresses. Audit rows live in PostgreSQL. Protect the table, retain it according to your policy, and use database privileges to prevent tampering. Thinpost does not provide tamper-evident storage.
+Operator actions that change state, such as creating an app, issuing or revoking a key or an SMTP credential, changing an app's SMTP From policy, pausing an app, changing suppressions, tracking defaults, the retry policy and feedback-loop settings, write audit events in the same database transaction. Records name IDs and old and new values, never addresses or subjects. An app's release or cancel of a [held message](/guide/holding-messages) is audited the same way, with the actor `key:<key ID>`. An administrator's console test send is audited as `message.test.submitted` in the transaction that commits the message: the actor is the administrator's subject, the resource is the message ID, and the only details are `recipient_count` and the two operator option flags `bypass_limits` and `bypass_recipient_policy`, with no subject, domain or addresses. Audit rows live in PostgreSQL. Protect the table, retain it according to your policy, and use database privileges to prevent tampering. Thinpost does not provide tamper-evident storage.
 
 ## Retention
 

@@ -19,6 +19,8 @@ Three places each own one part of a sending IP:
 
 An app with no assignment uses the **primary** address. The primary needs no database row, but may have one that only gives it a name.
 
+The HELO name is also the **SMTP submission host**: the server name the console's SMTP tab gives to the software that sends an app's mail over SMTP, because that name already has a valid certificate. An app uses the HELO name of its assigned sending IP, or of the row that names the primary address. If the primary has no row, the SMTP tab asks for one, so name it here. See [Operator console](/guide/console#smtp). SMTP submission itself is not available yet, so today this only affects what the tab will show once it is.
+
 ::: warning Documentation addresses are refused
 Thinpost rejects documentation, private, loopback, link-local and other special-purpose ranges as sending sources, so the examples below use `<your public IPv4>` rather than a sample address. The address must be a routable public IPv4 address that you control.
 :::
