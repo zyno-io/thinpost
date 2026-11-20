@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emersion/go-smtp"
+	smtp "github.com/zyno-io/thinpost/internal/thirdparty/gosmtp"
 )
 
 const maxAllowedBytes = 16 << 20
