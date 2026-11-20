@@ -90,6 +90,12 @@ func TestAnnouncerBecomesReadyAndLogsOneFixedLine(t *testing.T) {
 	defer cancel()
 	go a.run(ctx)
 	waitFor(t, "ready", a.ready)
+	// The announcer marks itself ready just before it logs, so wait for the line.
+	waitFor(t, "ready log", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(logs) > 0
+	})
 	mu.Lock()
 	defer mu.Unlock()
 	if len(logs) != 1 || logs[0] != "source neighbours ready n=%d" {

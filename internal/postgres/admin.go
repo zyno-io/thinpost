@@ -193,6 +193,18 @@ func (r *Repository) RevokeKeyForOperator(ctx context.Context, actor, appID, key
 		return err
 	}
 	defer tx.Rollback()
+	// Lock the app before the key, the same order a submission takes (app, then
+	// key). Updating the key first and then inserting the audit row (whose
+	// foreign key locks the app) deadlocks against a submission in flight, and
+	// Postgres aborts the revocation.
+	var locked bool
+	err = tx.QueryRowContext(ctx, `SELECT true FROM apps WHERE id=$1 FOR UPDATE`, appID).Scan(&locked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return admin.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
 	var id string
 	err = tx.QueryRowContext(ctx, `UPDATE api_keys SET active=false WHERE id=$1 AND app_id=$2 AND active RETURNING id`, keyID, appID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
