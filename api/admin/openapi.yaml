@@ -2511,10 +2511,10 @@ components:
           type: array
           maxItems: 100
           items: { type: string }
-          description: Response only. Outbound messages hold at most 10; a received message can list up to 100.
+          description: Response only. A message sent through the API holds at most 10; a received message or one submitted as raw MIME over SMTP can list up to 100 (read from its headers).
         to: { type: array, items: { type: string } }
-        cc: { type: array, maxItems: 100, items: { type: string }, description: 'Cc recipients; absent when none. Messages accepted before Cc and Bcc were supported never have any. Outbound messages hold at most 99; a received message can list up to 100.' }
-        bcc: { type: array, maxItems: 99, items: { type: string }, description: Bcc recipients, visible to operators only; absent when none. }
+        cc: { type: array, maxItems: 100, items: { type: string }, description: 'Cc recipients; absent when none. Messages accepted before Cc and Bcc were supported never have any. A message sent through the API holds at most 99; a received message or one submitted as raw MIME over SMTP can list up to 100 (read from its headers).' }
+        bcc: { type: array, maxItems: 100, items: { type: string }, description: 'Bcc recipients, visible to operators only; absent when none. At most 99 for a message sent through the API; a raw MIME submission can have 100 (every recipient absent from its To and Cc headers).' }
         subject: { type: string }
         text: { type: string }
         html: { type: string }
@@ -2529,7 +2529,7 @@ components:
         omitted:
           type: array
           items: { type: string, enum: [text, html, headers] }
-          description: Inbound content reads only. What could not be shown (a body over 1 MiB once decoded, an unknown charset or an oversized header block); absent when nothing was left out.
+          description: Received messages and messages submitted as raw MIME over SMTP only. What could not be shown (a body over 1 MiB once decoded, an unknown charset or an oversized header block); absent when nothing was left out.
     AttachmentMetadata:
       type: object
       required: [index, filename, content_type, size, inline]

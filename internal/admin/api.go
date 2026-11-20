@@ -295,9 +295,9 @@ type MessageBody struct {
 	// contents above are parsed from the original, which can be downloaded
 	// whole, and Attachments is always empty.
 	Raw bool `json:"raw,omitempty"`
-	// Omitted names what an inbound read could not show ("text", "html",
+	// Omitted names what an inbound or raw MIME read could not show ("text", "html",
 	// "headers"): a body over 1 MiB once decoded, an unknown charset or an
-	// oversized header block. Absent for outbound messages.
+	// oversized header block. Absent for messages sent through the API.
 	Omitted []string `json:"omitted,omitempty"`
 }
 

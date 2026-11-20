@@ -20,7 +20,7 @@ export interface ParsedMessageBody {
     attachments: AttachmentInfo[];
     /** The message was submitted as raw MIME over SMTP, so its original can be downloaded as an .eml. */
     raw: boolean;
-    /** Inbound reads only: what could not be shown (`text`, `html` or `headers`). Empty for outbound messages. */
+    /** Received and raw MIME messages: what could not be shown (`text`, `html` or `headers`). Empty for messages sent through the API. */
     omitted: string[];
 }
 
