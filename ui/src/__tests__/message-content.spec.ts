@@ -6,6 +6,7 @@ import { httpError, openHelp } from './helpers';
 const api = vi.hoisted(() => ({
     getAppMessageBody: vi.fn(),
     downloadAppMessageAttachment: vi.fn(),
+    downloadMessageRaw: vi.fn(),
     getPublicConfig: vi.fn()
 }));
 vi.mock('@/openapi-client-generated', () => ({ DefaultApi: api }));
@@ -441,5 +442,51 @@ describe('message content with a loader (inbound mail)', () => {
         await button('Show content').trigger('click');
         await flushPromises();
         expect(loader).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('original message download', () => {
+    beforeEach(() => {
+        api.downloadMessageRaw.mockResolvedValue({ data: new Blob(['From: a@example.com'], { type: 'message/rfc822' }) });
+    });
+
+    it('shows no button unless the body is raw', async () => {
+        api.getAppMessageBody.mockResolvedValue({ data: bodyOf() });
+        mountContent();
+        await flushPromises();
+        expect(wrapper!.find('[data-testid="download-original"]').exists()).toBe(false);
+        expect(wrapper!.find('[data-testid="raw-note"]').exists()).toBe(false);
+    });
+
+    it('saves the original as an octet-stream .eml', async () => {
+        api.getAppMessageBody.mockResolvedValue({ data: bodyOf({ raw: true, html: '' }) });
+        mountContent();
+        await flushPromises();
+        let anchor: HTMLAnchorElement | undefined;
+        clickSpy.mockImplementation(function (this: HTMLAnchorElement) {
+            anchor = this;
+        });
+        expect(button('Download original (.eml)').exists()).toBe(true);
+        await button('Download original (.eml)').trigger('click');
+        await flushPromises();
+        expect(api.downloadMessageRaw).toHaveBeenCalledWith({ path: { appId: APP_ID, messageId: MESSAGE_ID }, parseAs: 'blob' });
+        expect((createObjectURL.mock.calls[0]![0] as Blob).type).toBe('application/octet-stream');
+        expect(anchor!.download).toBe(`message-${MESSAGE_ID}.eml`);
+        expect(vf.showConfirm).not.toHaveBeenCalled();
+    });
+
+    it('confirms first for Enhanced Protection and reports failures with the audit wording', async () => {
+        api.getAppMessageBody.mockResolvedValue({ data: bodyOf({ raw: true, enhanced_protection: true, html: '' }) });
+        vf.showConfirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+        mountContent(true);
+        await button('Show content').trigger('click');
+        await flushPromises();
+        await button('Download original').trigger('click');
+        await flushPromises();
+        expect(api.downloadMessageRaw).not.toHaveBeenCalled();
+        api.downloadMessageRaw.mockRejectedValue(httpError(503));
+        await button('Download original').trigger('click');
+        await flushPromises();
+        expect(wrapper!.text()).toContain('may still have been recorded in the audit log');
     });
 });

@@ -9,7 +9,7 @@ import (
 
 // SourceVersion is the stored-source version written for every message
 // accepted by this release. Version 1 sources (accepted earlier) are still
-// readable; they keep the single-recipient To header for life and cannot carry
+// readable (version 3 is a raw MIME source, see raw.go); they keep the single-recipient To header for life and cannot carry
 // Cc or Bcc. Never reinterpret version 2: a change in header behaviour needs a
 // new version.
 const SourceVersion = 2
@@ -21,7 +21,33 @@ var ErrInvalidSource = errors.New("invalid source object")
 // Source is a decoded stored source object.
 type Source struct {
 	Version int
+	// Message is the structured message of version 1 and 2 sources; it is the
+	// zero value for version 3.
 	Message Message
+	// Raw is the raw MIME message and RawHeader its stored decisions, for
+	// version 3 only. Raw aliases the decoded data.
+	Raw       []byte
+	RawHeader RawHeader
+}
+
+// Envelope returns every recipient in delivery-index order, for any version.
+func (s Source) Envelope() []string {
+	if s.Version == RawSourceVersion {
+		return s.RawHeader.Recipients
+	}
+	return s.Message.Envelope()
+}
+
+// RecipientKind returns the kind of the envelope entry at index i, or "" when
+// i is out of range, for any version.
+func (s Source) RecipientKind(i int) string {
+	if s.Version == RawSourceVersion {
+		if i < 0 || i >= len(s.RawHeader.Kinds) {
+			return ""
+		}
+		return s.RawHeader.Kinds[i]
+	}
+	return s.Message.RecipientKind(i)
 }
 
 // ListsRecipients reports whether copies of this message show the full To and
@@ -41,6 +67,9 @@ func EncodeSource(m Message) ([]byte, error) {
 // DecodeSource strictly decodes and validates a stored source object. The
 // error is always ErrInvalidSource and never includes content.
 func DecodeSource(data []byte, enhancedProtection bool) (Source, error) {
+	if bytes.HasPrefix(data, []byte(rawSourceMagic)) {
+		return decodeRawSource(data, enhancedProtection)
+	}
 	var env sourceEnvelope
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()

@@ -146,7 +146,9 @@ paths:
         Source message contents with attachment metadata, as the operator API's
         getAppMessageBody. An Enhanced Protection message commits a
         message.body.read audit record (actor key:<keyId>) before the object is
-        read. Outbound content is readable until Thinpost's content expiry.
+        read. Outbound content is readable until Thinpost's content expiry. A
+        message submitted as raw MIME over SMTP has raw: true and no attachments;
+        its original is downloadable from the console only.
       responses:
         '200':
           description: Source message contents; sensitive and not cacheable

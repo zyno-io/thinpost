@@ -281,6 +281,7 @@
     "thinpost.fixture",
     "message.body.read",
     "message.attachment.read",
+    "message.raw.read",
     "message.delivery.headers.read",
     "inbound.body.read",
     "inbound.raw.read",

@@ -15,10 +15,23 @@
                     </p>
                 </HelpButton>
             </div>
-            <button v-if="body" type="button" class="btn sm" @click="hide">
-                <i class="fa-solid fa-eye-slash" aria-hidden="true" />
-                Hide content
-            </button>
+            <div v-if="body" class="header-actions">
+                <button
+                    v-if="body.raw"
+                    type="button"
+                    class="btn sm"
+                    data-testid="download-original"
+                    :disabled="isDownloadingRaw || authState.status !== 'signed-in'"
+                    @click="downloadOriginal"
+                >
+                    <i class="fa-solid fa-download" aria-hidden="true" />
+                    {{ isDownloadingRaw ? 'Downloading…' : 'Download original (.eml)' }}
+                </button>
+                <button type="button" class="btn sm" @click="hide">
+                    <i class="fa-solid fa-eye-slash" aria-hidden="true" />
+                    Hide content
+                </button>
+            </div>
             <button v-else type="button" class="btn sm" :disabled="isLoading || authState.status !== 'signed-in'" @click="show">
                 <i class="fa-solid fa-file-lines" aria-hidden="true" />
                 {{ isLoading ? 'Loading…' : 'Show content' }}
@@ -34,6 +47,10 @@
                 <p class="hint untrusted-note">
                     {{ received ? 'This is the message as it arrived.' : 'This is the content your app sent.' }} Scripts, links and content from the internet are turned
                     off.
+                </p>
+                <ApiErrorNotice v-if="rawError" :error="rawError" />
+                <p v-if="body.raw" class="hint raw-note" data-testid="raw-note">
+                    This message was sent as a complete email message. Attachments are part of it, so download the original (.eml) to get them.
                 </p>
                 <p v-if="body.omitted.length" class="hint omitted-note" data-testid="omitted-note">
                     Part of this message is too large or in a form Thinpost can't show here ({{ omittedLabel }}). Download the .eml to see everything.
@@ -152,6 +169,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId,
 
 import { describeApiError, InvalidResponseError, type ApiErrorDescription, type DescribeOptions } from '@/api-errors';
 import { downloadAttachment } from '@/attachment-download';
+import { downloadMessageRaw } from '@/message-raw-download';
 import { authState } from '@/auth';
 import { confirmProtectedAccess, withAuditSuffix } from '@/enhanced-protection';
 import { formatBytes } from '@/format';
@@ -200,6 +218,11 @@ const ATTACHMENT_ERRORS = {
     unavailable: 'The attachment couldn\'t be read right now. Try again in a moment.'
 };
 
+const RAW_ERRORS = {
+    notFound: 'The original message wasn\'t found.',
+    unavailable: 'The original message couldn\'t be read right now. Try again in a moment.'
+};
+
 const uid = useId();
 
 // Message contents live only in this component's memory and are dropped on hide, unmount or session end.
@@ -211,6 +234,8 @@ const inlineImages = shallowRef<ReadonlyMap<string, string>>(new Map());
 const inlinePending = ref(false);
 const downloading = ref(new Set<number>());
 const downloadError = ref<ApiErrorDescription | null>(null);
+const isDownloadingRaw = ref(false);
+const rawError = ref<ApiErrorDescription | null>(null);
 
 let bodySeq = 0;
 let isUnmounted = false;
@@ -280,6 +305,8 @@ function hide() {
     inlineImages.value = new Map();
     inlinePending.value = false;
     downloadError.value = null;
+    rawError.value = null;
+    isDownloadingRaw.value = false;
     downloading.value = new Set();
     tab.value = 'rendered';
     revokeAllObjectUrls();
@@ -403,6 +430,26 @@ async function download(attachment: AttachmentInfo) {
     }
 }
 
+async function downloadOriginal() {
+    if (isDownloadingRaw.value || authState.status !== 'signed-in') return;
+    const confirmed = await confirmProtectedAccess('raw', { enhancedProtection: props.enhancedProtection });
+    const seq = bodySeq;
+    const isCurrent = () => !isUnmounted && seq === bodySeq && authState.status === 'signed-in';
+    if (!confirmed || !isCurrent()) return;
+    isDownloadingRaw.value = true;
+    rawError.value = null;
+    try {
+        await downloadMessageRaw({ appId: props.appId, messageId: props.messageId, register: registerObjectUrl, shouldProceed: isCurrent });
+    } catch (err) {
+        if (!isCurrent()) return;
+        const description = describeApiError(err, RAW_ERRORS);
+        rawError.value = props.enhancedProtection ? withAuditSuffix(description) : description;
+        showToast({ message: 'Download failed', durationSecs: 3 });
+    } finally {
+        if (seq === bodySeq) isDownloadingRaw.value = false;
+    }
+}
+
 // ---- Tabs ----
 
 function onTabKeydown(event: KeyboardEvent) {
@@ -430,6 +477,12 @@ function onTabKeydown(event: KeyboardEvent) {
 .card-header h2 {
     display: flex;
     align-items: center;
+    gap: 8px;
+}
+
+.header-actions {
+    display: flex;
+    flex-wrap: wrap;
     gap: 8px;
 }
 

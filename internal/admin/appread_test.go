@@ -63,6 +63,9 @@ func (s *scopedReads) ReadMessageBody(_ context.Context, actor, app, msg string)
 func (s *scopedReads) ReadAttachment(_ context.Context, actor, app, msg string, _ int) (AttachmentContent, error) {
 	return s.attachment, s.own(actor, app, msg)
 }
+func (s *scopedReads) OpenMessageRaw(context.Context, string, string, string) ([]byte, error) {
+	return nil, errors.New("not routed")
+}
 func (s *scopedReads) ReadDeliveryHeaders(context.Context, string, string, string, string) ([]HeaderField, error) {
 	return nil, errors.New("not routed")
 }
@@ -229,6 +232,9 @@ func (e *errReader) ReadMessageBody(context.Context, string, string, string) (Me
 }
 func (e *errReader) ReadAttachment(context.Context, string, string, string, int) (AttachmentContent, error) {
 	return AttachmentContent{}, e.err
+}
+func (e *errReader) OpenMessageRaw(context.Context, string, string, string) ([]byte, error) {
+	return nil, e.err
 }
 func (e *errReader) ReadDeliveryHeaders(context.Context, string, string, string, string) ([]HeaderField, error) {
 	return nil, e.err

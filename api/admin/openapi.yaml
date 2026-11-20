@@ -1620,6 +1620,39 @@ paths:
         '404': { description: Message or attachment index not found }
         '503': { description: Object storage unavailable or not configured }
         default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/messages/{messageId}/raw:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: messageId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    get:
+      operationId: downloadMessageRaw
+      description: >-
+        The original message of a raw MIME submission, exactly as received, as an
+        .eml download (always application/octet-stream). Audited (message.raw.read)
+        before the object is read when the message uses Enhanced Protection; not
+        audited otherwise. A message not submitted as raw MIME is 404.
+      responses:
+        '200':
+          description: Original message bytes; sensitive and not cacheable
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: attachment with a message-<id>.eml filename
+            Cache-Control:
+              schema: { type: string, const: no-store }
+            X-Content-Type-Options:
+              schema: { type: string, const: nosniff }
+            Cross-Origin-Resource-Policy:
+              schema: { type: string, const: same-origin }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '404': { description: Message not found, or not submitted as raw MIME }
+        '503': { description: Object storage unavailable or not configured }
+        default: { $ref: '#/components/responses/Error' }
   /apps/{appId}/messages/{messageId}/deliveries/{deliveryId}/headers:
     parameters:
       - { $ref: '#/components/parameters/AppId' }
@@ -2478,10 +2511,10 @@ components:
           type: array
           maxItems: 100
           items: { type: string }
-          description: Response only. Outbound messages hold at most 10; a received message can list up to 100.
+          description: Response only. A message sent through the API holds at most 10; a received message or one submitted as raw MIME over SMTP can list up to 100 (read from its headers).
         to: { type: array, items: { type: string } }
-        cc: { type: array, maxItems: 100, items: { type: string }, description: 'Cc recipients; absent when none. Messages accepted before Cc and Bcc were supported never have any. Outbound messages hold at most 99; a received message can list up to 100.' }
-        bcc: { type: array, maxItems: 99, items: { type: string }, description: Bcc recipients, visible to operators only; absent when none. }
+        cc: { type: array, maxItems: 100, items: { type: string }, description: 'Cc recipients; absent when none. Messages accepted before Cc and Bcc were supported never have any. A message sent through the API holds at most 99; a received message or one submitted as raw MIME over SMTP can list up to 100 (read from its headers).' }
+        bcc: { type: array, maxItems: 100, items: { type: string }, description: 'Bcc recipients, visible to operators only; absent when none. At most 99 for a message sent through the API; a raw MIME submission can have 100 (every recipient absent from its To and Cc headers).' }
         subject: { type: string }
         text: { type: string }
         html: { type: string }
@@ -2490,10 +2523,13 @@ components:
           type: array
           maxItems: 20
           items: { $ref: '#/components/schemas/AttachmentMetadata' }
+        raw:
+          type: boolean
+          description: Present and true when the message was submitted as raw MIME over SMTP. The contents above are parsed from the original message, which downloadMessageRaw returns whole; attachments is then always empty and the attachment endpoint is 404.
         omitted:
           type: array
           items: { type: string, enum: [text, html, headers] }
-          description: Inbound content reads only. What could not be shown (a body over 1 MiB once decoded, an unknown charset or an oversized header block); absent when nothing was left out.
+          description: Received messages and messages submitted as raw MIME over SMTP only. What could not be shown (a body over 1 MiB once decoded, an unknown charset or an oversized header block); absent when nothing was left out.
     AttachmentMetadata:
       type: object
       required: [index, filename, content_type, size, inline]

@@ -209,6 +209,12 @@ type fakeBodyReader struct {
 	headers    []HeaderField
 	err        error
 	index      int
+	raw        []byte
+}
+
+func (f *fakeBodyReader) OpenMessageRaw(context.Context, string, string, string) ([]byte, error) {
+	f.calls++
+	return f.raw, f.err
 }
 
 func (f *fakeBodyReader) ReadAttachment(_ context.Context, _, _, _ string, index int) (AttachmentContent, error) {
@@ -239,6 +245,37 @@ func TestBodyRequiresAdminAndIsNotCached(t *testing.T) {
 	got := send(h, "GET", path, "", "valid")
 	if got.Code != 200 || got.Header().Get("Cache-Control") != "no-store" || body.calls != 1 || !strings.Contains(got.Body.String(), `"reply_to":["help@example.com"]`) {
 		t.Fatal("body read failed")
+	}
+	h.ContentReader = nil
+	if got = send(h, "GET", path, "", "valid"); got.Code != 503 {
+		t.Fatal("missing object store did not fail closed")
+	}
+}
+
+func TestRawDownloadIsAnOpaqueAttachment(t *testing.T) {
+	body := &fakeBodyReader{raw: []byte("From: a@example.com\r\n\r\nhi\r\n")}
+	app, msg := strings.Repeat("a", 32), strings.Repeat("b", 32)
+	path := "/api/v1/apps/" + app + "/messages/" + msg + "/raw"
+	h := &Handler{Authenticator: fakeAuth{admin: false}, Store: &fakeStore{}, ContentReader: body}
+	if got := send(h, "GET", path, "", "valid"); got.Code != 403 || body.calls != 0 {
+		t.Fatal("unauthorized raw read")
+	}
+	h.Authenticator = fakeAuth{admin: true}
+	got := send(h, "GET", path, "", "valid")
+	if got.Code != 200 || got.Body.String() != string(body.raw) || got.Header().Get("Content-Type") != "application/octet-stream" ||
+		got.Header().Get("X-Content-Type-Options") != "nosniff" || got.Header().Get("Cache-Control") != "no-store" ||
+		got.Header().Get("Content-Disposition") != `attachment; filename="message-`+msg+`.eml"` {
+		t.Fatalf("raw download: %d %v", got.Code, got.Header())
+	}
+	if got = send(h, "POST", path, "", "valid"); got.Code != 405 {
+		t.Fatal("raw accepted a POST", got.Code)
+	}
+	if got = send(h, "GET", path+"?x=1", "", "valid"); got.Code != 400 {
+		t.Fatal("raw accepted a query string", got.Code)
+	}
+	body.err = ErrNotFound
+	if got = send(h, "GET", path, "", "valid"); got.Code != 404 {
+		t.Fatal("v1/v2 message must be 404", got.Code)
 	}
 	h.ContentReader = nil
 	if got = send(h, "GET", path, "", "valid"); got.Code != 503 {

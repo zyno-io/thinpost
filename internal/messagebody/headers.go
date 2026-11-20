@@ -10,7 +10,7 @@ import (
 
 const (
 	maxHeaderBlock  = 64 << 10
-	maxHeaderFields = 100
+	maxHeaderFields = 256
 )
 
 var errHeaders = errors.New("invalid MIME headers")
@@ -19,7 +19,7 @@ var errHeaders = errors.New("invalid MIME headers")
 // first empty line (CRLF CRLF), at most 64 KiB. Continuation lines are
 // unfolded by removing the line break, values are otherwise raw (RFC 2047
 // words are not decoded in Value), and DecodedValue is set only when RFC 2047
-// decoding changes the value. At most 100 fields are accepted and names must
+// decoding changes the value. At most 256 fields are accepted and names must
 // be printable ASCII without ":". Errors are constant and never quote input.
 func ParseHeaders(data []byte) ([]admin.HeaderField, error) {
 	limit := len(data)
@@ -68,12 +68,18 @@ func ParseHeaders(data []byte) ([]admin.HeaderField, error) {
 		if colon < 1 || len(fields) >= maxHeaderFields {
 			return nil, errHeaders
 		}
-		for _, c := range line[:colon] {
+		// Obsolete syntax allows whitespace before the colon; a raw message can
+		// carry it (and is sent that way), so it is trimmed from the name.
+		rawName := bytes.TrimRight(line[:colon], " \t")
+		if len(rawName) == 0 {
+			return nil, errHeaders
+		}
+		for _, c := range rawName {
 			if c < 33 || c > 126 {
 				return nil, errHeaders
 			}
 		}
-		name = string(line[:colon])
+		name = string(rawName)
 		value = append(value[:0:0], line[colon+1:]...)
 		have = true
 	}

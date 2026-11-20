@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/message"
 	"github.com/zyno-io/thinpost/internal/objectkey"
 	"github.com/zyno-io/thinpost/internal/oplog"
+	"github.com/zyno-io/thinpost/internal/rawmime"
 	"github.com/zyno-io/thinpost/internal/submission"
 	"github.com/zyno-io/thinpost/internal/tracking"
 )
@@ -258,7 +260,12 @@ func (s *Service) PrepareNext(ctx context.Context) (resultErr error) {
 		return errors.New("invalid source object")
 	}
 	reason = "signing_key"
-	key, err := s.Keys.ForSender(work, claim.AppID, payload.Message.From)
+	signFrom := payload.Message.From
+	if payload.Version == submission.RawSourceVersion {
+		// ForSender reads only the domain; a raw source records no address.
+		signFrom = "sender@" + payload.RawHeader.SenderDomain
+	}
+	key, err := s.Keys.ForSender(work, claim.AppID, signFrom)
 	if err != nil {
 		return fmt.Errorf("resolve signing key: %w", err)
 	}
@@ -266,6 +273,16 @@ func (s *Service) PrepareNext(ctx context.Context) (resultErr error) {
 		return errors.New("signing domain does not match the recorded sender domain")
 	}
 	claim.SigningDomain = key.Domain
+	if payload.Version == submission.RawSourceVersion {
+		if payload.RawHeader.SenderDomain != claim.SenderDomain {
+			return errors.New("signing domain does not match the recorded sender domain")
+		}
+		deliveries, err := s.prepareRaw(work, claim, payload, key, &reason)
+		if err != nil {
+			return err
+		}
+		return s.commit(ctx, hb, claim, deliveries, &reason)
+	}
 	if payload.Message.Tracking != nil {
 		reason = "internal"
 		if s.Tracking == nil || s.Tracking.Objects == nil || s.Tracking.Links == nil || s.Tracking.EventLimit < 1 || s.Tracking.EventLimit > 1000 {
@@ -342,16 +359,78 @@ func (s *Service) PrepareNext(ctx context.Context) (resultErr error) {
 		}
 		deliveries = append(deliveries, Delivery{ID: id, RecipientIndex: index, ObjectKey: objectKey, Tracking: preparedTracking})
 	}
-	reason = "queue_commit"
+	return s.commit(ctx, hb, claim, deliveries, &reason)
+}
+
+// commit stops the heartbeat and queues the prepared deliveries.
+func (s *Service) commit(ctx context.Context, hb *heartbeat, claim Claim, deliveries []Delivery, reason *string) error {
+	*reason = "queue_commit"
 	hb.stop()
 	if hb.lost.Load() {
 		return ErrLostLease
 	}
-	if err = s.Repository.CommitPreparation(ctx, claim, deliveries); err != nil {
+	if err := s.Repository.CommitPreparation(ctx, claim, deliveries); err != nil {
 		return err
 	}
 	oplog.Message(claim.AppID, claim.MessageID, oplog.StatusPrepared)
 	return nil
+}
+
+// prepareRaw prepares a version 3 (raw MIME) source. The message is prepared
+// and signed once; every recipient's delivery points at an identical object,
+// because the recipients are in the SMTP envelope only. Tracking and one-click
+// unsubscribe never apply: the raw message is the client's own.
+func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submission.Source, key SigningKey, reason *string) ([]Delivery, error) {
+	h := payload.RawHeader
+	*reason = "source_invalid"
+	scanned, err := rawmime.Scan(payload.Raw)
+	if err != nil {
+		return nil, errors.New("invalid source object")
+	}
+	if h.FromField == "" && (scanned.From == nil || addressDomain(scanned.From.Address) != h.SenderDomain) {
+		return nil, errors.New("invalid source object")
+	}
+	*reason = "mime_build"
+	final, err := rawmime.Prepare(payload.Raw, rawmime.PrepareInput{
+		Scan: scanned,
+		From: rawmime.FromDecision{
+			Value: h.From, Field: h.FromField, Domain: h.SenderDomain, Rewritten: h.FromRewritten,
+			Original: h.OriginalFrom, StripSender: h.StripSender,
+		},
+		MessageID: claim.MessageID,
+		Date:      claim.date(),
+		Selector:  key.Selector,
+		Signer:    key.Signer,
+	})
+	if err != nil {
+		// rawmime errors are constant, but never wrap anything built from input.
+		return nil, errors.New("build signed MIME failed")
+	}
+	if len(final) > edgeprotocol.MaxMIMEBytes {
+		return nil, errors.New("signed MIME exceeds delivery limit")
+	}
+	deliveries := make([]Delivery, 0, len(h.Recipients))
+	for index := range h.Recipients {
+		*reason = "internal"
+		id, err := randomID()
+		if err != nil {
+			return nil, err
+		}
+		objectKey, err := objectkey.New("final", id, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		*reason = "object_write"
+		if err = s.Objects.PutMIME(ctx, objectKey, final); err != nil {
+			return nil, fmt.Errorf("store signed MIME: %w", err)
+		}
+		deliveries = append(deliveries, Delivery{ID: id, RecipientIndex: index, ObjectKey: objectKey})
+	}
+	return deliveries, nil
+}
+
+func addressDomain(address string) string {
+	return strings.ToLower(address[strings.LastIndexByte(address, '@')+1:])
 }
 func randomID() (string, error) {
 	var id [16]byte
