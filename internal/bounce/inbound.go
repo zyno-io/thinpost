@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emersion/go-smtp"
+	smtp "github.com/zyno-io/thinpost/internal/thirdparty/gosmtp"
 )
 
 // Inbound listener limits (the Edge's per-class abuse controls).

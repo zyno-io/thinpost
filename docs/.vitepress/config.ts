@@ -177,6 +177,7 @@ export default withMermaid(
               { text: "Testing", link: "/contributing/testing" },
               { text: "Console development", link: "/contributing/console-dev" },
               { text: "Generated code", link: "/contributing/generated-code" },
+              { text: "SMTP server", link: "/contributing/smtp-server" },
               { text: "Docs site", link: "/contributing/docs-site" },
             ],
           },

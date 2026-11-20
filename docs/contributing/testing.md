@@ -26,6 +26,16 @@ go test -p 1 ./...
 
 Do the same when you run against a fixture database yourself.
 
+### Race detector
+
+CI also runs the SMTP-facing packages under `-race`. It needs cgo and a C compiler, unlike the CGO-free production build:
+
+```sh
+CGO_ENABLED=1 go test -race -count=1 ./internal/thirdparty/gosmtp ./internal/bounce ./internal/edgesession ./internal/controlsession
+```
+
+See [SMTP server](/contributing/smtp-server) for why these packages are raced.
+
 ## Fixture guards
 
 A database or object-store fixture must be **disposable and local**. The guards enforce it, and a change must not weaken them:
