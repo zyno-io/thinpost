@@ -170,6 +170,19 @@ export interface FromExample {
 
 const EXAMPLE_ORIGIN = { local: 'scanner', domain: 'office.example.net' };
 
+/**
+ * The example sender's encoded name part, shortened the way the server does when
+ * the target domain leaves less room (64 octets for the name part, 254 for the
+ * whole address). The real hash depends on the address, so it's shown as <hash>.
+ */
+function encodedExampleLocal(target: string): string {
+    const local = `${EXAMPLE_ORIGIN.local}=${EXAMPLE_ORIGIN.domain}`;
+    const limit = Math.min(64, MAX_ADDRESS_BYTES - 1 - byteLength(target));
+    if (byteLength(local) <= limit) return local;
+    const prefix = local.slice(0, Math.max(0, limit - 9)).replace(/\.+$/, '');
+    return `${prefix}-<hash>`;
+}
+
 /** What the chosen policy does to a typical From address, for the form's examples. */
 export function fromExamples(form: FromForm, verifiedDomains: readonly string[]): FromExample[] {
     const sent = `${EXAMPLE_ORIGIN.local}@${EXAMPLE_ORIGIN.domain}`;
@@ -177,7 +190,7 @@ export function fromExamples(form: FromForm, verifiedDomains: readonly string[])
     const examples: FromExample[] = [];
     if (form.mode === 'domain' && form.domain) {
         const target = form.domain;
-        examples.push({ sent, becomes: `${EXAMPLE_ORIGIN.local}=${EXAMPLE_ORIGIN.domain}@${target}` });
+        examples.push({ sent, becomes: `${encodedExampleLocal(target)}@${target}` });
     } else if (form.mode === 'address' && form.address.trim()) {
         examples.push({ sent, becomes: form.address.trim() });
     }
