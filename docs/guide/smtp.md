@@ -96,13 +96,16 @@ smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
 ### Testing with curl
 
 ```sh
+# The username and password from the SMTP tab.
+SMTP_USER=0123456789abcdef0123456789abcdef
+read -rs SMTP_PASSWORD
 curl --ssl-reqd smtps://smtp.example.com:465 \
-  --user '0123456789abcdef0123456789abcdef:tps_REPLACE_WITH_THE_PASSWORD' \
+  --user "$SMTP_USER:$SMTP_PASSWORD" \
   --mail-from alerts@example.com --mail-rcpt customer@example.net \
   -T message.eml
 ```
 
-where `message.eml` is a complete message with at least `From`, `To`, `Subject` and a blank line before the body.
+`read -rs` asks for the password without echoing it or keeping it in your shell history. `message.eml` is a complete message with at least `From`, `To`, `Subject` and a blank line before the body.
 
 ## The From address
 
