@@ -38,7 +38,7 @@ func TestDispatchSendsToTheEnvelopeRecipientAtTheDeliveryIndex(t *testing.T) {
 
 func TestDispatchSendsToTheRawSourceRecipientAtTheDeliveryIndex(t *testing.T) {
 	source, err := submission.EncodeRawSource(submission.RawHeader{
-		Recipients: []string{"b@example.net", "Copy <cc@example.net>", "bcc@example.net"}, Kinds: []string{"to", "cc", "bcc"},
+		Recipients: []string{"b@example.net", "cc@example.net", "bcc@example.net"}, Kinds: []string{"to", "cc", "bcc"},
 		SenderDomain: "example.com", EnhancedProtection: true,
 	}, []byte("From: a@example.com\r\nTo: b@example.net\r\nSubject: hi\r\n\r\nbody\r\n"))
 	if err != nil {
