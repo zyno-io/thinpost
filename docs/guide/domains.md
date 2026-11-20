@@ -77,6 +77,10 @@ The catalog and keys load at process startup, so changing them requires restarti
 
 See [Key and certificate rotation](/operations/rotation).
 
+## SMTP and DKIM
+
+[SMTP submission](/guide/smtp) uses the same verified domains and the same DKIM keys. Whatever the From policy, the domain a message is sent from must have a DKIM key in the signing catalog with a matching DNS record, or Thinpost answers `451 4.3.5` and the client keeps the message queued until it is fixed. If the policy moves or replaces the sender address, its target domain must also be a **verified** sender domain of the app, with the same `451 4.3.5` if it is not. Under the default policy, a `From` on an unverified domain is refused with `550 5.7.1`. The SMTP tab warns you when the chosen domain would not be signed yet.
+
 ## SPF and bounces
 
 You do not add Thinpost to your own domain's SPF record. Every message uses `b+<token>@<bounce domain>` as its envelope sender, so receivers check SPF against the **bounce domain**, which belongs to the sending IP. See [Sending IPs](/guide/sending-ips#dns-for-a-sending-ip).

@@ -10,6 +10,7 @@ Thinpost is two Go processes plus the stores they use. The control plane makes e
 ```mermaid
 flowchart LR
   app["Your app<br/>(provider SDK)"]
+  dev["Printers, scripts,<br/>legacy apps (SMTP)"]
   op["Operator<br/>(browser)"]
   idp["OIDC provider"]
   subgraph trusted["Trusted zone"]
@@ -33,6 +34,7 @@ flowchart LR
   edge --- jr
   edge -- "SMTP :25 out" --> mx
   mx -- "bounces, inbound mail<br/>SMTP :25 in" --> edge
+  dev -- "SMTP :465 / :587<br/>with credentials" --> edge
   ctl -- "HTTPS, signed" --> hook
 ```
 
@@ -52,7 +54,7 @@ It owns application authorization, delivery decisions, queues, database records,
 
 The edge worker sends SMTP, and receives delivery-status mail and inbound mail. It runs as non-root, and runs as a single replica with a journal volume that only one pod may hold. It has no database or object-storage credentials. It receives only the bytes of the delivery it is asked to send.
 
-It binds each sending IP it is configured with, greets with that address's own name, and listens for SMTP on every one of them.
+It binds each sending IP it is configured with, greets with that address's own name, and listens for SMTP on every one of them. With [SMTP submission](/guide/smtp) enabled it also listens on ports 465 and 587 of each address, for clients that send mail with a credential. The edge verifies nothing itself: it passes the credential and the message to the control plane, which checks the credential, applies the app's policy and limits and commits the message, and the client gets its final reply only after that. When the stream to the control plane is down, a sign-in gets `454 4.7.0` and a message gets `451`, and the edge keeps no spool.
 
 ## Control protocol
 
@@ -65,6 +67,7 @@ The stream carries:
 - **Start permits.** Before it opens an SMTP connection the edge writes the attempt to its journal and asks for a permit. The control plane commits that authorization in the database first. A permit is bound to the worker, journal, session, epoch, attempt and a hash of the complete delivery descriptor.
 - **Results.** The edge reports each result and keeps it in the journal until the controller acknowledges it. After a reconnect it replays unacknowledged results before any new work.
 - **Bounces and inbound mail.** Mail received on port 25 is forwarded over the same stream. The edge answers `250` only after the control plane has committed the message and acknowledged it. The edge keeps no spool for them. If the stream is down it answers `451` and the sender retries.
+- **SMTP submissions.** With [SMTP submission](/guide/smtp) on, the edge forwards a client's credential for checking and then the message, in bounded chunks, and relays the control plane's verdict as the SMTP reply. The control plane holds the credential digests and every policy.
 
 The wire details are in the [control protocol reference](/reference/control-protocol). Certificates and rotation are covered in [Control PKI](/deploy/control-pki).
 
@@ -114,6 +117,7 @@ If a connection drops between the permit and the acknowledgement, the outcome of
 | App to control plane | in | HTTPS |
 | Browser to console | in | HTTPS, same origin as the API |
 | Recipient mail servers to edge | in | SMTP on port 25 (bounces, feedback reports, inbound mail) |
+| Clients to edge (optional) | in | SMTP on ports 465 (implicit TLS) and 587 (STARTTLS), only with submission enabled. Credentials are verified by the control plane |
 | Control plane to edge | in the trusted zone, out to the edge | mTLS gRPC |
 | Edge to recipient mail servers | out | SMTP on port 25 from your sending IPs |
 | Control plane to webhook receivers | out | HTTPS to public addresses only |

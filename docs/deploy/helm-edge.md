@@ -206,7 +206,7 @@ smtpSubmission:
     clientCidrs: []
 ```
 
-The chart then renders a ClusterIP Service `thinpost-edge-submission` on port 587, reachable as `thinpost-edge-submission.<namespace>.svc`, and a NetworkPolicy ingress rule for the listed clients. The Secret must come from a cluster-local CA (for example cert-manager) and cover `hostname`; clients trust that CA. The internal listener is not shown in the console. Clients' namespaces with a default-deny egress policy need a rule that allows port 587 to the edge.
+The chart then renders a ClusterIP Service `thinpost-edge-submission` on port 587, reachable as `thinpost-edge-submission.<namespace>.svc`, and a NetworkPolicy ingress rule for the listed clients. The Secret must come from a cluster-local CA (for example cert-manager) and cover `hostname`; clients trust that CA. The internal listener is not shown in the console. Clients connect to the Service on port 587, which forwards to the listener's container port (`smtpSubmission.internal.port`, default 2587). NetworkPolicy matches the pod's port, so clients' namespaces with a default-deny egress policy need a rule that allows that container port (2587 by default) to the edge pod.
 
 ## Control Service and network policy
 

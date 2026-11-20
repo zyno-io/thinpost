@@ -31,18 +31,29 @@ PostgreSQL can log bind values unless you configure it not to. Set `log_paramete
 
 | Data | Where | Protection |
 | --- | --- | --- |
-| Original submission (body, attachments, headers) | Object store | Encrypted by the control plane before upload |
+| Original submission (body, attachments, headers). For SMTP mail, the raw message as the client sent it | Object store | Encrypted by the control plane before upload |
 | Signed MIME per recipient | Object store | Encrypted. Attachments are stored again in each recipient's object |
 | Received bounces and inbound messages | Object store | Encrypted. Inbound objects live under the `inbound/` prefix |
 | Recipient addresses, sender domain, From address and name, subject | PostgreSQL, plaintext | Database access control. Enhanced Protection subjects are withheld from console reads |
 | API keys | PostgreSQL | A digest only. The secret is shown once at creation |
 | SMTP credentials | PostgreSQL | A SHA-256 digest only. The password is shown once at creation. The credential ID (its username), name and last-used time are plaintext |
 | The From address a client sent over SMTP, when the app's policy replaced it (`original_from`) | PostgreSQL, plaintext | Database access control, like the other sender metadata. Shown in the console even for Enhanced Protection messages |
+| Replay digests of SMTP mail | PostgreSQL | A keyed HMAC-SHA-256 of the app, sender, recipients, `Message-ID` and message bytes, so the database alone cannot confirm a guess. Kept 24 hours for a message with a `Message-ID` and 10 minutes for one with only a `Date`, then removed. A message with neither has none |
+| The key of those digests | PostgreSQL | Generated once per deployment and sealed with the object keyring, never returned. See [Rotation](/operations/rotation#object-keyring) |
 | Webhook signing secrets | PostgreSQL | Sealed with the object keyring, never returned |
 | Delivery and webhook history, suppressions | PostgreSQL | Contains IDs, states and codes. Suppression audit rows record the reason and origin but never the address |
 | Edge journal | A volume on the Edge | Attempt metadata only, with no content |
 
 Because recipients and subjects are plaintext in PostgreSQL, **database backups and the WAL archive also hold them**. Apply your retention, encryption and deletion policy to backups as well.
+
+## SMTP submission
+
+Mail sent over [SMTP](/guide/smtp) is stored like any other submission, with these additions:
+
+- **Credentials.** Only a SHA-256 digest of each password is stored. The username (an ID), the name you gave it and its last-used time are plaintext. The password crosses the edge inside TLS and is never logged, and no log line, error or reply contains it.
+- **The original From.** When the From is replaced, or inserted from the SMTP `MAIL FROM` because the message had none, under any policy, the address the client sent is kept as the message's `original_from`, in plaintext, and shown in the console.
+- **Raw source.** The message is stored as received, with the decisions Thinpost made (recipients and their kinds, the effective From). The client's `Message-ID` and any headers Thinpost later removes remain in the stored original. The client's IP address is not stored.
+- **Retry protection.** To recognize a retry, Thinpost stores a keyed digest for 24 hours (a message with a `Message-ID`) or 10 minutes (only a `Date`), and nothing for a message with neither. Expired digests are removed by the periodic idempotency cleanup.
 
 ## Encryption at rest
 

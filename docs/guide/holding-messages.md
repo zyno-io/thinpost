@@ -11,7 +11,7 @@ Use a hold when something must happen between submission and sending: an approva
 
 ## Submit on hold
 
-On the [native route](/guide/native-api), set `"hold": true` in the JSON body. The route does not accept the header. The rest of this section describes the header, which is how every provider route takes the choice.
+On the [native route](/guide/native-api), set `"hold": true` in the JSON body. The route does not accept the header. The rest of this section describes the header, which is how every provider route takes the choice. Mail sent over SMTP uses a header too: see [Holding over SMTP](#holding-over-smtp).
 
 Add `X-Thinpost-Hold: true` to any provider send request. It works on every provider route (`POST /email`, `/email/batch`, `/emails`, `/emails/batch`, `/v3/mail/send` and `/v3/{domain}/messages`) and applies to every message of a batch.
 
@@ -38,6 +38,24 @@ X-Thinpost-Hold: held
 The header takes `true` or `false` (case-insensitive) and may appear at most once; anything else is answered with 400. `false` is the same as leaving it out. It is part of the idempotency fingerprint, so a Resend `Idempotency-Key` reused with a different hold choice is a 409 conflict.
 
 A held message goes through every check an accepted message does: authentication, sender-domain authorization, recipient rules, the Postmark all-suppressed rejection, the submission rate, the daily recipient quota and the pending-message limit. It is charged against the submission rate and the daily recipient quota **when it is submitted**, not when it is released, and it counts toward the app's pending-message limit until it is cancelled, expires or finishes delivery.
+
+## Holding over SMTP
+
+A client that sends over [SMTP](/guide/smtp) puts the same header in the message itself:
+
+```text
+X-Thinpost-Hold: true
+```
+
+Thinpost accepts it as usual and replies with the held message's ID, where a normal message says `queued`:
+
+```text
+250 2.0.0 OK: held as 3f2a9c1e8d4b4f6a9e217c5b0a4d1e93
+```
+
+Everything else on this page applies unchanged. You release or cancel the message with the app API and an API key of the app, as above. The SMTP credential itself cannot release or cancel. The header takes `true` or `false`, once, and anything else is refused with `554 5.6.0`. Thinpost removes it before sending.
+
+The `Date` header the client wrote is kept on a held message, and used when the message is released. Only a message with no `Date` gets one at release time. A client that retries a held submission is recognized like any other retry ([Retries and duplicate protection](/guide/smtp#retries-and-duplicate-protection)) and told `held as` the same ID.
 
 ## Release
 
@@ -68,7 +86,7 @@ The message ID may be the 32-hex form or the provider's rendering of it, as for 
 }
 ```
 
-(Some `message` fields are left out here.) Release queues the message for preparation and delivery like a freshly accepted one. Everything that normally happens before an SMTP attempt happens after release too: the app must still be active and the sender domain verified, suppressed recipients are dropped, and the recipient rules are checked again before each attempt. The `Date` header of the sent mail is the release time.
+(Some `message` fields are left out here.) Release queues the message for preparation and delivery like a freshly accepted one. Everything that normally happens before an SMTP attempt happens after release too: the app must still be active and the sender domain verified, suppressed recipients are dropped, and the recipient rules are checked again before each attempt. The `Date` header of the sent mail is the release time, unless the message came over SMTP with its own `Date`, which is kept.
 
 Release is **idempotent**. Releasing a message that is already released answers `200` with its current state, and never queues a second copy. Concurrent releases, and a release racing a cancel or the expiry, are serialized on the message: exactly one of them takes effect.
 
