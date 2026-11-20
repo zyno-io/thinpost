@@ -99,7 +99,7 @@ In order:
 3. **Ready.** The Edge answers `Ready`, echoing worker, journal, epoch, session and protocol version, and reporting its source addresses, SMTP host names, bounce domains and capabilities. The control plane checks the echoed values and validates the reported lists.
 4. **Replay.** The Edge sends each unacknowledged result from its journal as a `DeliveryResult`, one at a time, and waits for the exact `ResultAcknowledgement` before sending the next. If the journal holds an attempt still in flight, the session ends with `FAILED_PRECONDITION` (`unreconciled journal attempt`). The Edge marks attempts left in flight by a restart as uncertain when it starts, so this occurs only for an inconsistent journal. After the last acknowledgement the Edge sends `ReplayComplete`.
 5. **Reconciliation.** On `ReplayComplete`, the control plane marks every older in-flight database attempt for the worker (an epoch below the current one) as uncertain and holds it, in batches of 128 under the current lease, until none remain. It then sends `ReconciliationComplete`. The Edge does not accept `Wake` or forward bounces and inbound mail until it receives a `ReconciliationComplete` that matches the worker, journal, session and epoch.
-6. **Steady state.** The control plane sends `Wake`; the Edge answers with `Pull` when its journal has capacity; deliveries follow one at a time. Lease renewals, bounces and inbound mail interleave.
+6. **Steady state.** The control plane sends `Wake`; the Edge answers with `Pull` when its journal has capacity; deliveries follow one at a time. Lease renewals, bounces, inbound mail and SMTP submissions interleave.
 7. **End.** Either side can end the stream. Any stream or lease failure on the control plane ends the session, and the control plane's process reconnects ([Reconnection](#reconnection)).
 
 ### Lease renewal
@@ -123,6 +123,8 @@ Every control-plane frame is a `ControlFrame` with one `body`; every Edge frame 
 | `ReconciliationComplete` (`reconciliation_complete`) | 9 | Ends reconciliation |
 | `InboundRoutes` (`routes`) | 10 | Routing snapshot page (`inbound/1`) |
 | `InboundAcknowledgement` (`inbound_ack`) | 11 | Verdict for an inbound message (`inbound/1`) |
+| `SubmissionAuthResult` (`auth_result`) | 12 | Answer to a credential check (`submission/1`) |
+| `SubmissionAcknowledgement` (`submission_ack`) | 13 | Verdict for an SMTP submission (`submission/1`) |
 
 | `EdgeFrame` body | Field | Purpose |
 | --- | --- | --- |
@@ -136,6 +138,9 @@ Every control-plane frame is a `ControlFrame` with one `body`; every Edge frame 
 | `StartRequest` (`start_request`) | 8 | Asks permission to start SMTP |
 | `InboundStart` (`inbound`) | 9 | Begins a received message (`inbound/1`) |
 | `DataChunk` (`inbound_chunk`) | 10 | Received message bytes |
+| `SubmissionAuth` (`auth`) | 11 | Asks control to check an SMTP credential (`submission/1`) |
+| `SubmissionStart` (`submission`) | 12 | Begins a submitted message (`submission/1`) |
+| `DataChunk` (`submission_chunk`) | 13 | Submitted message bytes |
 
 ### Open
 
@@ -151,7 +156,7 @@ First frame, control plane to Edge.
 | `session_id` | string | 32 lowercase hex characters. |
 | `protocol_version` | uint32 | `7`. |
 | `journal_id` | string | The Edge journal identity the control plane expects. |
-| `capabilities` | repeated string | Optional features the control plane supports. `inbound/1` is the only defined value. |
+| `capabilities` | repeated string | Optional features the control plane supports. `inbound/1` and `submission/1` are the defined values. |
 
 A capability list holds at most 8 entries of at most 32 characters from `a-z 0-9 / - _ .`. Unknown capabilities are ignored.
 
@@ -162,14 +167,16 @@ A capability list holds at most 8 entries of at most 32 characters from `a-z 0-9
 | `worker_id`, `epoch`, `session_id`, `protocol_version`, `journal_id` | | Echo `Open`. The control plane rejects any mismatch. |
 | `source_addresses` | repeated string | The addresses the Edge can send from, primary first. Absent for a legacy Edge. |
 | `bounce_domains` | repeated string | Domains the Edge accepts bounces for. |
-| `capabilities` | repeated string | Optional features the Edge supports (`inbound/1`). |
+| `capabilities` | repeated string | Optional features the Edge supports (`inbound/1`, `submission/1`). |
 | `source_hostnames` | repeated string | The SMTP name each source address greets with, one per `source_addresses` entry in the same order. |
+| `submission_ports` | repeated uint32 | Public ports on which the Edge currently accepts SMTP AUTH (465 and 587). Observed availability only; never used to tell clients where to connect. Meaningful only with `submission/1`. |
 
 The control plane validates the lists and treats a violation as an invalid readiness:
 
 - `source_addresses`: at most 16 entries, each unique, in canonical text form, and a public address.
 - `source_hostnames`: absent, or exactly one normalized, unique DNS name per source address, each at most 219 characters.
 - `bounce_domains`: at most 24 entries, normalized and unique, each at most 219 characters.
+- `submission_ports`: at most 8 entries, each unique and from 1 to 65535. A violation is an invalid readiness. The control plane records the ports for display only when it serves `submission/1` itself and the Edge reported the capability; otherwise it records none.
 - No sources with bounce domains or host names is malformed. No sources and no domains means a legacy Edge, which sends only from its primary address.
 
 The control plane never hands the Edge a delivery whose source or bounce domain the Edge did not report. Such a delivery stays queued.
@@ -354,6 +361,57 @@ These frames exist only when both sides advertise `inbound/1`. See [Inbound mail
 | `inbound_id` | string | The message. |
 | `verdict` | InboundVerdict | `ACCEPTED`, `TEMPFAIL` or `REJECTED`. |
 
+### Submission messages
+
+These frames exist only when both sides advertise `submission/1`. See [SMTP submission capability](#smtp-submission-capability) below.
+
+`SubmissionAuth` (Edge to control plane) checks a credential and nothing else:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `request_id` | string | 32 lowercase hex characters. Echoed in the result. |
+| `credential_id` | string | 32 lowercase hex characters (the SMTP username). |
+| `secret` | string | `tps_` followed by 43 base64url characters. Never logged. |
+| `client_ip` | string | Empty or a valid IP address. |
+
+`SubmissionAuthResult`: `request_id` and `verdict` (`SubmissionAuthVerdict`):
+
+| Verdict | Meaning | Edge SMTP answer |
+| --- | --- | --- |
+| `OK` | The credential is valid | 235 |
+| `INVALID` | Unknown credential or wrong secret (indistinguishable) | 535 5.7.8 |
+| `TEMPFAIL` | Database error or draining | 454 4.7.0 |
+| `THROTTLED` | The per-session check rate or pending cap was exceeded | 454 4.7.0 |
+| `UNAVAILABLE` | The control plane's runtime gate is closed | 421 4.3.2 and close |
+
+The result never reports app state, so a client of a paused app can still authenticate and reach `DATA`, where an exact retry of an accepted message is answered before the pause is considered. An unspecified or unknown verdict is treated as `TEMPFAIL`.
+
+`SubmissionStart`:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `submission_id` | string | 32 lowercase hex characters. A transfer ID, not the message ID. |
+| `expected_size` | uint64 | Decoded message size in bytes, 1 to 7,864,320. |
+| `sha256` | bytes | SHA-256 of the message, 32 bytes. |
+| `credential_id`, `secret` | string | The credential, checked again by the control plane. |
+| `mail_from` | string | The SMTP reverse path: printable ASCII, at most 320 bytes. Empty for the null sender. |
+| `rcpt_to` | repeated string | Envelope recipients. 1 to 100 entries, each 1 to 320 bytes. |
+| `client_ip` | string | Empty or a valid IP address. |
+| `tls_version` | string | TLS version of the SMTP connection, at most 64 bytes. |
+| `received_unix_ms` | int64 | Receipt time in Unix milliseconds. |
+| `port` | uint32 | `465` or `587`; `0` for the internal listener. |
+
+`SubmissionStart` is followed by ordered `DataChunk` frames on `submission_chunk` with `id` equal to `submission_id`.
+
+`SubmissionAcknowledgement`:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `submission_id` | string | The transfer. |
+| `verdict` | SubmissionVerdict | See the capability section. |
+| `message_id` | string | The stored message ID (32 lowercase hex characters). Set only with `ACCEPTED`. |
+| `held` | bool | The accepted message is on hold. Set only with `ACCEPTED`. |
+
 ## Leases and lease proofs
 
 A lease binds one control-plane process to one worker for a bounded time. It exists in two forms: a row in the control plane's database, which is the authority, and a signed proof the Edge verifies locally.
@@ -480,6 +538,57 @@ The Edge holds routing state and at most four messages in memory. It has no spoo
 
 Stored message content never travels to the Edge.
 
+## SMTP submission capability
+
+SMTP submission from app clients uses the same stream behind the `submission/1` capability. The Edge terminates SMTP, TLS and AUTH. It never knows which app a credential belongs to and keeps no spool: it forwards the credential with each message and answers 250 only after the control plane's durable acknowledgement.
+
+**Negotiation.** The control plane lists `submission/1` in `Open.capabilities` when it has the SMTP intake, and the Edge lists it in `Ready.capabilities` when its submission listeners are enabled. Submission frames flow only when both sides listed it, and the Edge sends them only after `ReconciliationComplete`. A frame that arrives without the capability negotiated (or before reconciliation) ends the session. Either side can be upgraded first: an Edge without the capability gets no submission frames, and an Edge paired with an older control plane keeps AUTH on its submission ports and answers `454 4.7.0`. The protocol version stays 7.
+
+**Credential check.** The Edge sends `SubmissionAuth` when a client authenticates and waits at most 10 seconds. It has at most 16 checks pending and answers `THROTTLED` itself beyond that. The control plane applies a per-session limit of 20 checks per second with a burst of 40, and the same pending cap, answering `THROTTLED` without a database call. While draining it answers `TEMPFAIL`. It replies only while its lease is valid, and the Edge accepts a result only while its own lease and fence are valid.
+
+**Transfer.** For each message the Edge sends `SubmissionStart` and the decoded message in chunks of at most 64 KiB, and answers the SMTP client only after the verdict. The chunks are sent from the message buffer without copying. Chunks of different messages can interleave.
+
+| Verdict | Meaning | Edge SMTP answer |
+| --- | --- | --- |
+| `ACCEPTED` | Durably committed, or an exact replay of a committed message | 250 2.0.0 `OK: queued as <id>`, or `OK: held as <id>` when `held` |
+| `TEMPFAIL` | Not committed; the client should retry | 451 4.3.0 |
+| `RATE_LIMITED` | Sending rate limit | 451 4.4.5 |
+| `QUOTA_EXCEEDED` | Sending limit | 452 4.3.1 |
+| `BACKLOG` | Too many messages queued | 451 4.3.1 |
+| `UNAVAILABLE` | The runtime gate is closed | 421 4.3.2 and close |
+| `CREDENTIAL_INVALID` | The credential no longer verifies | 550 5.7.8 |
+| `APP_PAUSED` | Fresh submissions only | 550 5.7.1 |
+| `FROM_NOT_PERMITTED` | The From policy refused the sender | 550 5.7.1 |
+| `MESSAGE_INVALID` | Header syntax or envelope | 554 5.6.0 |
+| `TOO_LARGE` | Over the size limit | 552 5.3.4 |
+| `RECIPIENT_NOT_PERMITTED` | Refused by the recipient allowlist | 550 5.7.1 |
+| `ENCRYPTION_REQUIRED` | Enhanced Protection without TLS | 550 5.7.10 |
+| `MISCONFIGURED` | Rewrite target or signing is not ready | 451 4.3.5 |
+| `CONTENT_NOT_SUPPORTED` | NUL, bare CR, over-long lines, non-ASCII header bytes | 554 5.6.0 |
+
+The control plane never sends reply text; the Edge maps each verdict to a fixed reply. An unspecified or unknown verdict is `TEMPFAIL`. An `ACCEPTED` acknowledgement without a valid 32-hex `message_id` is also answered 451, and counted: the message may have been committed, but without its ID the client cannot be told which one it is, and its retry is answered from the replay window. The control plane sends a verdict only after the database commit and only while its lease is valid.
+
+Framing and envelope errors are treated differently:
+
+- A bad `submission_id`, size or SHA-256, or a chunk out of order, is a protocol violation and ends the session.
+- A malformed credential is answered `CREDENTIAL_INVALID` and an envelope that fails its bounds `MESSAGE_INVALID`; the session continues and the chunks are discarded.
+
+**Limits and memory.** At most 16 messages are in flight per session. The control plane holds a process-wide byte budget of 64 MiB, owned by its session runner rather than by one stream, so it survives reconnects. A message reserves `3 x expected_size + 192 KiB` when its `SubmissionStart` arrives, without waiting: if the budget is spent, or the session is draining, or 16 are in flight, the message is answered `TEMPFAIL` and its chunks are discarded. The reservation is held by the session while the message assembles and passes to the goroutine that commits it, which releases it only when it exits. A goroutine still unwinding after its stream ended therefore keeps its bytes counted, and a message received on the next session can be answered `TEMPFAIL` for that reason. The buffer is allocated only when the first chunk arrives. The Edge holds at most 32 MiB of message bytes in flight.
+
+The control plane gives each message 45 seconds from its start frame to commit. The Edge waits 60 seconds for the verdict and answers 451 if none arrives. A partially received message the Edge abandoned is dropped after 70 seconds and remembered as a straggler: the control plane remembers the 64 most recent, ignores their late chunks, and ends the session on a chunk for an item it no longer knows.
+
+**Commit fencing.** The control plane commits a submission under the session's lease (worker, controller and epoch). The commit checks that the lease is still live immediately before it completes, so no submission can commit after a later epoch has been acquired for the worker. Delivery of the acknowledgement is not guaranteed; a lost acknowledgement is covered by the replay window (24 hours with a Message-ID, 10 minutes with only a Date).
+
+| Event | Edge | Client |
+| --- | --- | --- |
+| Stream lost mid-transfer | Fails the waiting message | 451 |
+| Stream lost after commit, before the acknowledgement | Fails the waiting message | 451, then the retry is answered from the replay window |
+| Controller takeover | Old session closed, waiters failed | 451 |
+| Control plane drains | Credential checks and new starts answered `TEMPFAIL`; in-flight work finishes | 454 or 451 |
+| Runtime gate closed | `UNAVAILABLE` | 421 and close |
+
+Stored message content never travels to the Edge.
+
 ## Limits
 
 | Limit | Value |
@@ -491,6 +600,13 @@ Stored message content never travels to the Edge.
 | Inbound message | 10 MiB (assembler ceiling 16 MiB) |
 | Inbound messages in flight per session | 4 |
 | Inbound recipients per message | 50 |
+| Submission message | 7,864,320 bytes decoded |
+| Submission recipients per message | 100 |
+| Submission messages in flight per session | 16 |
+| Submission byte budget | 64 MiB control plane (process-wide), 32 MiB Edge |
+| Submission credential checks pending per session | 16 |
+| Submission credential check rate (control plane, per session) | 20 per second, burst 40 |
+| Submission stragglers remembered per session | 64 |
 | Routes in a snapshot | 100,000 |
 | Routes page | 96 KiB estimated |
 | Source addresses reported | 16 |
@@ -510,6 +626,10 @@ Stored message content never travels to the Edge.
 | Inbound commit budget (control) | 45 seconds |
 | Inbound verdict wait (Edge) | 60 seconds |
 | Abandoned inbound partial | 70 seconds |
+| Submission commit budget (control) | 45 seconds |
+| Submission verdict wait (Edge) | 60 seconds |
+| Credential check wait (Edge) | 10 seconds |
+| Abandoned submission partial | 70 seconds |
 | Routing snapshot interval | 10 seconds |
 | Concurrent sessions per Edge | 2 |
 
@@ -537,11 +657,13 @@ An Edge that rejects a session or frame ends the stream with a gRPC status. The 
 | `FAILED_PRECONDITION` | `result acknowledgement mismatch`, `invalid result acknowledgement` | An acknowledgement that does not match the pending result. |
 | `FAILED_PRECONDITION` | `invalid SMTP start permit`, `start request not authorized` | A permit that does not match the pending request, or a start request outside an execution. |
 | `FAILED_PRECONDITION` | `inbound routes not negotiated`, `inbound acknowledgement not negotiated` | Inbound frames without the negotiated capability. |
+| `FAILED_PRECONDITION` | `submission not negotiated` | A credential result or submission acknowledgement without the negotiated capability. |
 | `INVALID_ARGUMENT` | `invalid inbound routes`, `empty control frame` | A malformed routing page, or an empty frame. |
+| `INVALID_ARGUMENT` | `invalid submission frame` | A credential result or acknowledgement frame with no content. |
 | `UNIMPLEMENTED` | `control frame not implemented` | A frame the Edge does not accept. |
 | `DEADLINE_EXCEEDED` | `control stream write timed out` | The Edge could not write to the stream within 15 seconds. |
 
-The control plane ends its own session, without a status, when the Edge violates the sequence: a repeated or mismatched `Ready`, a result or pull out of order, a `StartRequest` that does not match the active delivery or its descriptor digest, an unexpected bounce or chunk, an invalid chunk, or a `LeaseAccepted` that does not match the pending renewal. It also ends the session when its own lease expires (`controller lease expired`) or when a database commit fails.
+The control plane ends its own session, without a status, when the Edge violates the sequence: a repeated or mismatched `Ready`, a result or pull out of order, a `StartRequest` that does not match the active delivery or its descriptor digest, an unexpected bounce or chunk, an invalid chunk, or a `LeaseAccepted` that does not match the pending renewal. For submission it also ends the session on `submission not available` (a submission frame without the negotiated capability or before reconciliation, a duplicate or over-numerous transfer), `invalid submission chunk` and `invalid final submission chunk` (a chunk out of order or a bad length), `unexpected submission chunk` (a chunk for an unknown transfer) and `submission straggler overflow` (a chunk for a transfer that aged out of the straggler memory). It also ends the session when its own lease expires (`controller lease expired`) or when a database commit fails.
 
 ## Reconnection
 
