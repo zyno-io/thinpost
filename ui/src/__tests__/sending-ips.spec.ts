@@ -18,6 +18,10 @@ const api = vi.hoisted(() => ({
     createApp: vi.fn(),
     listAppKeys: vi.fn(),
     getSubmissionRate: vi.fn(),
+    getRecipientQuota: vi.fn(),
+    setRecipientQuota: vi.fn(),
+    getPendingQuota: vi.fn(),
+    setPendingQuota: vi.fn(),
     getPublicConfig: vi.fn()
 }));
 vi.mock('@/openapi-client-generated', () => ({ DefaultApi: api }));
@@ -102,6 +106,8 @@ beforeEach(() => {
     authState.status = 'signed-in';
     api.listSendingIps.mockResolvedValue({ data: pool() });
     api.getSubmissionRate.mockResolvedValue({ data: { per_minute: 600, burst: 100 } });
+    api.getRecipientQuota.mockResolvedValue({ data: { daily_limit: 1000, used: 120, day: '2026-11-19' } });
+    api.getPendingQuota.mockResolvedValue({ data: { limit: 500, pending: 7, truncated: false } });
 });
 afterEach(() => {
     wrapper?.unmount();

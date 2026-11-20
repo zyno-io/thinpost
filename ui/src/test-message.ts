@@ -93,13 +93,13 @@ export function describeTestRefusal(err: unknown): ApiErrorDescription {
             return {
                 kind: 'unavailable',
                 status,
-                message: `This app has reached its daily recipient limit, or none is set. Your Thinpost administrator sets it; this console can't change it.${NOT_SENT}`
+                message: `This app has reached its daily recipient limit, or none is set. Set one in the Daily recipient limit panel on the API keys tab, then try again.${NOT_SENT}`
             };
         case 'pending_limit_exceeded':
             return {
                 kind: 'unavailable',
                 status,
-                message: `This app has reached its pending-message limit, or none is set. Wait for queued messages to finish, or ask your Thinpost administrator to raise it.${NOT_SENT}`
+                message: `This app has reached its pending-message limit, or none is set. Wait for queued messages to finish, or raise it in the Pending-message limit panel on the API keys tab, then try again.${NOT_SENT}`
             };
     }
     return describeApiError(err, {

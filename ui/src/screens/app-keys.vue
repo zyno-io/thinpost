@@ -6,6 +6,10 @@
 
         <SubmissionRatePanel />
 
+        <CountLimitPanel kind="recipient" />
+
+        <CountLimitPanel kind="pending" />
+
         <section aria-labelledby="keys-heading" class="card keys">
             <div class="card-header">
                 <h2 id="keys-heading">API keys</h2>
@@ -103,6 +107,7 @@ import { formatDateTime } from '@/format';
 import { DefaultApi, type Key } from '@/openapi-client-generated';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import AppStatusPanel from '@/shared/components/app-status-panel.vue';
+import CountLimitPanel from '@/shared/components/count-limit-panel.vue';
 import Loader from '@/shared/components/loader.vue';
 import NameModal from '@/shared/components/name-modal.vue';
 import SecretModal from '@/shared/components/secret-modal.vue';

@@ -98,9 +98,21 @@ describe('describeTestRefusal', () => {
         expect(message).toContain('Nothing was sent');
     });
 
-    it('explains the other limits', () => {
-        expect(describeTestRefusal(httpError(429, { error: 'recipient_quota_exceeded' })).message).toContain('daily recipient limit');
-        expect(describeTestRefusal(httpError(429, { error: 'pending_limit_exceeded' })).message).toContain('pending-message limit');
+    it('points a recipient quota refusal at the Daily recipient limit panel', () => {
+        const message = describeTestRefusal(httpError(429, { error: 'recipient_quota_exceeded' })).message;
+        expect(message).toContain('daily recipient limit');
+        expect(message).toContain('Daily recipient limit panel');
+        expect(message).toContain('API keys tab');
+        expect(message).not.toContain("can't change");
+        expect(message).toContain('Nothing was sent');
+    });
+
+    it('points a pending limit refusal at the Pending-message limit panel', () => {
+        const message = describeTestRefusal(httpError(429, { error: 'pending_limit_exceeded' })).message;
+        expect(message).toContain('pending-message limit');
+        expect(message).toContain('Pending-message limit panel');
+        expect(message).toContain('API keys tab');
+        expect(message).toContain('Nothing was sent');
     });
 
     it('lists causes for a rejection and handles a paused app', () => {
