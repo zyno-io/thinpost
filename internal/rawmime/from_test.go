@@ -330,6 +330,24 @@ func TestEncodeFromLimits(t *testing.T) {
 	if encodeFrom("a b@example.org", "example.com") == encodeFrom("a+b@example.org", "example.com") {
 		t.Fatal("collision")
 	}
+	// A local part that maps away entirely keeps the '-' before the hash, so
+	// it can't equal an address that is just hex digits.
+	got := encodeFrom("+@example.com", "example.com")
+	if got != "--"+encHash("+@example.com") {
+		t.Fatalf("%q", got)
+	}
+	checkEncoded(t, "+@example.com", got)
+	// A long target shrinks the budget so the whole address stays within 254.
+	target := strings.Repeat("t", 63) + "." + strings.Repeat("u", 63) + "." + strings.Repeat("v", 63) + "." + strings.Repeat("w", 30) + ".example.com"
+	got = encodeFrom("scanner@office.example.net", target)
+	if len(got)+1+len(target) > 254 || !strings.HasSuffix(got, "-"+encHash("scanner@office.example.net")) {
+		t.Fatalf("%q (%d)", got, len(got)+1+len(target))
+	}
+	checkEncoded(t, "scanner@office.example.net", got)
+	// A target with no room for an encoded sender yields nothing.
+	if got := encodeFrom("a@example.org", strings.Repeat("x", 245)+".example"); got != "" {
+		t.Fatalf("%q", got)
+	}
 }
 
 func checkEncoded(t *testing.T, original, got string) {
