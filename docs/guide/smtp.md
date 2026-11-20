@@ -111,7 +111,7 @@ Thinpost only sends from domains that are [verified for the app](/guide/domains)
 | Policy | What it does |
 | --- | --- |
 | **Only accept verified addresses** (the default) | Accepts a `From` on one of the app's verified sender domains, as an exact match. Anything else is refused with `550 5.7.1 Sender address not permitted`. |
-| **Send from one of my domains** | Rewrites the `From` onto a verified domain you choose and keeps the part before the `@`. Optionally keeps the original domain after a `+`. |
+| **Send from one of my domains** | Rewrites the `From` onto a verified domain you choose and keeps the original address in the part before the `@`, so senders stay distinguishable. |
 | **Always send from one address** | Replaces the `From` with one fixed address on a verified domain. |
 
 The two rewriting policies can leave a `From` alone when its domain is already verified for the app ("Leave addresses on my verified domains alone"). The display name is always kept, and the `Sender` header is removed when the `From` changes, and also when there are several `Sender` headers or one is not a single address on a verified domain, even if the `From` is unchanged.
@@ -122,13 +122,26 @@ For an app whose domain is `example.com`:
 | --- | --- | --- |
 | Only accept verified addresses | `Alerts <noreply@example.com>` | `Alerts <noreply@example.com>` |
 | Only accept verified addresses | `scanner@office.example.net` | Refused: `550 5.7.1` |
-| Send from `example.com` | `Printer <scanner@office.example.net>` | `Printer <scanner@example.com>` |
-| Send from `example.com`, keep original address | `Printer <scanner@office.example.net>` | `Printer <scanner+office.example.net@example.com>` |
+| Send from `example.com` | `Printer <scanner@office.example.net>` | `Printer <scanner=office.example.net@example.com>` |
+| Send from `example.com` | `Printer <team ops@office.example.net>` (quoted) | `Printer <team-ops=office.example.net-a0091e7b@example.com>` |
+| Send from `example.com` | `Printer <scanner@example.com>` | `Printer <scanner@example.com>` |
 | Always send from `noreply@example.com` | `Printer <scanner@office.example.net>` | `Printer <noreply@example.com>` |
 
 The address the client sent is kept on the message as its **original From** and shown in the console. Other headers, including `Reply-To`, pass through untouched, so replies can still reach the device if it sets one.
 
-Addresses in the `From` and the sender must be ASCII. The "Send from one of my domains" policy can have an optional **fallback address** on one of the app's verified domains. It is used when the client's local part cannot be reused (for example it contains spaces or quotes); without a fallback, such a message is refused.
+Addresses in the `From` and the sender must be ASCII.
+
+### How "Send from one of my domains" writes the address
+
+The new address is always `<name>=<original domain>@<your domain>`, for example `scanner@office.example.net` becomes `scanner=office.example.net@example.com`. The original domain is lowercased. When the original domain is already the target domain, the address is just `<name>@<your domain>`.
+
+The name part is made safe to use as an address:
+
+- Letters, digits, `.`, `_` and `-` are kept. Every other character, including spaces, quotes, `=` and `+`, becomes `-`. (`=` is the separator and `+` is often read as a tag, so neither is kept.)
+- Runs of dots become one dot, and dots at the start or end are dropped.
+- If anything was changed, or the result would be longer than 64 characters, a dash and an 8-character hash are added at the end, and the text before it is shortened so the whole name part is at most 64 characters. The hash is the first 8 hexadecimal digits of the SHA-256 of the original address (name as written, domain lowercased), so the same original address always produces the same new address, and two different originals that clean up alike stay apart. Example: `"team ops"@office.example.net` becomes `team-ops=office.example.net-a0091e7b@example.com`.
+
+This policy never refuses a message because the name cannot be reused. It still answers `451 4.3.5` while the chosen domain is not verified or cannot be DKIM-signed yet, and refuses a message that has no usable `From` or `MAIL FROM` address.
 
 Two things need to be in place for the target domain, or Thinpost answers `451 4.3.5 Sender configuration is not ready, try again later` and the client keeps the message queued:
 
