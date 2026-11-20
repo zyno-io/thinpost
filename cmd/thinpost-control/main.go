@@ -136,7 +136,24 @@ func run() error {
 		return errors.New("operator identity initialization failed")
 	}
 	repository := &postgres.Repository{DB: db, Generation: config.Generation, WebhookDestinations: config.WebhookDestinations}
+	// The signing resolver is built first: the operator API asks it whether a
+	// domain would be signed, and message preparation uses it below.
+	catalogPath := os.Getenv("THINPOST_CONTROL_SIGNING_CATALOG")
+	var keys *signing.Resolver
+	if catalogPath != "" {
+		entries, err := signing.LoadCatalog(catalogPath)
+		if err != nil {
+			return err
+		}
+		keys, err = signing.New(repository, net.DefaultResolver, entries)
+		if err != nil {
+			return err
+		}
+	}
 	operator := &admin.Handler{Authenticator: auth, Store: repository, WebhookHistory: repository, PolicyHolds: repository, TrackingHolds: repository, AppStatus: repository, Suppressions: repository, Operations: repository, AuthConfig: &config.PublicAuth, DNS: net.DefaultResolver, MX: net.DefaultResolver, InboundMXHost: config.InboundMXHost, ReverseDNS: net.DefaultResolver, WebhookDestinations: config.WebhookDestinations}
+	if keys != nil {
+		operator.SigningReadiness = keys
+	}
 	stopCleanup := startIdempotencyCleanup(ctx, repository)
 	defer stopCleanup()
 	stopHoldExpiry := startHoldExpiry(ctx, repository)
@@ -179,6 +196,7 @@ func run() error {
 		}
 		bridgeConfig.Recipients = recipients
 		operator.BounceDomain = bridgeConfig.BounceDomain
+		operator.PrimarySource = bridgeConfig.Source
 		bridge, err := controlbridge.New(*bridgeConfig, repository, objects)
 		if err != nil {
 			return err
@@ -186,7 +204,6 @@ func run() error {
 		stopBridge := startBridge(ctx, bridge, 12*time.Second)
 		defer stopBridge()
 	}
-	catalogPath := os.Getenv("THINPOST_CONTROL_SIGNING_CATALOG")
 	var trackingPreparation *preparation.TrackingConfig
 	var trackingHandler http.Handler
 	if config.Tracking != nil {
@@ -203,14 +220,6 @@ func run() error {
 	if catalogPath != "" {
 		if objects == nil {
 			return errors.New("message preparation requires object storage")
-		}
-		entries, err := signing.LoadCatalog(catalogPath)
-		if err != nil {
-			return err
-		}
-		keys, err := signing.New(repository, net.DefaultResolver, entries)
-		if err != nil {
-			return err
 		}
 		preparer := &preparation.Service{Repository: repository, Objects: objects, Keys: keys, Tracking: trackingPreparation}
 		prepareCtx, prepareCancel := context.WithCancel(ctx)
