@@ -72,6 +72,11 @@ def main():
             "-count=1", cwd=root, env=env,
         )
         run(
+            "go", "test", "-race", "./internal/controlsession", "-run",
+            "^(TestSubmissionPipelineWithPostgres|TestSubmissionRecipientAllowlistIsRefusedAtData|TestSubmissionPauseAfterLostAcknowledgement|TestSubmissionDisconnectCases|TestSubmissionTakeoverDuringBlockedCommit|TestNewEdgeWithOldControlAnswers454)$",
+            "-count=1", cwd=root, env=env,
+        )
+        run(
             "go", "test", "-race", "./internal/postgres", "-run",
             "^(TestRecoveryObjectInventory|TestRecoveryGateAndQuarantine|TestRecoveryHoldHistoryMigration|TestRecoveryMigrateRestoredSchemas|TestMigrationsSerializeAndDetectDrift|TestJournalIdentityMigrationPreservesLegacyAttempts|TestMessageMetadataSchemaConstraints|TestMigrationsInstallNoExecutableRoutines)$", "-count=1", cwd=root, env=env,
         )

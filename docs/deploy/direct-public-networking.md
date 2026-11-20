@@ -134,6 +134,7 @@ The edge zone's upstream router, or its firewall, is the only filter for public 
 | Requirement | Detail |
 | --- | --- |
 | **Inbound TCP/25** | Allow it to **every** sending address, not only the primary. Every address listens for SMTP, because bounces and inbound mail may arrive on any of them. |
+| **Inbound TCP/465 and TCP/587** | Only with SMTP submission enabled (`smtpSubmission.enabled`): allow both to **every** sending address. They carry authenticated client mail with TLS, and each address presents its own certificate on them. Clients inside the cluster should use the [internal listener](/deploy/helm-edge#smtp-submission) instead, because the public path arrives through SNAT and shares one source address. |
 | **Outbound TCP/25 only** | Allow the edge addresses to open outbound connections on TCP/25 and nothing else. The edge needs no other egress on these addresses. The edge applies no destination policy of its own (the control plane filters every route), so this rule, restricted to public destinations, is the boundary against a compromised control plane. |
 | **Gateway and ARP** | The gateway for each attachment must be on that attachment's network and must answer ARP for the address. A new network needs its own gateway. |
 | **Routes** | The addresses must be routed to the edge zone's interface. |

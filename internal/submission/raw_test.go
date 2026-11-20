@@ -231,3 +231,18 @@ func TestRawFromFieldMustMatchFrom(t *testing.T) {
 		t.Errorf("unquoted original rejected: %v", err)
 	}
 }
+
+func TestRawSourceRefusesNonPlainRecipients(t *testing.T) {
+	for _, rcpt := range []string{`"ops"@example.net`, `"\"ops\""@example.net`, `"a b"@example.net`, `Ops <ops@example.net>`, `a..b@example.net`, `<ops@example.net>`} {
+		h := rawHeader()
+		h.Recipients, h.Kinds = []string{rcpt}, []string{RecipientTo}
+		if _, err := EncodeRawSource(h, []byte(rawMsg)); err == nil {
+			t.Errorf("%q was accepted", rcpt)
+		}
+	}
+	h := rawHeader()
+	h.Recipients, h.Kinds = []string{"First.Last+tag@example.net"}, []string{RecipientTo}
+	if _, err := EncodeRawSource(h, []byte(rawMsg)); err != nil {
+		t.Fatal(err)
+	}
+}

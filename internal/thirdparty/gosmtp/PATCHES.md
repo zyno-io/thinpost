@@ -53,6 +53,34 @@ Recorded result when the patch was added: both fail on unpatched code. Without
 report `DATA RACE` between `Conn.reset` and the BDAT worker. Both pass on the
 patched code.
 
+## P2: configurable CHUNKING (`conn.go`, `server.go`)
+
+**What.** New `Server.DisableCHUNKING` (zero value keeps upstream behaviour).
+When set: EHLO omits `CHUNKING`; `handleBdat` answers `502 5.5.1 BDAT not
+supported` before reading any argument or payload, sets `Conn.terminate` and
+closes the connection; `handleConn` returns right after `c.handle` when
+`terminate` is set, so `readLine` is never called again. `Conn.Close()` only
+closes the socket, and `c.text.R` may still hold pipelined bytes (for example
+an `EHLO` or `MAIL` inside the payload) that would otherwise be dispatched as
+commands. Only the submission and internal servers set it; the MX keeps
+CHUNKING.
+
+**Why (v0.26.0).** Upstream v0.26.0 fixed the desync after an early BDAT
+refusal (the "Missing RCPT TO" 502 now discards the chunk). P2 stays for other
+reasons: DATA-only keeps the session's `Data` call synchronous on the connection
+goroutine, which the submission session model and clampConn's drain modes
+assume; it avoids the BDAT worker goroutine; and it avoids discarding an
+oversize chunk of up to the client-declared size (4 GiB) outside the drain
+bounds.
+
+**Tests.** `chunking_test.go`: EHLO omits CHUNKING (and keeps it when unset);
+a pipelined `BDAT 10` plus `BDAT 5 LAST` whose payload holds commands gets
+exactly one 502, then the connection closes and no `Mail` runs; the buffered
+payload case (BDAT line and payload in one write, so the payload is in
+`c.text.R`) must create exactly one session. Checked once by hand: with the
+`if c.terminate { return nil }` line disabled, the buffered-payload test fails
+with "NewSession called 2 times, want exactly 1".
+
 ## P3: exact-limit DATA (`data.go`)
 
 **What.** the data reader returned `ErrDataTooLarge` as soon as its remaining

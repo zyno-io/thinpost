@@ -29,6 +29,48 @@ func addressKey(address string) (string, bool) {
 	return address[:at] + "@" + strings.ToLower(address[at+1:]), true
 }
 
+// DotAtomLocalPart reports whether local is a plain dot-atom local part: one or
+// more runs of printable ASCII atext characters separated by single dots. A
+// local part that needs quoting (a quote, a backslash, a space, ...) is not one.
+func DotAtomLocalPart(local string) bool {
+	if local == "" {
+		return false
+	}
+	prevDot := true // a leading dot is invalid
+	for i := 0; i < len(local); i++ {
+		c := local[i]
+		switch {
+		case c == '.':
+			if prevDot {
+				return false
+			}
+			prevDot = true
+			continue
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
+			strings.IndexByte("!#$%&'*+-/=?^_`{|}~", c) >= 0:
+		default:
+			return false
+		}
+		prevDot = false
+	}
+	return !prevDot
+}
+
+// PlainRecipient reports whether an envelope recipient is a bare addr-spec with
+// a dot-atom local part, so that re-parsing it can never name another mailbox
+// than the one the client sent to.
+func PlainRecipient(rcpt string) bool {
+	at := strings.LastIndexByte(rcpt, '@')
+	if at <= 0 || at == len(rcpt)-1 {
+		return false
+	}
+	if !DotAtomLocalPart(rcpt[:at]) {
+		return false
+	}
+	a, err := mail.ParseAddress(rcpt)
+	return err == nil && a.Address == rcpt
+}
+
 // Kind says how a recipient appears in the message.
 type Kind string
 
@@ -43,7 +85,8 @@ const (
 // spelling is kept) and classifies each: to if its exact key is in the To
 // header, cc if it is in Cc, otherwise bcc. The result is stably partitioned
 // to, then cc, then bcc; kinds[i] belongs to recipients[i]. An unparsable
-// recipient is ErrInvalid.
+// recipient, or one that is not a plain addr-spec with a dot-atom local part
+// (a quoted local part such as "ops"@example.net), is ErrInvalid.
 func Kinds(envelope []string, s *Scanned) (recipients []string, kinds []Kind, err error) {
 	if s == nil {
 		return nil, nil, ErrInvalid
@@ -52,7 +95,7 @@ func Kinds(envelope []string, s *Scanned) (recipients []string, kinds []Kind, er
 	var to, cc, bcc []string
 	for _, rcpt := range envelope {
 		key, ok := MailboxKey(rcpt)
-		if !ok {
+		if !ok || !PlainRecipient(rcpt) {
 			return nil, nil, ErrInvalid
 		}
 		if _, dup := seen[key]; dup {

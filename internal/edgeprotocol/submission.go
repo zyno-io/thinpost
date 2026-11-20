@@ -33,6 +33,10 @@ const (
 	// SubmissionBudgetOverhead is added to three times the message size when a
 	// submission reserves bytes (assembled buffer, object encode, ciphertext).
 	SubmissionBudgetOverhead = 192 << 10
+	// MaxSubmissionListeners bounds the SMTP submission listeners one edge
+	// runs: 587 and 465 on each of at most 16 sending addresses (the primary and
+	// 15 additional), plus the internal listener.
+	MaxSubmissionListeners = 2*16 + 1
 	// MaxSubmissionPorts bounds Ready.submission_ports.
 	MaxSubmissionPorts = 8
 

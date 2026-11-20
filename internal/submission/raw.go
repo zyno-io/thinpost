@@ -128,6 +128,38 @@ func rawKey(value string) (string, bool) {
 	return a.Address[:at] + "@" + strings.ToLower(a.Address[at+1:]), true
 }
 
+// plainRawRecipient reports whether a stored recipient is a bare addr-spec with
+// a dot-atom local part (mirrors rawmime.PlainRecipient): a quoted local part
+// would be re-parsed into a different mailbox.
+func plainRawRecipient(rcpt string) bool {
+	at := strings.LastIndexByte(rcpt, '@')
+	if at <= 0 || at == len(rcpt)-1 {
+		return false
+	}
+	prevDot := true
+	for i := 0; i < at; i++ {
+		c := rcpt[i]
+		switch {
+		case c == '.':
+			if prevDot {
+				return false
+			}
+			prevDot = true
+			continue
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
+			strings.IndexByte("!#$%&'*+-/=?^_`{|}~", c) >= 0:
+		default:
+			return false
+		}
+		prevDot = false
+	}
+	if prevDot {
+		return false
+	}
+	a, err := mail.ParseAddress(rcpt)
+	return err == nil && a.Address == rcpt
+}
+
 func validRawDomain(d string) bool {
 	if d == "" || len(d) > 253 || d != strings.ToLower(d) {
 		return false
@@ -161,7 +193,7 @@ func (h RawHeader) validate(enhancedProtection bool, raw []byte) error {
 	rank := 0
 	for i, rcpt := range h.Recipients {
 		key, ok := rawKey(rcpt)
-		if !ok {
+		if !ok || !plainRawRecipient(rcpt) {
 			return ErrInvalidSource
 		}
 		if _, dup := seen[key]; dup {

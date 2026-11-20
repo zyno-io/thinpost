@@ -15,6 +15,15 @@ import (
 type inboundStats struct {
 	mu     sync.Mutex
 	counts map[string]uint64
+	// name is the log line prefix; empty means "smtp_inbound".
+	name string
+}
+
+func (s *inboundStats) prefix() string {
+	if s.name != "" {
+		return s.name
+	}
+	return "smtp_inbound"
 }
 
 func (s *inboundStats) Count(name string) {
@@ -41,7 +50,7 @@ func (s *inboundStats) line() string {
 	}
 	sort.Strings(names)
 	var b strings.Builder
-	b.WriteString("smtp_inbound")
+	b.WriteString(s.prefix())
 	for _, name := range names {
 		fmt.Fprintf(&b, " %s=%d", name, s.counts[name])
 	}
@@ -61,7 +70,7 @@ func logInboundStats(ctx context.Context, s *inboundStats, interval time.Duratio
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if line := s.line(); line != "smtp_inbound" {
+			if line := s.line(); line != s.prefix() {
 				printf("%s", line)
 			}
 		}

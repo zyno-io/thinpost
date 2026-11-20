@@ -97,6 +97,18 @@ message app=<id> message=<id> status=hold_expired
 delivery app=<id> message=<id> delivery=<id> status=<outcome> smtp=<code> ip=<name>
 ```
 
+With SMTP submission enabled, the edge also logs a line every minute once there is activity, with fixed counter names and no addresses or credentials:
+
+```text
+smtp_submission auth_ok=<n> auth_invalid=<n> data_accept=<n> data_too_large=<n> ...
+smtp_submission_admission admitted=<n> concurrent_source_limit=<n> source_rate_limit=<n> ...
+smtp_submission_internal_admission admitted=<n> concurrent_source_limit=<n> ...
+```
+
+The first admission line covers ports 465 and 587 and appears only when `THINPOST_EDGE_SUBMISSION=true`; the second appears only when the internal listener is configured. Failed TLS handshakes and dropped connections on these ports are counted (`connection_error`) and summarised in at most one `submission SMTP connection error` line a minute, so a port scan does not flood the log.
+
+A rising `auth_invalid` or `auth_blocked` points to a client with a wrong or revoked credential. `data_budget_timeout` means submissions waited for the edge's buffer budget.
+
 `ip` is the name of the sending IP, `primary` for the Edge's primary address when it has no name, and `other` for anything that is not a valid name. Alert on `preparation_failed` and on spikes in non-success delivery outcomes, and use the IDs to look up the message in the console.
 
 Rules that keep logs safe to ship to a shared log system:

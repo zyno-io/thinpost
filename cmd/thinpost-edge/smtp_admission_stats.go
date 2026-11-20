@@ -9,6 +9,8 @@ import (
 // smtpAdmissionStats contains process-local, cumulative counters. It never
 // stores remote addresses or SMTP data. A restart resets all counters.
 type smtpAdmissionStats struct {
+	// name is the log line prefix; empty means "smtp_admission".
+	name              string
 	activeConnections atomic.Int64
 	connectionLimit   atomic.Int64
 	saturationEntries atomic.Uint64
@@ -80,7 +82,14 @@ func logSMTPAdmissionStats(ctx context.Context, s *smtpAdmissionStats, interval 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			printf("smtp_admission admitted=%d invalid=%d concurrent_source_limit=%d source_rate_limit=%d global_rate_limit=%d source_table_full=%d active_connections=%d connection_limit=%d saturation_entries=%d", s.admitted.Load(), s.invalid.Load(), s.concurrentLimit.Load(), s.sourceRate.Load(), s.globalRate.Load(), s.tableFull.Load(), s.activeConnections.Load(), s.connectionLimit.Load(), s.saturationEntries.Load())
+			printf("%s admitted=%d invalid=%d concurrent_source_limit=%d source_rate_limit=%d global_rate_limit=%d source_table_full=%d active_connections=%d connection_limit=%d saturation_entries=%d", s.logName(), s.admitted.Load(), s.invalid.Load(), s.concurrentLimit.Load(), s.sourceRate.Load(), s.globalRate.Load(), s.tableFull.Load(), s.activeConnections.Load(), s.connectionLimit.Load(), s.saturationEntries.Load())
 		}
 	}
+}
+
+func (s *smtpAdmissionStats) logName() string {
+	if s.name != "" {
+		return s.name
+	}
+	return "smtp_admission"
 }

@@ -291,10 +291,14 @@ func run() error {
 		// operator API's store and content reader (nil without object storage).
 		appReads = &admin.AppReadHandler{Service: service, Store: repository, ContentReader: operator.ContentReader, Holds: repository}
 	}
-	// SMTPSubmission stays false: control cannot accept SMTP until an edge enables
-	// the submission listeners and negotiates submission/1, and none does yet.
-	// The edge-side change that enables them also decides when to report it.
-	runtimeInfo := &admin.RuntimeInfo{Features: admin.RuntimeFeatures{Submission: handler != nil, Tracking: config.Tracking != nil}}
+	// SMTPSubmission is true when this replica has the SMTP intake wired (the
+	// edge bridge, signing and acceptance are all configured), so the console
+	// shows the SMTP tab. Whether an edge currently listens is not part of this
+	// startup flag: the tab reports each port's observed availability from the
+	// edge's own report (Ready.submission_ports), and an edge that does not
+	// enable submission never negotiates submission/1.
+	smtpIntake := bridgeConfig != nil && bridgeConfig.Submission != nil
+	runtimeInfo := &admin.RuntimeInfo{Features: admin.RuntimeFeatures{Submission: handler != nil, Tracking: config.Tracking != nil, SMTPSubmission: smtpIntake}}
 	if config.Tracking != nil {
 		runtimeInfo.Tracking = &admin.RuntimeTracking{Origin: config.Tracking.Origin, LinkEventLimit: config.Tracking.EventLimit}
 	}

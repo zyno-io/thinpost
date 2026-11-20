@@ -25,8 +25,8 @@ An **SMTP credential** is a login for sending an app's mail over SMTP, for softw
 
 An app also has a **From address policy** for SMTP mail: accept only From addresses on the app's verified sender domains, move the From address onto one of those domains (the original address stays in the name part, so `scanner@office.example.net` becomes `scanner=office.example.net@example.com`), or always send from one fixed address. When the policy replaces a From address, the message records the address the client sent as its **original From**.
 
-::: warning Not available yet
-The SMTP listener is not part of Thinpost yet. The admin API can already create and revoke credentials and set the From policy, but no mail can be sent over SMTP until the listener ships, and the console shows the SMTP tab only on a deployment that reports `smtp_submission` in its [runtime features](/guide/console#smtp). Nothing here changes how the HTTP APIs work.
+::: tip Turned on by your administrator
+Thinpost accepts SMTP submission on ports 465 (SSL/TLS) and 587 (STARTTLS) of its sending addresses once an administrator enables it on the edge (`THINPOST_EDGE_SUBMISSION=true`; the Helm value is `smtpSubmission.enabled`). The console shows the SMTP tab only on a deployment that reports `smtp_submission` in its [runtime features](/guide/console#smtp), and each port's badge says whether Thinpost last saw it listening. Port 25 is unchanged: it never offers AUTH. Nothing here changes how the HTTP APIs work.
 :::
 
 ## Sender domains

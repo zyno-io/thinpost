@@ -160,6 +160,21 @@ The `thinpost-edge` binary reads these when it starts. See the [command-line ref
 | `THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS` | list of DNS names | none | Optional | Extra bounce domains the Edge accepts, for domains that still receive bounces. The global bounce domain and every listener name are always accepted and must not be repeated. In total at most 24 bounce domains. |
 | `THINPOST_EDGE_SOURCE_GATEWAYS` | list of IPv4 addresses | none | Optional | Gateway of each source, primary first, one per source. When set, the Edge announces each source address to its gateway and reports ready only after every gateway resolves. When unset, there is no announcement and no readiness gate on it. |
 
+### SMTP submission
+
+Authenticated SMTP submission for apps that send raw mail. It is off by default. Port 25 is never affected: it keeps CHUNKING and offers no AUTH.
+
+| Variable | Type | Default | Required | Description |
+| --- | --- | --- | --- | --- |
+| `THINPOST_EDGE_SUBMISSION` | `true` or `false` | `false` | Optional | `true` opens port 587 (STARTTLS) and port 465 (implicit TLS) on every sending address. Each address presents its own listener certificate, the same one it uses on port 25. Any other value is an error. The Edge reports both ports to the control plane so the console can show whether they are available. |
+| `THINPOST_EDGE_SUBMISSION_INTERNAL_LISTEN` | `ip:port` | none | Optional | An extra in-cluster listener (STARTTLS) for clients that should not use the public addresses. The host must be a literal private or loopback IP, and the port must not be `25` or the control port. It is never reported to the control plane or shown in the console. It works without `THINPOST_EDGE_SUBMISSION`. |
+| `THINPOST_EDGE_SUBMISSION_INTERNAL_HOSTNAME` | DNS name | none | Conditional | Name the internal listener greets with and its certificate is issued for. Required with the internal listener. |
+| `THINPOST_EDGE_SUBMISSION_INTERNAL_CERT` | path | none | Conditional | Certificate of the internal listener. Required with the internal listener. It is checked against the CA below and must use a different key from the control certificate. |
+| `THINPOST_EDGE_SUBMISSION_INTERNAL_KEY` | path | none | Conditional | Private key for the internal listener's certificate. Required with the internal listener. |
+| `THINPOST_EDGE_SUBMISSION_INTERNAL_CA` | path | none | Conditional | PEM bundle of the cluster-local CA that issued the internal certificate. Required with the internal listener. It is read on every handshake, so a rotated CA needs no restart. |
+
+Submission listeners have their own connection limits, separate from port 25: the public ports together allow 64 connections in total and 16 per source address, with a connection rate of one per 20 ms globally (burst 200) and one per 200 ms per source (burst 30). The internal listener allows 64 in total and 32 per source. Authentication is limited to three attempts per connection and a burst of ten failed attempts per source address (refilling one per minute), and messages are limited to 7.5 MiB after decoding.
+
 ### Control channel and certificates
 
 | Variable | Type | Default | Required | Description |

@@ -31,6 +31,11 @@ type Server struct {
 	// Enable LMTP mode, as defined in RFC 2033.
 	LMTP bool
 
+	// thinpost (P2): when set, CHUNKING is not advertised and BDAT is refused
+	// with 502 followed by closing the connection. The zero value keeps
+	// upstream behaviour.
+	DisableCHUNKING bool
+
 	Domain            string
 	MaxRecipients     int
 	MaxMessageBytes   int64
@@ -185,6 +190,11 @@ func (s *Server) handleConn(c *Conn) error {
 			}
 
 			c.handle(cmd, arg)
+			// thinpost (P2): never read again once the connection was closed
+			// while pipelined input may still be buffered.
+			if c.terminate {
+				return nil
+			}
 		} else {
 			if err == io.EOF || errors.Is(err, net.ErrClosed) {
 				return nil

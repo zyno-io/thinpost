@@ -69,7 +69,7 @@ Mail for a receiving domain arrives at the same port-25 listener that handles bo
 | A listed domain that cannot receive now | `451`, so the sender queues and retries |
 | Anything else | `550 5.7.1` (no relaying) |
 
-A domain **cannot receive now** when its app is paused, the domain is disabled, the app has no enabled inbound endpoint, the app's pending inbound deliveries are at their limit, the deploy gate is closed, or the edge has no live control session. Thinpost never stores mail nobody will receive and never generates a bounce, so it creates no backscatter. There is no AUTH on the listener, and nothing in the inbound path forwards, auto-replies or sends a DSN.
+A domain **cannot receive now** when its app is paused, the domain is disabled, the app has no enabled inbound endpoint, the app's pending inbound deliveries are at their limit, the deploy gate is closed, or the edge has no live control session. Thinpost never stores mail nobody will receive and never generates a bounce, so it creates no backscatter. There is no AUTH on the port 25 listener (authenticated submission is on ports 465 and 587), and nothing in the inbound path forwards, auto-replies or sends a DSN.
 
 The edge answers `250` only after the control plane has committed the message and acknowledged it. If an acknowledgement is lost the sender retries, and a keyed fingerprint makes the retry a duplicate rather than a second message.
 

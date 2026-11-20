@@ -44,7 +44,33 @@ curl -sk https://localhost:8443/email \
 
 `smoke.sh` does all of that, plus the dev login, and also checks the delivered
 message's `DKIM-Signature` against the local DNS and reads `delivered` back from
-the operator API.
+the operator API. It then sends over SMTP on 587 (STARTTLS) and 465 (implicit
+TLS) with a freshly created SMTP credential, which it revokes again on exit,
+checks that Bcc and the client's Received header were removed and that the
+Message-ID is Thinpost's, and verifies the DKIM signature of those messages too.
+
+## Sending over SMTP
+
+The Edge listens on 587 and 465 of its sending IP (`THINPOST_EDGE_SUBMISSION=true`
+in `edge.env`), with the same certificate as port 25 (`smtp.quickstart.example`).
+Those ports exist only on the internal `edgepub` network, so use the `tools-smtp`
+helper, which sits on that network and has the quickstart CA:
+
+1. In the console, open the app's **SMTP** tab (name the primary sending IP under
+   **Operations → Sending IPs** first if it asks: address `11.42.51.10`, HELO name
+   and bounce domain `smtp.quickstart.example`) and create a credential.
+2. Send a message (the recipient must be `demo@quickstart.example`):
+
+```sh
+printf 'From: hello@quickstart.example\r\nTo: demo@quickstart.example\r\nSubject: Hi\r\n\r\nHello\r\n' |
+  docker compose run --rm --no-deps -T --entrypoint curl tools-smtp -sS --ssl-reqd \
+    --cacert /pki/ca.crt --resolve smtp.quickstart.example:587:11.42.51.10 \
+    smtp://smtp.quickstart.example:587 --mail-from hello@quickstart.example \
+    --mail-rcpt demo@quickstart.example --user "$USERNAME:$PASSWORD" -T -
+```
+
+Use `smtps://smtp.quickstart.example:465` (and `--resolve ...:465:...`) for implicit TLS.
+The message appears in Mailpit once delivered.
 
 ## What runs
 
@@ -52,6 +78,7 @@ the operator API.
 | --- | --- |
 | `control`, `edge` | The release `control` and `edge` image targets of the repository `Dockerfile`. |
 | `postgres`, `s3` | PostgreSQL 18 and the MiniStack S3 emulator. |
+| `tools-smtp`, `tools-dns` | Helpers for `smoke.sh` (profile `tools`): `curl` on the Edge's public network for SMTP submission, and DKIM verification through the local DNS. |
 | `mailpit` | The "remote" mail server; offers STARTTLS with a certificate for `mx.quickstart.example`. |
 | `coredns` | Authoritative DNS for `quickstart.example` (MX, SPF, DKIM, ownership TXT). |
 | `devidp` | Development-only OpenID Connect issuer, `examples/quickstart/devidp`. Refuses to start without `--insecure-dev-only`; built only by this stack's Dockerfile, never by a release target. |

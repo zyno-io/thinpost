@@ -14,8 +14,10 @@ spec:
   policyTypes:
     - Ingress
     - Egress
-{{- if .Values.controlClientCidrs }}
+{{- if or .Values.controlClientCidrs .Values.smtpSubmission.internal.enabled }}
   ingress:
+{{- end }}
+{{- if .Values.controlClientCidrs }}
     - from:
 {{- range .Values.controlClientCidrs }}
 {{- if not (regexMatch "^([0-9]{1,3}\\.){3}[0-9]{1,3}/32$" .) }}
@@ -26,6 +28,22 @@ spec:
 {{- end }}
       ports:
         - port: 7443
+          protocol: TCP
+{{- end }}
+{{- if .Values.smtpSubmission.internal.enabled }}
+    # In-cluster submission clients only; the public submission ports are on the
+    # direct-public interface, which router policy protects.
+    - from:
+{{- range .Values.smtpSubmission.internal.clientCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+{{- end }}
+{{- if .Values.smtpSubmission.internal.clientNamespaceSelector }}
+        - namespaceSelector:
+{{ toYaml .Values.smtpSubmission.internal.clientNamespaceSelector | indent 12 }}
+{{- end }}
+      ports:
+        - port: {{ int .Values.smtpSubmission.internal.port }}
           protocol: TCP
 {{- end }}
 
