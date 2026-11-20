@@ -164,8 +164,9 @@ func generateAddress(src *mail.Address, p Policy) (string, error) {
 	if src == nil {
 		return "", ErrFromNotPermitted
 	}
-	addr := encodeFrom(src.Address, target) + "@" + target
-	if len(addr) > 254 {
+	local := encodeFrom(src.Address, target)
+	addr := local + "@" + target
+	if local == "" || len(addr) > 254 {
 		return "", ErrMisconfigured
 	}
 	return addr, nil
@@ -192,19 +193,27 @@ func encodeFrom(original, target string) string {
 		prefix += "=" + d
 		changed = changed || dc
 	}
-	if !changed && len(prefix) <= maxLocal {
+	// The local part must fit 64 octets and leave the whole address within 254.
+	limit := maxLocal
+	if room := 254 - 1 - len(target); room < limit {
+		limit = room
+	}
+	if limit < hashLen+2 {
+		return "" // the target leaves no room for an encoded sender
+	}
+	if !changed && len(prefix) <= limit {
 		return prefix
 	}
 	sum := sha256.Sum256([]byte(local + "@" + domain))
-	suffix := hex.EncodeToString(sum[:])[:hashLen]
-	if len(prefix) > maxLocal-hashLen-1 {
-		prefix = prefix[:maxLocal-hashLen-1]
+	suffix := "-" + hex.EncodeToString(sum[:])[:hashLen]
+	if len(prefix) > limit-len(suffix) {
+		prefix = prefix[:limit-len(suffix)]
 	}
-	prefix = strings.TrimRight(prefix, ".-")
-	if prefix == "" {
-		return suffix
-	}
-	return prefix + "-" + suffix
+	// A cut may leave a trailing dot; drop it so the result stays a dot-atom.
+	// The '-' before the hash is always kept, so a hashed result can never
+	// equal an unhashed one made only of hex digits.
+	prefix = strings.TrimRight(prefix, ".")
+	return prefix + suffix
 }
 
 // sanitizeAtom maps bytes outside the safe set to '-' and tidies dots. It
