@@ -47,6 +47,10 @@ type Conn struct {
 
 	// thinpost: closed when the BDAT worker goroutine has exited.
 	bdatDone chan struct{}
+
+	// thinpost (P2): set when the command loop must stop reading, because the
+	// connection was closed while pipelined input may still be buffered.
+	terminate bool
 }
 
 func newConn(c net.Conn, s *Server) *Conn {
@@ -257,7 +261,10 @@ func (c *Conn) handleGreet(enhanced bool, arg string) {
 		"PIPELINING",
 		"8BITMIME",
 		"ENHANCEDSTATUSCODES",
-		"CHUNKING",
+	}
+	// thinpost (P2): DisableCHUNKING omits CHUNKING.
+	if !c.server.DisableCHUNKING {
+		caps = append(caps, "CHUNKING")
 	}
 	if _, isTLS := c.TLSConnectionState(); c.server.TLSConfig != nil && !isTLS {
 		caps = append(caps, "STARTTLS")
@@ -994,6 +1001,15 @@ func (c *Conn) handleData(arg string) {
 }
 
 func (c *Conn) handleBdat(arg string) {
+	// thinpost (P2): with CHUNKING disabled, refuse before reading any argument
+	// or payload and stop the command loop, so a client that sends BDAT anyway
+	// can never have its payload (possibly already buffered) parsed as commands.
+	if c.server.DisableCHUNKING {
+		c.writeResponse(502, EnhancedCode{5, 5, 1}, "BDAT not supported")
+		c.terminate = true
+		c.Close()
+		return
+	}
 	args := strings.Fields(arg)
 	if len(args) == 0 {
 		c.writeResponse(501, EnhancedCode{5, 5, 4}, "Missing chunk size argument")
