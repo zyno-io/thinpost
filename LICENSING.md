@@ -11,6 +11,12 @@ chart (`resources/helm/chart/`), the documentation, the webhook test samples
 (written for this project; they mirror the structure of provider webhook
 payloads with synthetic values) and the test tooling.
 
+`internal/thirdparty/gosmtp/` is a patched copy of
+[emersion/go-smtp](https://github.com/emersion/go-smtp) v0.26.0, which is also
+MIT-licensed. It keeps its own copyright notice in
+`internal/thirdparty/gosmtp/LICENSE`; the changes are listed in
+`internal/thirdparty/gosmtp/PATCHES.md`.
+
 Third-party dependencies retain their own licenses and notices. This policy
 does not relicense third-party software.
 
