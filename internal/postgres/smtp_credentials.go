@@ -117,6 +117,19 @@ func (r *Repository) RevokeSMTPCredential(ctx context.Context, actor, appID, cre
 		return err
 	}
 	defer tx.Rollback()
+	// Lock the app before the credential, the same order SMTP submission takes
+	// (app, then credential). Updating the credential first and then inserting
+	// the audit row (whose foreign key locks the app) would deadlock against an
+	// in-flight submission and abort the revocation. A paused app can still
+	// revoke.
+	var locked bool
+	err = tx.QueryRowContext(ctx, `SELECT true FROM apps WHERE id=$1 FOR UPDATE`, appID).Scan(&locked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return admin.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
 	var id string
 	err = tx.QueryRowContext(ctx, `UPDATE smtp_credentials SET revoked_at=clock_timestamp() WHERE id=$1 AND app_id=$2 AND revoked_at IS NULL RETURNING id`, credentialID, appID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
