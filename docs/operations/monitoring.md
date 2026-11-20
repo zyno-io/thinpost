@@ -110,7 +110,10 @@ The edge also logs a line every minute once there is activity, with fixed counte
 ```text
 smtp_submission auth_ok=<n> auth_invalid=<n> data_accept=<n> data_too_large=<n> ...
 smtp_submission_admission admitted=<n> concurrent_source_limit=<n> source_rate_limit=<n> ...
+smtp_submission_internal_admission admitted=<n> concurrent_source_limit=<n> ...
 ```
+
+The first admission line covers ports 465 and 587 and appears only when `THINPOST_EDGE_SUBMISSION=true`; the second appears only when the internal listener is configured. Failed TLS handshakes and dropped connections on these ports are counted (`connection_error`) and summarised in at most one `submission SMTP connection error` line a minute, so a port scan does not flood the log.
 
 A rising `auth_invalid` or `auth_blocked` points to a client with a wrong or revoked credential. `data_budget_timeout` means submissions waited for the edge's buffer budget.
 

@@ -41,3 +41,11 @@ paths = [
   '''^docs/reference/compatibility/[^/]+\.md$''',
   '''^examples/quickstart/db-init\.sh$''',
 ]
+
+[[allowlists]]
+description = "Synthetic tps_ credentials (repeated letters) in the SMTP submission tests"
+targetRules = ["thinpost-smtp-secret"]
+paths = [
+  '''^internal/bounce/submission[^/]*_test\.go$''',
+  '''^cmd/thinpost-edge/smtp_submission_test\.go$''',
+]

@@ -436,3 +436,104 @@ func TestSubmissionAdmissionIsPerSource(t *testing.T) {
 		t.Fatalf("a second source was not admitted: %q %v", line, err)
 	}
 }
+
+// An edge with the maximum sending addresses and the internal listener must
+// start: two listeners per address plus one.
+func TestSubmissionBindsForEveryAddressAndTheInternalListener(t *testing.T) {
+	addresses := make([]string, 16)
+	for i := range addresses {
+		addresses[i] = "127.0.0.1"
+	}
+	f := startFixture(t, addresses, true)
+	if want := 2*16 + 1; len(f.rt.servers) != want {
+		t.Fatalf("%d servers, want %d", len(f.rt.servers), want)
+	}
+}
+
+// The internal listener's CA bundle is read on every handshake: after the
+// cluster CA rotates, a certificate from the old CA stops being served and one
+// from the new CA starts.
+func TestInternalSubmissionCAIsReloaded(t *testing.T) {
+	dir := t.TempDir()
+	oldCA, newCA := newTestPKI(t), newTestPKI(t)
+	control, _ := oldCA.issue(t, dir, "control.internal")
+	oldCert, oldKey := oldCA.issue(t, dir, "submission.cluster.example")
+	caPath := filepath.Join(dir, "ca.crt")
+	writeCA := func(p *testPKI) {
+		t.Helper()
+		if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: p.authority.Raw}), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeCA(oldCA)
+	roots := func() (*x509.CertPool, error) {
+		data, err := os.ReadFile(caPath)
+		if err != nil {
+			return nil, err
+		}
+		pool := x509.NewCertPool()
+		pool.AppendCertsFromPEM(data)
+		return pool, nil
+	}
+	cfg, err := publicSMTPTLSRoots(oldCert, oldKey, "submission.cluster.example", control, roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = cfg.GetCertificate(nil); err != nil {
+		t.Fatal(err)
+	}
+	writeCA(newCA)
+	if _, err = cfg.GetCertificate(nil); err == nil {
+		t.Fatal("a certificate from the retired CA was still served")
+	}
+	newCert, newKey := newCA.issue(t, dir, "submission.cluster.example")
+	// The files are replaced in place, as a renewed Secret would be.
+	for from, to := range map[string]string{newCert: oldCert, newKey: oldKey} {
+		data, _ := os.ReadFile(from)
+		if err = os.WriteFile(to, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = cfg.GetCertificate(nil); err != nil {
+		t.Fatalf("the renewed certificate was refused: %v", err)
+	}
+}
+
+// The internal admission counts the connections it admits itself.
+func TestInternalAdmissionCountsAdmitted(t *testing.T) {
+	f := startFixture(t, []string{"127.0.0.1"}, true)
+	conn, err := net.Dial("tcp", f.intern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err = bufio.NewReader(conn).ReadString('\n'); err != nil {
+		t.Fatal(err)
+	}
+	internal := f.rt.admission[len(f.rt.admission)-1]
+	if internal.admitted.Load() != 1 {
+		t.Fatalf("admitted=%d", internal.admitted.Load())
+	}
+}
+
+// With only the internal listener, no public admission line is logged.
+func TestInternalOnlySubmissionHasNoPublicAdmissionStats(t *testing.T) {
+	pki := newTestPKI(t)
+	dir := t.TempDir()
+	control, _ := pki.issue(t, dir, "control.internal")
+	certPath, keyPath := pki.issue(t, dir, "submission.cluster.example")
+	caPath := filepath.Join(dir, "ca.crt")
+	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: pki.authority.Raw}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := edgeapp.Config{ControlCert: control, SubmissionInternal: edgeapp.SubmissionInternal{Listen: netip.MustParseAddrPort("127.0.0.1:0"), Hostname: "submission.cluster.example", Cert: certPath, Key: keyPath, CAFile: caPath}}
+	rt, err := bindSubmission(c, &loadSubmission{}, nil, nil, submissionBind{starttls: "0", implicit: "0"}, semaphore.NewWeighted(edgeprotocol.EdgeSubmissionBudget))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.closeListeners()
+	if len(rt.servers) != 1 || len(rt.admission) != 1 || rt.admission[0].name != "smtp_submission_internal_admission" {
+		t.Fatalf("servers=%d admission=%d", len(rt.servers), len(rt.admission))
+	}
+}

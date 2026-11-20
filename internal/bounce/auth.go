@@ -64,12 +64,9 @@ func authTempfail() error {
 	return &smtp.SMTPError{Code: 454, EnhancedCode: smtp.EnhancedCode{4, 7, 0}, Message: "Temporary authentication failure"}
 }
 
-// authInvalid counts a failure against the client address and answers 535.
+// authInvalid answers 535. The attempt was already charged by the limiter.
 func (s *submissionSession) authInvalid() error {
 	s.count("auth_invalid")
-	if limiter := s.backend.cfg.AuthLimiter; limiter != nil {
-		limiter.Failed(s.clientIP())
-	}
 	return &smtp.SMTPError{Code: 535, EnhancedCode: smtp.EnhancedCode{5, 7, 8}, Message: "Authentication credentials invalid"}
 }
 
@@ -97,6 +94,9 @@ func (s *submissionSession) authenticate(username, password string) error {
 		s.mu.Unlock()
 		if s.clamp != nil {
 			s.clamp.authenticate()
+		}
+		if limiter := s.backend.cfg.AuthLimiter; limiter != nil {
+			limiter.Succeeded(s.clientIP())
 		}
 		s.count("auth_ok")
 		return nil

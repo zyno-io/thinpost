@@ -126,11 +126,14 @@ const (
 	AuthGateBusy
 )
 
-// AuthLimiter bounds failed AUTH attempts per client address.
+// AuthLimiter bounds AUTH attempts per client address. Each attempt is charged
+// when it is checked, so attempts made in parallel cannot exceed the limit; a
+// successful login gives the charge back.
 type AuthLimiter interface {
+	// Check charges one attempt and reports whether it may proceed.
 	Check(addr netip.Addr) AuthGate
-	// Failed records one failed attempt.
-	Failed(addr netip.Addr)
+	// Succeeded refunds the attempt charged by Check.
+	Succeeded(addr netip.Addr)
 }
 
 // SubmissionConfig configures the submission and internal listeners. All of
@@ -170,7 +173,7 @@ type submissionBackend struct {
 // as-is and wrap 465's listener with tls.NewListener, below which the caller
 // installs ClampListener.
 func NewSubmissionServers(cfg SubmissionConfig, listeners []SubmissionListener) ([]*smtp.Server, error) {
-	if cfg.Submission == nil || len(listeners) == 0 || len(listeners) > 16 {
+	if cfg.Submission == nil || len(listeners) == 0 || len(listeners) > edgeprotocol.MaxSubmissionListeners {
 		return nil, errors.New("invalid submission listener configuration")
 	}
 	if cfg.maxBytes == 0 {
@@ -203,7 +206,7 @@ func NewSubmissionServers(cfg SubmissionConfig, listeners []SubmissionListener) 
 		server.DisableCHUNKING = true
 		server.ReadTimeout = 30 * time.Second
 		server.WriteTimeout = 30 * time.Second
-		server.ErrorLog = redactedLogger{logf: log.Printf}
+		server.ErrorLog = newSubmissionLogger(cfg.Stats, log.Printf)
 		servers = append(servers, server)
 	}
 	return servers, nil
@@ -482,15 +485,17 @@ func (s *submissionSession) readBody(r io.Reader, limit int64, held *int64, rele
 }
 
 // trim gives back the unused part of the reservation. A small message is
-// copied out of the full-size buffer, so the memory is really freed.
+// copied out of the full-size buffer, so the memory is really freed, but only
+// when the budget has room for the copy: otherwise the full reservation stays,
+// and the bytes in memory never exceed what the budget counts.
 func (s *submissionSession) trim(body []byte, held *int64, release func(int64)) []byte {
 	need := roundUpChunk(int64(len(body)))
-	if need >= *held/2 {
+	if need >= *held/2 || !s.backend.cfg.Budget.TryAcquire(need) {
 		return body
 	}
 	small := make([]byte, len(body), need)
 	copy(small, body)
-	release(*held - need)
+	release(*held)
 	*held = need
 	return small
 }
@@ -537,6 +542,7 @@ func (s *submissionSession) Data(r io.Reader) error {
 		// A read error, a closed connection or a cancelled transaction is
 		// cleanup, not an early refusal.
 		s.count("data_tempfail")
+		s.closeConnection()
 		return temporary()
 	case len(body) == 0:
 		s.count("data_empty")
@@ -564,4 +570,52 @@ func (s *submissionSession) Data(r io.Reader) error {
 		s.closeConnection()
 	}
 	return reply.err()
+}
+
+// submissionLogger receives go-smtp's internal error reports for the
+// submission servers. A failed TLS handshake or a dropped connection is routine
+// on a public port, so those are counted and summarised at most once a minute;
+// a panic is always logged at once. Nothing from the report (addresses, error
+// text, panic values) is kept.
+type submissionLogger struct {
+	logf       func(string, ...any)
+	stats      Stats
+	mu         sync.Mutex
+	last       time.Time
+	suppressed int
+	now        func() time.Time
+}
+
+func newSubmissionLogger(stats Stats, logf func(string, ...any)) *submissionLogger {
+	return &submissionLogger{logf: logf, stats: stats, now: time.Now}
+}
+
+func (l *submissionLogger) Printf(format string, _ ...any) {
+	if strings.HasPrefix(format, "panic serving") {
+		l.logf("submission SMTP handler panic")
+		return
+	}
+	l.connectionError()
+}
+func (l *submissionLogger) Println(...any) { l.connectionError() }
+
+func (l *submissionLogger) connectionError() {
+	if l.stats != nil {
+		l.stats.Count("connection_error")
+	}
+	l.mu.Lock()
+	now := l.now()
+	if !l.last.IsZero() && now.Sub(l.last) < time.Minute {
+		l.suppressed++
+		l.mu.Unlock()
+		return
+	}
+	suppressed := l.suppressed
+	l.last, l.suppressed = now, 0
+	l.mu.Unlock()
+	if suppressed > 0 {
+		l.logf("submission SMTP connection errors (%d more since the last line)", suppressed)
+		return
+	}
+	l.logf("submission SMTP connection error")
 }

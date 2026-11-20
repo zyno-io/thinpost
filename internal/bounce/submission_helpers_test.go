@@ -85,25 +85,27 @@ func (f *fakeSubmission) last() SubmissionMessage {
 }
 
 type fakeLimiter struct {
-	mu       sync.Mutex
-	gate     AuthGate
-	failures int
+	mu      sync.Mutex
+	gate    AuthGate
+	checks  int
+	refunds int
 }
 
 func (l *fakeLimiter) Check(netip.Addr) AuthGate {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.checks++
 	return l.gate
 }
-func (l *fakeLimiter) Failed(netip.Addr) {
+func (l *fakeLimiter) Succeeded(netip.Addr) {
 	l.mu.Lock()
-	l.failures++
+	l.refunds++
 	l.mu.Unlock()
 }
-func (l *fakeLimiter) failed() int {
+func (l *fakeLimiter) counts() (int, int) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.failures
+	return l.checks, l.refunds
 }
 
 type subStats struct {

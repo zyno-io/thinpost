@@ -130,8 +130,8 @@ func TestSubmissionAuthRefusals(t *testing.T) {
 			c.ehlo()
 			c.expect(tc.want, tc.line)
 			c.expect(530, "MAIL FROM:<sender@example.com>")
-			if tc.want == 535 && limiter.failed() != 1 {
-				t.Fatalf("failure not counted: %d", limiter.failed())
+			if checks, refunds := limiter.counts(); tc.want != 504 && (checks != 1 || refunds != 0) {
+				t.Fatalf("the attempt was charged %d times and refunded %d", checks, refunds)
 			}
 		})
 	}
@@ -599,9 +599,21 @@ func TestClampConnModes(t *testing.T) {
 	if n, err := c.Read(make([]byte, 1)); n != 1 || err != nil {
 		t.Fatalf("transaction mode honoured the server's deadline: %d %v", n, err)
 	}
-	// Drain closes the connection past the byte cap.
+	// Drain closes the connection past the byte cap: the writer offers far more
+	// than the cap and must not get it all through.
 	c.beginDrain()
-	go func() { _, _ = client.Write(bytes.Repeat([]byte("z"), 150)) }()
+	written := make(chan int, 1)
+	go func() {
+		total := 0
+		for total < 4000 {
+			n, err := client.Write(bytes.Repeat([]byte("z"), 100))
+			total += n
+			if err != nil {
+				break
+			}
+		}
+		written <- total
+	}()
 	var total int
 	for {
 		n, err := c.Read(make([]byte, 64))
@@ -610,8 +622,11 @@ func TestClampConnModes(t *testing.T) {
 			break
 		}
 	}
-	if total > 100+64 {
+	if total > 100+1 {
 		t.Fatalf("drain read %d bytes past a cap of 100", total)
+	}
+	if got := <-written; got >= 4000 {
+		t.Fatalf("the writer got all %d bytes through", got)
 	}
 	c.endTransaction()
 	if c.currentMode() != modeAuthenticated {
@@ -714,7 +729,7 @@ func TestSubmissionLogsAndFormattingAreRedacted(t *testing.T) {
 	c.envelope()
 	c.send(stuff(simpleBody))
 	c.reply()
-	eventually(t, "the panic log", func() bool { return strings.Contains(out.String(), "bounce SMTP handler panic") })
+	eventually(t, "the panic log", func() bool { return strings.Contains(out.String(), "submission SMTP handler panic") })
 	logged := out.String()
 	for _, secret := range []string{testCredSecret, testCredID, "victim@example.com", "127.0.0.1", "sender@example.com"} {
 		if strings.Contains(logged, secret) {
@@ -736,4 +751,81 @@ func filler(n int) string {
 	line := strings.Repeat("x", 70) + "\r\n"
 	body := strings.Repeat(line, n/len(line)+1)
 	return body[:n-2] + "\r\n"
+}
+
+// notAnswered sends a command after a stall and reports whether any 250 came
+// back: a stalled upload must end the connection, not run the rest of the body
+// as commands.
+func (c *subClient) notAnswered250() bool {
+	_, _ = c.conn.Write([]byte("NOOP\r\nNOOP\r\n"))
+	for i := 0; i < 5; i++ {
+		code, _ := c.reply()
+		if code == 0 {
+			return true
+		}
+		if code == 250 {
+			return false
+		}
+	}
+	return true
+}
+
+func TestSubmissionStalledUploadClosesTheConnection(t *testing.T) {
+	limits := clampLimits{preAuth: time.Minute, idle: 300 * time.Millisecond, transaction: time.Minute, lifetime: time.Minute, drainTotal: time.Minute, drainIdle: 300 * time.Millisecond, drainBytes: 1 << 30}
+	t.Run("transaction idle", func(t *testing.T) {
+		env := startSubmission(t, subOptions{implicit: true, limits: &limits})
+		c := env.ready()
+		c.envelope()
+		c.send("partial line\r\n")
+		time.Sleep(900 * time.Millisecond)
+		if !c.notAnswered250() {
+			t.Fatal("commands inside a stalled upload were run")
+		}
+	})
+	t.Run("drain idle", func(t *testing.T) {
+		env := startSubmission(t, subOptions{implicit: true, limits: &limits, cfg: SubmissionConfig{maxBytes: 64 << 10}})
+		c := env.ready()
+		c.envelope()
+		c.send(filler(80 << 10)) // over the limit, no terminator: refused, then drained
+		time.Sleep(900 * time.Millisecond)
+		if !c.notAnswered250() {
+			t.Fatal("commands inside a stalled drain were run")
+		}
+	})
+}
+
+func TestSubmissionIdleBeforeAuthIsCutAtThePreAuthLimit(t *testing.T) {
+	limits := defaultClampLimits()
+	limits.preAuth = 500 * time.Millisecond
+	env := startSubmission(t, subOptions{implicit: true, limits: &limits})
+	c := env.dial()
+	start := time.Now()
+	for {
+		code, _ := c.cmd("NOOP")
+		if code != 250 {
+			break
+		}
+		if time.Since(start) > 5*time.Second {
+			t.Fatal("NOOP kept a pre-auth connection open")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// After AUTH the longer lifetime applies instead.
+	env2 := startSubmission(t, subOptions{implicit: true, limits: &limits})
+	c2 := env2.dial()
+	c2.ehlo()
+	c2.expect(235, "AUTH PLAIN "+plainIR("", testCredID, testCredSecret))
+	time.Sleep(800 * time.Millisecond)
+	c2.expect(250, "NOOP")
+}
+
+func TestSubmissionSuccessfulAuthRefundsTheAttempt(t *testing.T) {
+	limiter := &fakeLimiter{}
+	env := startSubmission(t, subOptions{implicit: true, cfg: SubmissionConfig{AuthLimiter: limiter}})
+	c := env.dial()
+	c.ehlo()
+	c.expect(235, "AUTH PLAIN "+plainIR("", testCredID, testCredSecret))
+	if checks, refunds := limiter.counts(); checks != 1 || refunds != 1 {
+		t.Fatalf("checks=%d refunds=%d", checks, refunds)
+	}
 }
