@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/zyno-io/thinpost/internal/postgres"
+	"github.com/zyno-io/thinpost/internal/smtpintake"
+	"github.com/zyno-io/thinpost/internal/submission"
 )
 
 type objects struct{}
@@ -76,5 +78,48 @@ func TestBridgeRejectsPublicTargetsAndWrongControlIdentity(t *testing.T) {
 	if bridge, err = New(bad, repo, objects{}); err == nil {
 		_ = bridge.Close()
 		t.Fatal("accepted weak bounce key")
+	}
+}
+
+type fakeSubmission struct{}
+
+func (fakeSubmission) Verify(context.Context, string, string, netip.Addr) smtpintake.AuthResult {
+	return smtpintake.AuthTempfail
+}
+func (fakeSubmission) Submit(context.Context, submission.Fence, smtpintake.Message) smtpintake.Result {
+	return smtpintake.Result{Outcome: smtpintake.Tempfail}
+}
+
+// The submission intake reaches the session runner, which advertises the
+// capability only when it is set.
+func TestBridgePassesSubmissionToTheRunner(t *testing.T) {
+	pub, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, _ := url.Parse("spiffe://thinpost.test/controller/a")
+	cert := &x509.Certificate{SerialNumber: big.NewInt(1), URIs: []*url.URL{identity}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, cert, cert, pub, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Config{WorkerID: "worker", ControllerID: "controller", JournalID: "0123456789abcdef0123456789abcdef", ControllerIdentity: identity.String(), Target: "10.0.0.1:7443", WorkerDNS: "edge.internal", WorkerIdentity: "spiffe://thinpost.test/worker/a", PrivateCA: x509.NewCertPool(), ClientCertificate: tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, Source: netip.MustParseAddr("45.0.1.22"), Infrastructure: []netip.Prefix{netip.MustParsePrefix("45.0.1.0/24")}, BounceDomain: "bounce.example.com", ActiveBounceKey: "v1", BounceKeys: map[string][]byte{"v1": []byte("0123456789abcdef0123456789abcdef")}, LeaseTTL: 30 * time.Second, ClockMargin: time.Second, PollInterval: time.Second, Recipients: allowRecipients{}}
+	repo := &postgres.Repository{DB: &sql.DB{}}
+	without, err := New(c, repo, objects{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer without.Close()
+	if without.runner.Submission != nil {
+		t.Fatal("submission set without a configured intake")
+	}
+	c.Submission = fakeSubmission{}
+	with, err := New(c, repo, objects{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer with.Close()
+	if with.runner.Submission == nil {
+		t.Fatal("the intake did not reach the runner")
 	}
 }
