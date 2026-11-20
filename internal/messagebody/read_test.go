@@ -356,3 +356,13 @@ func TestOpenMessageRaw(t *testing.T) {
 		t.Fatal("unauthorized raw fetched")
 	}
 }
+
+func TestParseHeadersAcceptsWhitespaceBeforeTheColon(t *testing.T) {
+	headers, err := ParseHeaders([]byte("Subject : hi\r\nX-A \t: v\r\n\r\nbody"))
+	if err != nil || len(headers) != 2 || headers[0].Name != "Subject" || headers[0].Value != "hi" || headers[1].Name != "X-A" {
+		t.Fatalf("%+v %v", headers, err)
+	}
+	if _, err = ParseHeaders([]byte("Bad Name : v\r\n\r\n")); err == nil {
+		t.Fatal("space inside the name accepted")
+	}
+}
