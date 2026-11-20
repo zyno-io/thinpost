@@ -270,7 +270,9 @@ func TestReserveSMTPSubmissionChecksTheCredential(t *testing.T) {
 	}
 	// An exhausted bucket is rate limited, and a key reservation still works
 	// against the same bucket.
-	f.exec(`UPDATE apps SET submission_tokens=0`)
+	// Empty the bucket and slow the refill so the few milliseconds before the
+	// next call can't refill a whole token.
+	f.exec(`UPDATE apps SET submission_tokens=0,submission_rate_per_minute=1,submission_refilled_at=clock_timestamp() WHERE id=$1`, f.app)
 	if err := f.repo.ReserveSubmission(f.ctx, f.app, f.key, 1); !errors.Is(err, submission.ErrRateLimited) {
 		t.Fatal("key on an empty bucket", err)
 	}
