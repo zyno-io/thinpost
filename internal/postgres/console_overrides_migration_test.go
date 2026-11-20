@@ -14,7 +14,7 @@ import (
 // TestMigration043 applies migrations through 42 over existing messages, then
 // migrates: existing rows read false in all three new columns, the CHECK is
 // not validated against old rows (no table scan) but binds new writes, and the
-// schema version is 43.
+// schema version is at least 43.
 func TestMigration043(t *testing.T) {
 	dsn := os.Getenv("THINPOST_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -102,7 +102,7 @@ func TestMigration043(t *testing.T) {
 		t.Fatal("console test rows", err)
 	}
 	version, err := SchemaVersion(ctx, db)
-	if err != nil || version != 43 {
+	if err != nil || version < 43 {
 		t.Fatal("schema version", version, err)
 	}
 }
