@@ -114,6 +114,11 @@ func TestSMTPRoutes(t *testing.T) {
 		`{"from":{"mode":"address","address":"a..b@example.com","keep_origin":false,"only_unauthorized":true}}`,
 		`{"from":{"mode":"address","address":"é@example.com","keep_origin":false,"only_unauthorized":true}}`,
 		`{"from":{"mode":"address","address":"a@example.com","keep_origin":true,"only_unauthorized":true}}`,
+		`{"from":{"mode":"domain","domain":"example.com","address":"\"a b\"@example.com","keep_origin":false,"only_unauthorized":true}}`,
+		`{"from":{"mode":"domain","domain":"example.com","address":"a..b@example.com","keep_origin":false,"only_unauthorized":true}}`,
+		`{"from":{"mode":"domain","domain":"example.com","address":"é@example.com","keep_origin":false,"only_unauthorized":true}}`,
+		`{"from":{"mode":"domain","domain":"example.com","address":"a@Example.com","keep_origin":false,"only_unauthorized":true}}`,
+		`{"from":{"mode":"domain","domain":"example.com","address":"no-domain","keep_origin":false,"only_unauthorized":true}}`,
 		`{"from":{"mode":"off","domain":"example.com","keep_origin":false,"only_unauthorized":true}}`,
 		`{"from":{"mode":"off","keep_origin":false,"only_unauthorized":true},"extra":1}`,
 	} {
@@ -131,6 +136,20 @@ func TestSMTPRoutes(t *testing.T) {
 		!strings.Contains(w.Body.String(), `"signing_ready":[{"domain":"example.com","ready":true}]`) || len(ready.calls) != 1 || ready.calls[0] != app+" example.com" {
 		t.Fatal("domain update", w.Code, w.Body.String(), ready.calls)
 	}
+	// Domain mode with a fallback address: stored, and both domains are checked for signing.
+	ready.calls = nil
+	w = send(h, "PUT", put, `{"from":{"mode":"domain","domain":"example.com","address":"no-reply@example.org","keep_origin":false,"only_unauthorized":true}}`, "valid")
+	if w.Code != 200 || store.policy.Address == nil || *store.policy.Address != "no-reply@example.org" || *store.policy.Domain != "example.com" ||
+		!strings.Contains(w.Body.String(), `"signing_ready":[{"domain":"example.com","ready":true},{"domain":"example.org","ready":true}]`) ||
+		len(ready.calls) != 2 {
+		t.Fatal("domain update with fallback", w.Code, w.Body.String(), ready.calls)
+	}
+	ready.calls = nil
+	w = send(h, "PUT", put, `{"from":{"mode":"domain","domain":"example.com","address":"no-reply@example.com","keep_origin":false,"only_unauthorized":true}}`, "valid")
+	if w.Code != 200 || len(ready.calls) != 1 || strings.Count(w.Body.String(), `"domain":"example.com","ready"`) != 1 {
+		t.Fatal("same-domain fallback is checked once", w.Code, w.Body.String(), ready.calls)
+	}
+	store.policy = SMTPFromPolicy{}
 	ready.err = errors.New("not ready")
 	if w = send(h, "PUT", put, `{"from":{"mode":"address","address":"No-Reply+x@example.com","keep_origin":false,"only_unauthorized":true}}`, "valid"); w.Code != 200 ||
 		!strings.Contains(w.Body.String(), `"signing_ready":[{"domain":"example.com","ready":false}]`) {
@@ -196,6 +215,17 @@ func TestNormalizeSMTPFromPolicy(t *testing.T) {
 	}
 	if p, ok := NormalizeSMTPFromPolicy(SMTPFromPolicy{Mode: "address", Address: str("A.b+c@Example.com")}); ok {
 		t.Fatal("address is not normalized before storing", p)
+	}
+	// Domain mode keeps an optional, validated fallback address.
+	domain := "example.com"
+	if p, ok := NormalizeSMTPFromPolicy(SMTPFromPolicy{Mode: "domain", Domain: &domain, Address: str("no-reply@example.org"), KeepOrigin: true}); !ok || p.Address == nil || *p.Address != "no-reply@example.org" || !p.KeepOrigin {
+		t.Fatal("domain with fallback", p, ok)
+	}
+	if p, ok := NormalizeSMTPFromPolicy(SMTPFromPolicy{Mode: "domain", Domain: &domain}); !ok || p.Address != nil {
+		t.Fatal("domain without fallback", p, ok)
+	}
+	if _, ok := NormalizeSMTPFromPolicy(SMTPFromPolicy{Mode: "domain", Domain: &domain, Address: str("a b@example.com")}); ok {
+		t.Fatal("bad fallback accepted")
 	}
 	for _, address := range []string{strings.Repeat("a", 65) + "@example.com", "a@localhost", "a@127.0.0.1", ".a@example.com", "a.@example.com", "a b@example.com", "a@" + "-example.com"} {
 		if _, ok := NormalizeSMTPFromPolicy(SMTPFromPolicy{Mode: "address", Address: &address}); ok {

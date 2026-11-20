@@ -83,3 +83,16 @@ func TestKindsAllBcc(t *testing.T) {
 		t.Fatalf("%v %v", kinds, err)
 	}
 }
+
+func TestKindsRefusesNonPlainRecipients(t *testing.T) {
+	s := mustScan(t, "To: ops@example.net\r\n\r\nbody")
+	for _, rcpt := range []string{`"ops"@example.net`, `"\"ops\""@example.net`, `"a b"@example.net`, `Ops <ops@example.net>`, `<ops@example.net>`, `a..b@example.net`, `.a@example.net`, `a.@example.net`} {
+		if _, _, err := Kinds([]string{rcpt}, s); err != ErrInvalid {
+			t.Errorf("%q: %v", rcpt, err)
+		}
+	}
+	rcpts, _, err := Kinds([]string{"First.Last+tag@Example.NET", "o'brien@example.net"}, s)
+	if err != nil || len(rcpts) != 2 {
+		t.Fatalf("%v %v", rcpts, err)
+	}
+}
