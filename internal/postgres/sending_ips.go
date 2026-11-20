@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/netip"
 	"slices"
+	"strconv"
 
 	"github.com/zyno-io/thinpost/internal/admin"
 	"github.com/zyno-io/thinpost/internal/delivery"
@@ -36,6 +37,22 @@ func (r *Repository) RecordEdgeSources(ctx context.Context, lease ControllerLeas
 		}
 		addresses, domains = list, append([]string{}, caps.BounceDomains...)
 	}
+	var ports any
+	if caps.SubmissionPorts != nil {
+		// The ports come from the edge's report, which is not trusted. Keep only
+		// valid, distinct ports and at most the schema's 8, so a bad report can
+		// never fail the upsert and drop the rest of the source report.
+		list := make([]string, 0, len(caps.SubmissionPorts))
+		seen := make(map[int]bool, len(caps.SubmissionPorts))
+		for _, port := range caps.SubmissionPorts {
+			if port < 1 || port > 65535 || seen[port] || len(list) == 8 {
+				continue
+			}
+			seen[port] = true
+			list = append(list, strconv.Itoa(port))
+		}
+		ports = list
+	}
 	tx, err := r.beginRuntime(ctx)
 	if err != nil {
 		return err
@@ -48,10 +65,10 @@ func (r *Repository) RecordEdgeSources(ctx context.Context, lease ControllerLeas
 	if !live {
 		return delivery.ErrLeaseInvalid
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO edge_source_reports(worker_id,epoch,addresses,bounce_domains,reported_at)
-		VALUES ($1,$2,$3::text[]::inet[],$4::text[],clock_timestamp())
-		ON CONFLICT (worker_id) DO UPDATE SET epoch=EXCLUDED.epoch,addresses=EXCLUDED.addresses,bounce_domains=EXCLUDED.bounce_domains,reported_at=EXCLUDED.reported_at
-		WHERE edge_source_reports.epoch<=EXCLUDED.epoch`, lease.WorkerID, lease.Epoch, addresses, domains); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO edge_source_reports(worker_id,epoch,addresses,bounce_domains,reported_at,submission_ports)
+		VALUES ($1,$2,$3::text[]::inet[],$4::text[],clock_timestamp(),$5::text[]::integer[])
+		ON CONFLICT (worker_id) DO UPDATE SET epoch=EXCLUDED.epoch,addresses=EXCLUDED.addresses,bounce_domains=EXCLUDED.bounce_domains,reported_at=EXCLUDED.reported_at,submission_ports=EXCLUDED.submission_ports
+		WHERE edge_source_reports.epoch<=EXCLUDED.epoch`, lease.WorkerID, lease.Epoch, addresses, domains, ports); err != nil {
 		return err
 	}
 	return tx.Commit()

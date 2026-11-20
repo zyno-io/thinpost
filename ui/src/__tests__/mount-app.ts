@@ -5,7 +5,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 
 import { appRoute, type AppScreenName } from '@/routes';
 
-const SCREEN_NAMES: AppScreenName[] = ['app-keys', 'app-domains', 'app-messages', 'app-message', 'app-webhooks', 'app-tracking', 'app-suppressions', 'app-inbound', 'app-inbound-message'];
+const SCREEN_NAMES: AppScreenName[] = ['app-keys', 'app-domains', 'app-messages', 'app-message', 'app-webhooks', 'app-tracking', 'app-suppressions', 'app-inbound', 'app-inbound-message', 'app-smtp'];
 
 /**
  * Mounts a route inside the real nested application shell (`appRoute`), with stubs for every

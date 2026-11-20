@@ -1012,6 +1012,88 @@ paths:
       responses:
         '204': { description: Key revoked }
         default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/smtp:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    get:
+      operationId: getAppSmtp
+      description: >-
+        Everything the SMTP tab shows: the From policy, the app's SMTP credentials
+        (active and revoked) and where clients connect. The host is the HELO name of
+        the app's assigned sending IP or, for an app without one, of the sending-IP
+        row whose address is the control plane's configured primary source. It never
+        comes from an Edge report. When the app uses the primary address and no row
+        names it, host is absent and primary_unnamed is true: name the primary under
+        Operations, Sending IPs.
+      responses:
+        '200':
+          description: The app's SMTP submission settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AppSmtp' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/smtp/settings:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    put:
+      operationId: updateAppSmtpSettings
+      description: >-
+        Sets the From policy for mail submitted over SMTP. Idempotent: an identical
+        policy changes and audits nothing; a change is audited as smtp_settings.updated.
+        Returns 400 for a bad shape or a configured address that is not an ASCII
+        dot-atom, and 409 when the domain (or the address's domain) is not an active
+        verified sender domain of the app.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [from]
+              properties:
+                from: { $ref: '#/components/schemas/SmtpFromPolicy' }
+      responses:
+        '200':
+          description: The stored settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SmtpSettings' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/smtp/credentials:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    post:
+      operationId: createAppSmtpCredential
+      description: >-
+        Creates an SMTP credential. Returns 409 when the app already has 10 active
+        credentials. Audited as smtp_credential.created.
+      requestBody: { $ref: '#/components/requestBodies/Name' }
+      responses:
+        '201':
+          description: Credential created; the password is shown only in this response
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IssuedSmtpCredential' }
+        '409': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/smtp/credentials/{credentialId}:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: credentialId
+        in: path
+        required: true
+        schema: { $ref: '#/components/schemas/Id' }
+    delete:
+      operationId: revokeAppSmtpCredential
+      description: Revokes an active credential. Audited as smtp_credential.revoked. A revoked or unknown credential is 404.
+      responses:
+        '204': { description: Credential revoked }
+        default: { $ref: '#/components/responses/Error' }
   /apps/{appId}/suppressions:
     parameters:
       - { $ref: '#/components/parameters/AppId' }
@@ -1738,7 +1820,7 @@ components:
       properties:
         features:
           type: object
-          required: [submission, tracking]
+          required: [submission, tracking, smtp_submission]
           properties:
             submission: { type: boolean }
             tracking: { type: boolean }
@@ -1750,6 +1832,7 @@ components:
                 configured on this replica, since the recipient policy is loaded with it,
                 and omitted otherwise. The console
                 offers bypass_recipient_policy only for allowlist.
+            smtp_submission: { type: boolean, description: This replica accepts mail over SMTP (the console shows the SMTP tab only then). }
         tracking:
           type: object
           required: [origin, link_event_limit]
@@ -2311,6 +2394,92 @@ components:
             - submission_rate_exceeded
             - pending_limit_exceeded
             - Service Unavailable
+    SmtpCredential:
+      type: object
+      required: [id, name, username, active, created_at]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        username: { type: string, description: The SMTP user name (the same value as id). }
+        active: { type: boolean }
+        created_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time, description: Present once revoked. }
+        last_used_at: { type: string, format: date-time, description: Last successful sign-in, at most a minute stale; absent when never used. }
+    IssuedSmtpCredential:
+      type: object
+      required: [credential, username, password]
+      properties:
+        credential: { $ref: '#/components/schemas/SmtpCredential' }
+        username: { type: string }
+        password: { type: string, readOnly: true, pattern: '^tps_[A-Za-z0-9_-]{43}$', description: Shown once and never stored. }
+    SmtpFromPolicy:
+      type: object
+      additionalProperties: false
+      required: [mode, only_unauthorized]
+      description: >-
+        How the From address of submitted mail is decided. Only the fields of the
+        chosen mode may be set: domain for mode domain, address for mode address.
+      properties:
+        mode:
+          type: string
+          enum: [off, domain, address]
+          description: off accepts only a From on one of the app's verified sender domains and refuses anything else; domain rewrites the From onto a verified sender domain and keeps the original address in the name part (scanner@office.example.net becomes scanner=office.example.net@domain; names with unusual characters or over 64 bytes are shortened with a short hash); address replaces it with one fixed address.
+        domain: { type: string, maxLength: 253, description: A verified sender domain of the app (mode domain). }
+        address:
+          type: string
+          maxLength: 254
+          description: A single ASCII address on a verified sender domain, with a dot-atom local part of at most 64 bytes (mode address).
+        only_unauthorized: { type: boolean, description: Leave From alone when its domain is already an authorized sender domain. }
+    SmtpSettings:
+      type: object
+      required: [from, signing_ready]
+      properties:
+        from: { $ref: '#/components/schemas/SmtpFromPolicy' }
+        signing_ready:
+          type: [array, 'null']
+          description: >-
+            Whether mail from the domain the policy targets would be DKIM-signed right now. Null when
+            this deployment has no signing catalog; empty when the policy targets no domain.
+          items:
+            type: object
+            required: [domain, ready]
+            properties:
+              domain: { type: string }
+              ready: { type: boolean }
+    SmtpConnection:
+      type: object
+      required: [host_source, primary_unnamed, ports, observed_ports]
+      properties:
+        host: { type: string, description: The SMTP host name; absent when primary_unnamed or when no host is known. }
+        host_source:
+          type: [string, 'null']
+          enum: [app_sending_ip, primary, null]
+          description: Where host came from; null when there is no host.
+        primary_unnamed: { type: boolean, description: The app uses the primary address and no sending IP row names it. }
+        ports:
+          type: array
+          description: Always 465 (implicit TLS) and 587 (STARTTLS).
+          items:
+            type: object
+            required: [port, security]
+            properties:
+              port: { type: integer, enum: [465, 587] }
+              security: { type: string, enum: [tls, starttls] }
+        observed_ports:
+          type: array
+          maxItems: 8
+          items: { type: integer }
+          description: Submission ports the Edge last reported listening on; an availability hint only. Empty when unknown.
+        observed_at: { type: string, format: date-time, description: When the Edge reported observed_ports. }
+    AppSmtp:
+      type: object
+      required: [settings, credentials, connection]
+      properties:
+        settings: { $ref: '#/components/schemas/SmtpSettings' }
+        credentials:
+          type: array
+          items: { $ref: '#/components/schemas/SmtpCredential' }
+        connection: { $ref: '#/components/schemas/SmtpConnection' }
     MessageSearch:
       type: object
       additionalProperties: false
@@ -2409,6 +2578,15 @@ components:
           properties:
             bypass_limits: { type: boolean }
             bypass_recipient_policy: { type: boolean }
+        smtp:
+          type: object
+          required: [credential_id, credential_name]
+          description: >-
+            Present only for a message submitted over SMTP with an app credential.
+          properties:
+            credential_id: { $ref: '#/components/schemas/Id' }
+            credential_name: { type: string, description: The credential's name when the message was read. }
+            original_from: { type: string, minLength: 3, maxLength: 998, description: The From address the client sent; present only when the app's From policy replaced it. }
     MessageHold:
       type: object
       required: [expires_at]

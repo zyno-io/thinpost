@@ -64,14 +64,23 @@ func newFixture(t *testing.T) *fixture {
 	if err = postgres.Migrate(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	// Revert migrations 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29 and 28 to leave the exact schema-27 shape.
+	// Revert migrations 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29 and 28 to leave the exact schema-27 shape.
+	// Migration 44: the messages constraints and columns are removed first (messages_smtp_not_console
+	// references console_test, and the credential FK precedes the DROP TABLE);
+	// edge_source_reports.submission_ports is dropped with that table below.
 	// Migration 43: dropping the console test columns also drops its CHECK.
 	// Migration 42: dropping the hold columns also drops their CHECKs and index;
 	// its webhook_events CHECK is dropped with inbound_id below.
 	// Migration 35's constraint is rebuilt without its feedback branch first.
 	// Migration 41: message_recipients.kind is dropped with the table below.
 	// Migration 39: dropping webhook_events.inbound_id also drops the source CHECK and the unique index.
-	if _, err = db.ExecContext(ctx, `ALTER TABLE messages DROP COLUMN console_test, DROP COLUMN limits_override, DROP COLUMN recipient_policy_override;
+	if _, err = db.ExecContext(ctx, `ALTER TABLE messages DROP CONSTRAINT messages_smtp_not_console, DROP CONSTRAINT messages_smtp_credential_fk, DROP CONSTRAINT messages_original_from,
+		DROP CONSTRAINT messages_subject_size, DROP COLUMN original_from_address, DROP COLUMN smtp_credential_id,
+		ADD CONSTRAINT messages_subject_size CHECK (subject IS NULL OR octet_length(subject) BETWEEN 1 AND 998);
+		ALTER TABLE apps DROP CONSTRAINT apps_smtp_from_policy, DROP COLUMN smtp_from_mode, DROP COLUMN smtp_from_domain,
+		DROP COLUMN smtp_from_address, DROP COLUMN smtp_from_only_unauthorized;
+		DROP TABLE smtp_replay_secret, smtp_credentials;
+		ALTER TABLE messages DROP COLUMN console_test, DROP COLUMN limits_override, DROP COLUMN recipient_policy_override;
 		ALTER TABLE messages DROP COLUMN hold_expires_at, DROP COLUMN hold_resolved_at;
 		ALTER TABLE apps DROP COLUMN sending_ip_id;
 		ALTER TABLE delivery_attempts DROP COLUMN source_address;
@@ -112,7 +121,7 @@ ALTER TABLE webhook_deliveries DROP COLUMN lane;
 		DROP TABLE message_recipients; DROP INDEX deliveries_id_prefix_idx, messages_app_id_prefix_idx;
 		ALTER TABLE messages DROP CONSTRAINT messages_id_app_key, DROP COLUMN subject, DROP COLUMN recipient_count, DROP COLUMN sender_domain, DROP COLUMN sender_domain_rev;
 		ALTER TABLE messages RENAME COLUMN enhanced_protection TO require_tls;
-		DELETE FROM thinpost_schema_migrations WHERE version IN (28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43);
+		DELETE FROM thinpost_schema_migrations WHERE version IN (28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44);
 		UPDATE runtime_gate SET generation='`+testGeneration+`',mode='open',revision=5,quarantine_complete=true,changed_by='fixture' WHERE singleton`); err != nil {
 		t.Fatal(err)
 	}

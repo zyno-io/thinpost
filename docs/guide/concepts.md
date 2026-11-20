@@ -19,6 +19,16 @@ An **operator** is a person or tool using the admin API and console. Operators s
 
 Each app has one or more **API keys**. A key is shown once, when it is issued; the database stores only a digest. Revoking a key takes effect for new requests. The key is presented in whatever form the provider SDK expects: a Postmark server token header, or a bearer token for Resend and SendGrid, or the Mailgun HTTP Basic password.
 
+## SMTP credentials
+
+An **SMTP credential** is a login for sending an app's mail over SMTP, for software that has no HTTP API, such as printers and scanners. Its username is the credential's ID and its password is shown once, when it is created. The database stores only a digest, and credentials are limited to 10 active per app. A credential can only send mail for its own app. It can't read messages, call the API or sign in to the console. Revoking a credential stops it signing in; messages it already sent keep its name.
+
+An app also has a **From address policy** for SMTP mail: accept only From addresses on the app's verified sender domains, move the From address onto one of those domains (the original address stays in the name part, so `scanner@office.example.net` becomes `scanner=office.example.net@example.com`), or always send from one fixed address. When the policy replaces a From address, the message records the address the client sent as its **original From**.
+
+::: warning Not available yet
+The SMTP listener is not part of Thinpost yet. The admin API can already create and revoke credentials and set the From policy, but no mail can be sent over SMTP until the listener ships, and the console shows the SMTP tab only on a deployment that reports `smtp_submission` in its [runtime features](/guide/console#smtp). Nothing here changes how the HTTP APIs work.
+:::
+
 ## Sender domains
 
 A **sender domain** is a domain an app may use in its `From` address. An administrator requests it, publishes a TXT record that Thinpost generates, and asks Thinpost to verify it. Verification only proves control of the name; DKIM, SPF and DMARC are separate DNS setup. See [Sender domains](/guide/domains).

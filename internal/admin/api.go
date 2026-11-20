@@ -85,6 +85,18 @@ type MessageSummary struct {
 	// message through the console test send, and records which operator-only
 	// options that send used.
 	OperatorTest *OperatorTest `json:"operator_test,omitempty"`
+	// SMTP is present exactly when the message was submitted over SMTP with
+	// an app credential.
+	SMTP *MessageSMTP `json:"smtp,omitempty"`
+}
+
+// MessageSMTP names the credential that submitted a message over SMTP and,
+// when the app's From policy replaced the sender's From address, the address
+// the client originally sent.
+type MessageSMTP struct {
+	CredentialID   string  `json:"credential_id"`
+	CredentialName string  `json:"credential_name"`
+	OriginalFrom   *string `json:"original_from,omitempty"`
 }
 
 // OperatorTest tags a console test message with the options it was sent with.
@@ -404,6 +416,14 @@ type Handler struct {
 	// BounceDomain is the domain of per-delivery bounce addresses and the feedback
 	// mailbox, set only on a replica that receives bounces.
 	BounceDomain string
+	// PrimarySource is the Edge's primary sending address (control's
+	// THINPOST_CONTROL_SMTP_SOURCE). The SMTP tab names the sending-IP row with
+	// this address as the connection host for apps without an assigned IP. It is
+	// control's own configuration, never an Edge report. Unset without a bridge.
+	PrimarySource netip.Addr
+	// SigningReadiness reports whether mail from a domain would be DKIM-signed
+	// now; nil when this deployment has no signing catalog.
+	SigningReadiness SigningReadiness
 	// Runtime is the serving replica's startup configuration.
 	Runtime *RuntimeInfo
 	// InboundMXHost is the mail host receiving domains point their MX at
@@ -516,7 +536,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			path[6] = id
 		}
 	}
-	if h.inboundRoute(w, r, principal.Subject, appID, path) {
+	if h.inboundRoute(w, r, principal.Subject, appID, path) || h.smtpRoute(w, r, principal.Subject, appID, path) {
 		return
 	}
 	if len(path) == 6 && (path[5] == "activate" || path[5] == "deactivate") {

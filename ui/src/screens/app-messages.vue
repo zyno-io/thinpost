@@ -186,6 +186,7 @@
                                     <span v-if="row.operatorTest?.bypassRecipientPolicy" class="tag warning" data-testid="allowlist-skipped-tag" title="The recipient allowlist was skipped">
                                         allowlist skipped
                                     </span>
+                                    <span v-if="row.smtp" class="tag info" data-testid="smtp-tag" :title="`Sent over SMTP with ${row.smtp.credentialName}`">SMTP</span>
                                     <span v-if="row.enhancedProtection" class="ep-icon" title="Enhanced Protection">
                                         <i class="fa-solid fa-shield-halved" aria-hidden="true" /><span class="sr-only">Enhanced Protection</span>
                                     </span>

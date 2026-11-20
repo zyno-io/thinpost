@@ -91,6 +91,9 @@ type EdgeCapabilities struct {
 	// Hostnames is the SMTP name each address greets with, parallel to
 	// Addresses. It is empty for a worker that does not report names.
 	Hostnames []string
+	// SubmissionPorts are the SMTP submission ports the worker reported
+	// listening on; nil means it reported none. They only drive a console hint.
+	SubmissionPorts []int
 }
 
 // HostnameFor returns the name the worker reported for address, if any. Control

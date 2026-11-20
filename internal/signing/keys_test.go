@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"math/big"
 	"testing"
+	"time"
 )
 
 type domains struct{ active bool }
@@ -84,5 +85,75 @@ func TestSigningRequiresAppDomainAndPublishedMatchingDKIMKey(t *testing.T) {
 	dns.records = []string{"v=DKIM1; p=" + value, "v=DKIM1; p=" + value}
 	if _, err = resolver.ForSender(context.Background(), app, "sender@example.com"); err == nil {
 		t.Fatal("multiple DKIM records accepted")
+	}
+}
+
+type countingDNS struct {
+	dns
+	lookups int
+}
+
+func (d *countingDNS) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	d.lookups++
+	return d.dns.LookupTXT(ctx, name)
+}
+
+func TestReadyChecksLikeForSenderAndCaches(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(der)
+	domains := &domains{active: true}
+	dns := &countingDNS{dns: dns{records: []string{good}}}
+	app := "0123456789abcdef0123456789abcdef"
+	resolver, err := New(domains, dns, []Entry{{AppID: app, Domain: "example.com", Selector: "mail1", Signer: key}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1000, 0)
+	resolver.now = func() time.Time { return now }
+	ctx := context.Background()
+
+	// Success is cached for 60 seconds, then rechecked.
+	if err = resolver.Ready(ctx, app, "Example.com"); err != nil || dns.lookups != 1 {
+		t.Fatal("ready", err, dns.lookups)
+	}
+	dns.records = nil
+	now = now.Add(59 * time.Second)
+	if err = resolver.Ready(ctx, app, "example.com"); err != nil || dns.lookups != 1 {
+		t.Fatal("success not cached", err, dns.lookups)
+	}
+	now = now.Add(2 * time.Second)
+	if err = resolver.Ready(ctx, app, "example.com"); err == nil || dns.lookups != 2 {
+		t.Fatal("stale success served", err, dns.lookups)
+	}
+	// Failure is cached for 10 seconds only.
+	dns.records = []string{good}
+	now = now.Add(9 * time.Second)
+	if err = resolver.Ready(ctx, app, "example.com"); err == nil || dns.lookups != 2 {
+		t.Fatal("failure not cached", err, dns.lookups)
+	}
+	now = now.Add(2 * time.Second)
+	if err = resolver.Ready(ctx, app, "example.com"); err != nil || dns.lookups != 3 {
+		t.Fatal("failure cached too long", err, dns.lookups)
+	}
+	// An inactive sender domain, another app and an unknown domain all fail,
+	// and the last two never reach DNS or the cache.
+	domains.active = false
+	now = now.Add(time.Hour)
+	if err = resolver.Ready(ctx, app, "example.com"); err == nil {
+		t.Fatal("inactive domain ready")
+	}
+	lookups := dns.lookups
+	if resolver.Ready(ctx, "abcdef0123456789abcdef0123456789", "example.com") == nil || resolver.Ready(ctx, app, "other.example") == nil || dns.lookups != lookups {
+		t.Fatal("unknown pair ready or looked up")
+	}
+	if len(resolver.ready) != 1 {
+		t.Fatal("cache grew for unknown pairs", len(resolver.ready))
 	}
 }

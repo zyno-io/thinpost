@@ -7,10 +7,34 @@
         <div class="modal-body secret-body">
             <div :id="`${id}-warning`" class="notice warning">
                 <i class="fa-solid fa-triangle-exclamation" aria-hidden="true" />
-                <p class="notice-body">Shown once. Copy the secret for <strong>{{ subject }}</strong> now; you won't be able to see it again.</p>
+                <p class="notice-body">Shown once. Copy the {{ (secretLabel ?? 'secret').toLowerCase() }} for <strong>{{ subject }}</strong> now; you won't be able to see it again.</p>
             </div>
 
-            <label :for="`${id}-secret`">Secret</label>
+            <template v-if="username">
+                <label :for="`${id}-username`">Username</label>
+                <div class="secret-row">
+                    <input
+                        :id="`${id}-username`"
+                        class="input mono"
+                        type="text"
+                        :value="username"
+                        readonly
+                        autocomplete="off"
+                        autocapitalize="off"
+                        spellcheck="false"
+                        data-1p-ignore
+                        data-lpignore="true"
+                        @focus="selectField"
+                    />
+                    <button type="button" class="btn" @click="copyUsername">
+                        <i class="fa-solid fa-copy" aria-hidden="true" />
+                        Copy
+                        <span class="sr-only">username</span>
+                    </button>
+                </div>
+            </template>
+
+            <label :for="`${id}-secret`">{{ secretLabel ?? 'Secret' }}</label>
             <div class="secret-row">
                 <input
                     :id="`${id}-secret`"
@@ -55,6 +79,10 @@ const props = defineProps<{
     /** What the secret belongs to, shown in bold in the warning. */
     subject: string;
     secret: string;
+    /** Shown above the secret with its own Copy button, for secrets that come with a login name (SMTP credentials). */
+    username?: string;
+    /** What to call the secret; defaults to “Secret”. */
+    secretLabel?: string;
 }>();
 
 const emit = defineEmits<{ done: [] }>();
@@ -67,6 +95,15 @@ const copyStatus = ref('');
 
 function selectSecret() {
     secretInput.value?.select();
+}
+
+function selectField(event: FocusEvent) {
+    (event.target as HTMLInputElement).select();
+}
+
+async function copyUsername() {
+    const ok = await copyText(props.username ?? '');
+    copyStatus.value = ok ? 'Username copied to clipboard.' : 'Couldn\'t copy. Select the username and copy it yourself.';
 }
 
 async function copy() {

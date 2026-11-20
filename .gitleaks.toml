@@ -3,6 +3,12 @@ title = "Thinpost gitleaks configuration"
 [extend]
 useDefault = true
 
+[[rules]]
+id = "thinpost-smtp-secret"
+description = "Thinpost SMTP submission secret"
+regex = '''tps_[A-Za-z0-9_-]{43}'''
+keywords = ["tps_"]
+
 # Everything allowlisted here is synthetic: fixture credentials, fabricated
 # tokens and webhook-signing values that exist only to exercise parsers and
 # signature checks. Real credentials never belong in these paths either; new

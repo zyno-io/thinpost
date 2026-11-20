@@ -63,7 +63,8 @@ const summaryColumnsTemplate = `m.id,m.state,m.enhanced_protection,m.accepted_at
 		m.enhanced_protection AND m.subject IS NOT NULL, m.sender_domain, m.sender_address, m.sender_name, m.recipient_count,
 		(SELECT json_agg(json_build_array(r.address,r.kind) ORDER BY r.recipient_index) FROM
 			(SELECT address,kind,recipient_index FROM message_recipients WHERE message_id=m.id ORDER BY recipient_index LIMIT %d) r),
-		m.console_test,m.limits_override,m.recipient_policy_override`
+		m.console_test,m.limits_override,m.recipient_policy_override,
+		m.smtp_credential_id,(SELECT c.name FROM smtp_credentials c WHERE c.id=m.smtp_credential_id),m.original_from_address`
 
 func summaryColumns(recipients int) string {
 	return fmt.Sprintf(summaryColumnsTemplate, recipients)
@@ -87,12 +88,12 @@ type rowScanner interface{ Scan(...any) error }
 // extra receives any columns selected after the summary columns, from the
 // same row.
 func scanSummary(row rowScanner, item *admin.MessageSummary, extra ...any) error {
-	var subject, senderDomain, senderAddress, senderName sql.NullString
+	var subject, senderDomain, senderAddress, senderName, credentialID, credentialName, originalFrom sql.NullString
 	var count sql.NullInt64
 	var counts admin.DeliveryCounts
 	var recipients []byte
 	var consoleTest, limitsOverride, policyOverride bool
-	dest := []any{&item.ID, &item.State, &item.EnhancedProtection, &item.AcceptedAt, &item.DeliveryCount, &item.AcceptedCount, &item.FailedCount, &item.UncertainCount, &counts.Pending, &counts.Held, &counts.RecoveryHeld, &counts.Retrying, &item.SuppressedCount, &subject, &item.SubjectMasked, &senderDomain, &senderAddress, &senderName, &count, &recipients, &consoleTest, &limitsOverride, &policyOverride}
+	dest := []any{&item.ID, &item.State, &item.EnhancedProtection, &item.AcceptedAt, &item.DeliveryCount, &item.AcceptedCount, &item.FailedCount, &item.UncertainCount, &counts.Pending, &counts.Held, &counts.RecoveryHeld, &counts.Retrying, &item.SuppressedCount, &subject, &item.SubjectMasked, &senderDomain, &senderAddress, &senderName, &count, &recipients, &consoleTest, &limitsOverride, &policyOverride, &credentialID, &credentialName, &originalFrom}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return err
 	}
@@ -100,6 +101,12 @@ func scanSummary(row rowScanner, item *admin.MessageSummary, extra ...any) error
 	item.Status = admin.DeriveMessageStatus(item.State, counts)
 	if consoleTest {
 		item.OperatorTest = &admin.OperatorTest{BypassLimits: limitsOverride, BypassRecipientPolicy: policyOverride}
+	}
+	if credentialID.Valid {
+		item.SMTP = &admin.MessageSMTP{CredentialID: credentialID.String, CredentialName: credentialName.String}
+		if originalFrom.Valid {
+			item.SMTP.OriginalFrom = &originalFrom.String
+		}
 	}
 	if subject.Valid {
 		item.Subject = &subject.String

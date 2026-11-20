@@ -115,6 +115,20 @@
                                 <span v-if="detail.message.operatorTest.bypassRecipientPolicy" class="tag warning">allowlist skipped</span>
                             </dd>
                         </div>
+                        <div v-if="detail.message.smtp" data-fact="smtp">
+                            <dt>Sent over SMTP</dt>
+                            <dd>
+                                <span class="tag info"><i class="fa-solid fa-paper-plane" aria-hidden="true" />SMTP</span>
+                                <span class="v" :title="detail.message.smtp.credentialName">{{ detail.message.smtp.credentialName }}</span>
+                            </dd>
+                        </div>
+                        <div v-if="detail.message.smtp?.originalFrom" data-fact="original-from">
+                            <dt>Original From</dt>
+                            <dd>
+                                <span class="v" :title="detail.message.smtp.originalFrom">{{ detail.message.smtp.originalFrom }}</span>
+                                <span class="muted">replaced by this app's From address setting</span>
+                            </dd>
+                        </div>
                         <div data-fact="enhanced-protection">
                             <dt>Enhanced Protection</dt>
                             <dd>
