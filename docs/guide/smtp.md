@@ -123,7 +123,7 @@ For an app whose domain is `example.com`:
 | Only accept verified addresses | `Alerts <noreply@example.com>` | `Alerts <noreply@example.com>` |
 | Only accept verified addresses | `scanner@office.example.net` | Refused: `550 5.7.1` |
 | Send from `example.com` | `Printer <scanner@office.example.net>` | `Printer <scanner=office.example.net@example.com>` |
-| Send from `example.com` | `Printer <team ops@office.example.net>` (quoted) | `Printer <team-ops=office.example.net-a0091e7b@example.com>` |
+| Send from `example.com` | `Printer <"team ops"@office.example.net>` | `Printer <team-ops=office.example.net-a0091e7b@example.com>` |
 | Send from `example.com` | `Printer <scanner@example.com>` | `Printer <scanner@example.com>` |
 | Always send from `noreply@example.com` | `Printer <scanner@office.example.net>` | `Printer <noreply@example.com>` |
 
@@ -139,7 +139,7 @@ The name part is made safe to use as an address:
 
 - Letters, digits, `.`, `_` and `-` are kept. Every other character, including spaces, quotes, `=` and `+`, becomes `-`. (`=` is the separator and `+` is often read as a tag, so neither is kept.)
 - Runs of dots become one dot, and dots at the start or end are dropped.
-- If anything was changed, or the result would be longer than 64 characters, a dash and an 8-character hash are added at the end, and the text before it is shortened so the whole name part is at most 64 characters. The hash is the first 8 hexadecimal digits of the SHA-256 of the original address (name as written, domain lowercased), so the same original address always produces the same new address, and two different originals that clean up alike stay apart. Example: `"team ops"@office.example.net` becomes `team-ops=office.example.net-a0091e7b@example.com`.
+- If anything was changed, or the result would be too long (64 characters for the name part, 254 for the whole address), a dash and an 8-character hash are added at the end, and the text before it is shortened to fit. The hash is the first 8 hexadecimal digits of the SHA-256 of the original address (name as written, domain lowercased), so the same original address always produces the same new address, and two different originals that clean up alike are very unlikely to collide. Example: `"team ops"@office.example.net` becomes `team-ops=office.example.net-a0091e7b@example.com`.
 
 This policy never refuses a message because the name cannot be reused. It still answers `451 4.3.5` while the chosen domain is not verified or cannot be DKIM-signed yet, and refuses a message that has no usable `From` or `MAIL FROM` address.
 
