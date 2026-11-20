@@ -181,9 +181,9 @@ smtp_send() { # url port mechanism subject password; prints curl's verbose log
 for leg in "smtp://$SMTP_HOST:587 587 PLAIN starttls" "smtps://$SMTP_HOST:465 465 LOGIN tls"; do
   set -- $leg
   subject="Quickstart SMTP $4 $nonce"
-  log="$(smtp_send "$1" "$2" "$3" "$subject" "$SMTP_PASS")" || fail "SMTP submission on port $2 failed: $(printf %s "$log" | tail -n 15)"
+  log="$(smtp_send "$1" "$2" "$3" "$subject" "$SMTP_PASS")" || fail "SMTP submission on port $2 failed: $(printf %s "$log" | grep -E '^(<|\*)' | tail -n 15)"
   smtp_id="$(sed -n 's/.*250 2\.0\.0 OK: queued as \([0-9a-f]\{32\}\).*/\1/p' <<<"$log" | tail -n 1)"
-  [ -n "$smtp_id" ] || fail "port $2 did not answer 250 with a message ID: $(printf %s "$log" | tail -n 15)"
+  [ -n "$smtp_id" ] || fail "port $2 did not answer 250 with a message ID: $(printf %s "$log" | grep -E '^(<|\*)' | tail -n 15)"
   echo "port $2 ($3): accepted, message ID $smtp_id"
   mp_id=""
   find_smtp_message() {

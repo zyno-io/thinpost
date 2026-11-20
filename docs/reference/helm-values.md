@@ -56,8 +56,10 @@ Authenticated SMTP submission on the Edge workload. See [Helm: Edge](/deploy/hel
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `smtpSubmission.enabled` | boolean | `false` | Opens ports 587 (STARTTLS) and 465 (implicit TLS) on every sending address, each with that address's own certificate. Allow both ports to every address in the router. Port 25 is unchanged. |
+| `smtpSubmission` | object | see below | SMTP submission settings for the Edge. |
+| `smtpSubmission.internal` | object | see below | The optional in-cluster listener. |
 | `smtpSubmission.internal.enabled` | boolean | `false` | Opens the in-cluster listener and renders the `thinpost-edge-submission` ClusterIP Service and a NetworkPolicy rule for the allowed clients. |
-| `smtpSubmission.internal.port` | integer | `587` | Listener port on the pod address. The Service always exposes `587`. Not `25` or `7443`. |
+| `smtpSubmission.internal.port` | integer | `2587` | Listener port on the pod address. The Service always exposes `587` and forwards to it. Not `25` or `7443`, and not `465` or `587` while `smtpSubmission.enabled` (those are already container ports). |
 | `smtpSubmission.internal.hostname` | string | `''` | DNS name of the listener certificate, for example `thinpost-edge-submission.<namespace>.svc`. Required when enabled. |
 | `smtpSubmission.internal.certificateSecret` | string | `thinpost-edge-submission-internal` | Secret with `tls.crt`, `tls.key` and `ca.crt` from the cluster-local CA, mounted as a directory so renewals propagate. |
 | `smtpSubmission.internal.clientCidrs` | list of CIDRs | `[]` | Source addresses allowed to connect. |

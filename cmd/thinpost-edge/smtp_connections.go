@@ -18,6 +18,9 @@ type smtpAdmission struct {
 	mu     sync.Mutex
 	active map[netip.Addr]int
 	stats  *smtpAdmissionStats
+	// countAdmitted makes the admission count admitted connections itself, for
+	// a listener that has no rate limiter.
+	countAdmitted bool
 }
 
 func newSMTPAdmission(total, perSource int, stats *smtpAdmissionStats) (*smtpAdmission, error) {
@@ -95,6 +98,9 @@ func (l *admittedListener) Accept() (net.Conn, error) {
 		}
 		a.active[address]++
 		a.mu.Unlock()
+		if a.countAdmitted {
+			a.stats.addAdmitted()
+		}
 		return &sourceLimitedConn{Conn: conn, release: func() {
 			a.mu.Lock()
 			defer a.mu.Unlock()

@@ -43,12 +43,12 @@ smtpSubmission:
   # allow inbound TCP 465 and 587 to every sending address.
   enabled: false
   # Optional in-cluster listener (STARTTLS), reachable through the ClusterIP
-  # Service thinpost-edge-submission:587 (thinpost-edge-submission.<namespace>.svc).
+  # Service thinpost-edge-submission:587 (the Service port is always 587; port below is the pod listener, distinct from 465 and 587 on the sending IPs) (thinpost-edge-submission.<namespace>.svc).
   # Prefer it over the public IPs for in-cluster senders: those arrive through
   # SNAT and share one source address. It is not shown in the console.
   internal:
     enabled: false
-    port: 587
+    port: 2587
     # DNS name of the certificate, for example thinpost-edge-submission.<namespace>.svc
     hostname: ''
     # Secret with tls.crt, tls.key and ca.crt, issued by the cluster-local CA

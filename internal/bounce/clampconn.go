@@ -1,6 +1,7 @@
 package bounce
 
 import (
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -12,7 +13,8 @@ type clampMode uint8
 
 const (
 	// modePassthrough is the default and always applies before AUTH: the
-	// server's deadlines and reads are forwarded unchanged.
+	// server's own command deadlines apply, but never beyond preAuth from
+	// connect, so idle sockets cannot hold admission slots.
 	modePassthrough clampMode = iota
 	// modeAuthenticated clamps the server's command deadlines to the
 	// connection lifetime.
@@ -31,6 +33,8 @@ const (
 
 // clampLimits are the bounds of the modes. Tests shrink them.
 type clampLimits struct {
+	// preAuth bounds the whole connection before AUTH succeeds.
+	preAuth     time.Duration
 	idle        time.Duration
 	transaction time.Duration
 	lifetime    time.Duration
@@ -40,7 +44,7 @@ type clampLimits struct {
 }
 
 func defaultClampLimits() clampLimits {
-	return clampLimits{idle: 30 * time.Second, transaction: 10 * time.Minute, lifetime: 30 * time.Minute, drainTotal: 60 * time.Second, drainIdle: 30 * time.Second, drainBytes: 2 * MaxSubmissionBytes}
+	return clampLimits{preAuth: 2 * time.Minute, idle: 30 * time.Second, transaction: 10 * time.Minute, lifetime: 30 * time.Minute, drainTotal: 60 * time.Second, drainIdle: 30 * time.Second, drainBytes: 2 * MaxSubmissionBytes}
 }
 
 // clampConn is the outermost non-TLS wrapper of a submission or internal
@@ -82,7 +86,7 @@ func (c *clampConn) SetReadDeadline(t time.Time) error {
 	passthrough := c.mode == modePassthrough
 	c.mu.Unlock()
 	if passthrough {
-		return c.Conn.SetReadDeadline(t)
+		return c.Conn.SetReadDeadline(c.preAuthDeadline(t))
 	}
 	return nil
 }
@@ -97,7 +101,9 @@ func (c *clampConn) SetDeadline(t time.Time) error {
 func (c *clampConn) Read(p []byte) (int, error) {
 	c.mu.Lock()
 	if c.mode == modePassthrough {
+		requested := c.requested
 		c.mu.Unlock()
+		_ = c.Conn.SetReadDeadline(c.preAuthDeadline(requested))
 		return c.Conn.Read(p)
 	}
 	now := time.Now()
@@ -123,6 +129,19 @@ func (c *clampConn) Read(p []byte) (int, error) {
 	c.mu.Unlock()
 	_ = c.Conn.SetReadDeadline(deadline)
 	n, err := c.Conn.Read(p)
+	if err != nil {
+		// A stalled upload must end the connection: if only the read failed, the
+		// server would answer and then run the rest of the body as commands.
+		var timeout net.Error
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			c.mu.Lock()
+			bounded := c.mode == modeTransaction || c.mode == modeDrain
+			c.mu.Unlock()
+			if bounded {
+				_ = c.Conn.Close()
+			}
+		}
+	}
 	if n > 0 {
 		c.mu.Lock()
 		over := false
@@ -137,6 +156,19 @@ func (c *clampConn) Read(p []byte) (int, error) {
 		}
 	}
 	return n, err
+}
+
+// preAuthDeadline is the server's deadline (zero for none), never later than
+// the pre-authentication limit from connect.
+func (c *clampConn) preAuthDeadline(requested time.Time) time.Time {
+	limit := c.born.Add(c.limits.preAuth)
+	if c.limits.preAuth <= 0 || requested.IsZero() {
+		if c.limits.preAuth <= 0 {
+			return requested
+		}
+		return limit
+	}
+	return earliest(limit, requested)
 }
 
 // authenticate enters the authenticated mode after a successful AUTH.

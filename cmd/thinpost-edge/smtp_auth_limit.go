@@ -6,21 +6,23 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/time/rate"
-
 	"github.com/zyno-io/thinpost/internal/bounce"
 )
 
+// smtpAuthSource is a token bucket: attempts take a token, successes give it
+// back, and it refills one token per interval.
 type smtpAuthSource struct {
-	limiter *rate.Limiter
-	seen    time.Time
+	tokens float64
+	last   time.Time
+	seen   time.Time
 }
 
-// smtpAuthLimiter bounds failed submission AUTH attempts per IPv4 address or
-// IPv6 /64: each failure takes a token from a bucket that refills slowly, and
-// an address with no token left is blocked. Sources with no debt are dropped
-// when the bounded table is full; when it is still full, unknown sources are
-// told to retry later instead of being tracked.
+// smtpAuthLimiter bounds submission AUTH attempts per IPv4 address or IPv6
+// /64. Every attempt is charged when it is checked, atomically with the check,
+// so attempts in parallel cannot exceed the limit; a successful login refunds
+// its attempt, so only failures accumulate. Sources with a full bucket are
+// dropped when the bounded table is full; when it is still full, unknown
+// sources are told to retry later instead of being tracked.
 type smtpAuthLimiter struct {
 	mu         sync.Mutex
 	interval   time.Duration
@@ -56,44 +58,29 @@ func authKey(address netip.Addr) (netip.Prefix, bool) {
 	return netip.PrefixFrom(address, bits).Masked(), true
 }
 
+// refill brings the bucket up to date. Callers hold l.mu.
+func (l *smtpAuthLimiter) refill(s *smtpAuthSource, now time.Time) {
+	if elapsed := now.Sub(s.last); elapsed > 0 {
+		s.tokens = min(float64(l.burst), s.tokens+float64(elapsed)/float64(l.interval))
+	}
+	s.last = now
+}
+
 // evictIdle drops sources whose bucket has fully refilled. Callers hold l.mu.
 func (l *smtpAuthLimiter) evictIdle(now time.Time) {
 	for key, source := range l.sources {
-		if now.Sub(source.seen) >= l.idle && source.limiter.TokensAt(now) >= float64(l.burst) {
+		l.refill(source, now)
+		if now.Sub(source.seen) >= l.idle && source.tokens >= float64(l.burst) {
 			delete(l.sources, key)
 		}
 	}
 }
 
-// Check implements bounce.AuthLimiter.
+// Check implements bounce.AuthLimiter: it charges one attempt.
 func (l *smtpAuthLimiter) Check(address netip.Addr) bounce.AuthGate {
 	key, ok := authKey(address)
 	if !ok {
 		return bounce.AuthGateBusy
-	}
-	now := l.now()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if source := l.sources[key]; source != nil {
-		if source.limiter.TokensAt(now) < 1 {
-			return bounce.AuthGateBlocked
-		}
-		return bounce.AuthGateOpen
-	}
-	if len(l.sources) >= l.maxSources {
-		l.evictIdle(now)
-		if len(l.sources) >= l.maxSources {
-			return bounce.AuthGateBusy
-		}
-	}
-	return bounce.AuthGateOpen
-}
-
-// Failed implements bounce.AuthLimiter.
-func (l *smtpAuthLimiter) Failed(address netip.Addr) {
-	key, ok := authKey(address)
-	if !ok {
-		return
 	}
 	now := l.now()
 	l.mu.Lock()
@@ -103,12 +90,32 @@ func (l *smtpAuthLimiter) Failed(address netip.Addr) {
 		if len(l.sources) >= l.maxSources {
 			l.evictIdle(now)
 			if len(l.sources) >= l.maxSources {
-				return
+				return bounce.AuthGateBusy
 			}
 		}
-		source = &smtpAuthSource{limiter: rate.NewLimiter(rate.Every(l.interval), l.burst)}
+		source = &smtpAuthSource{tokens: float64(l.burst), last: now}
 		l.sources[key] = source
 	}
+	l.refill(source, now)
 	source.seen = now
-	source.limiter.AllowN(now, 1)
+	if source.tokens < 1 {
+		return bounce.AuthGateBlocked
+	}
+	source.tokens--
+	return bounce.AuthGateOpen
+}
+
+// Succeeded implements bounce.AuthLimiter: it refunds the attempt.
+func (l *smtpAuthLimiter) Succeeded(address netip.Addr) {
+	key, ok := authKey(address)
+	if !ok {
+		return
+	}
+	now := l.now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if source := l.sources[key]; source != nil {
+		l.refill(source, now)
+		source.tokens = min(float64(l.burst), source.tokens+1)
+	}
 }

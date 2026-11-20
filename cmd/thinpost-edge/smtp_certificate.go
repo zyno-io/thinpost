@@ -28,7 +28,13 @@ func certificatePublicKey(path string) ([]byte, error) {
 }
 
 func publicSMTPTLS(certPath, keyPath, hostname, controlCertPath string, roots *x509.CertPool) (*tls.Config, error) {
-	get, err := publicSMTPCertificate(certPath, keyPath, hostname, controlCertPath, roots)
+	return publicSMTPTLSRoots(certPath, keyPath, hostname, controlCertPath, func() (*x509.CertPool, error) { return roots, nil })
+}
+
+// publicSMTPTLSRoots is publicSMTPTLS with trust roots read afresh for every
+// handshake, so a rotated CA bundle takes effect without a restart.
+func publicSMTPTLSRoots(certPath, keyPath, hostname, controlCertPath string, roots func() (*x509.CertPool, error)) (*tls.Config, error) {
+	get, err := publicSMTPCertificateRoots(certPath, keyPath, hostname, controlCertPath, roots)
 	if err != nil {
 		return nil, err
 	}
@@ -41,6 +47,10 @@ func publicSMTPTLS(certPath, keyPath, hostname, controlCertPath string, roots *x
 // handshake rather than serving stale or unvalidated key material. Already
 // established sessions retain the certificate with which they connected.
 func publicSMTPCertificate(certPath, keyPath, hostname, controlCertPath string, roots *x509.CertPool) (func(*tls.ClientHelloInfo) (*tls.Certificate, error), error) {
+	return publicSMTPCertificateRoots(certPath, keyPath, hostname, controlCertPath, func() (*x509.CertPool, error) { return roots, nil })
+}
+
+func publicSMTPCertificateRoots(certPath, keyPath, hostname, controlCertPath string, rootsFn func() (*x509.CertPool, error)) (func(*tls.ClientHelloInfo) (*tls.Certificate, error), error) {
 	if hostname == "" {
 		return nil, errors.New("invalid SMTP hostname")
 	}
@@ -67,6 +77,10 @@ func publicSMTPCertificate(certPath, keyPath, hostname, controlCertPath string, 
 				return nil, errors.New("invalid SMTP certificate chain")
 			}
 			intermediates.AddCert(cert)
+		}
+		roots, err := rootsFn()
+		if err != nil {
+			return nil, errors.New("cannot load SMTP trust roots")
 		}
 		if _, err = leaf.Verify(x509.VerifyOptions{DNSName: hostname, Intermediates: intermediates, Roots: roots}); err != nil {
 			return nil, errors.New("public SMTP certificate is not trusted for hostname")

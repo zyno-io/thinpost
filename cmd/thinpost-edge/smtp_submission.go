@@ -124,12 +124,17 @@ func bindSubmission(c edgeapp.Config, client bounce.Submission, listeners []edge
 	if err != nil {
 		return nil, errors.New("invalid SMTP connection limits")
 	}
+	// The internal listener has no rate limiter, which is what counts admitted
+	// connections elsewhere, so its admission counts them itself.
+	internalAdmission.countAdmitted = true
 	rateLimit, err := newSMTPRateLimiter(20*time.Millisecond, 200*time.Millisecond, 200, 30, 4096)
 	if err != nil {
 		return nil, errors.New("invalid SMTP connection rate limits")
 	}
 	rateLimit.stats = publicStats
-	runtime.admission = []*smtpAdmissionStats{publicStats}
+	if c.Submission {
+		runtime.admission = []*smtpAdmissionStats{publicStats}
+	}
 	for i, server := range servers {
 		raw, err := net.Listen("tcp", binds[i])
 		if err != nil {
@@ -158,13 +163,18 @@ func bindSubmission(c edgeapp.Config, client bounce.Submission, listeners []edge
 }
 
 func internalSubmissionTLS(c edgeapp.Config, internal edgeapp.SubmissionInternal) (*tls.Config, error) {
-	caPEM, err := os.ReadFile(internal.CAFile)
-	if err != nil {
-		return nil, errors.New("cannot load internal submission CA")
+	// The CA bundle is read on every handshake, like the certificate itself, so
+	// a rotated cluster CA reaches the listener without a restart.
+	roots := func() (*x509.CertPool, error) {
+		caPEM, err := os.ReadFile(internal.CAFile)
+		if err != nil {
+			return nil, errors.New("cannot load internal submission CA")
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, errors.New("invalid internal submission CA")
+		}
+		return pool, nil
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, errors.New("invalid internal submission CA")
-	}
-	return publicSMTPTLS(internal.Cert, internal.Key, internal.Hostname, c.ControlCert, pool)
+	return publicSMTPTLSRoots(internal.Cert, internal.Key, internal.Hostname, c.ControlCert, roots)
 }
