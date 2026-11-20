@@ -221,7 +221,7 @@ Thinpost sends the message you submit, with a few changes that keep it safe and 
 - **Removed:** `Bcc`, `Resent-Bcc`, `Return-Path`, `Received`, any ARC headers, `Authentication-Results`, every `X-Thinpost-*` header, and `Sender` when the `From` was changed (or when it is not a single address on a verified domain).
 - **Replaced:** `Message-ID`. Thinpost uses its own, `<message-id@your-domain>`, so replies and bounces can be matched. Your client's `Message-ID` is used for retry protection only. The consequence: a client that wants to thread a later message under this one has no way to know the new ID, unless it reads it from the reply and builds `<id@domain>` itself.
 - **Added:** a `DKIM-Signature` for the sender domain, and a `Date` when there is none. A `Date` the client sent is always kept, including on held mail. Line endings are normalized to CRLF.
-- **Kept:** everything else, including `Reply-To`, `In-Reply-To`, `References`, custom headers, MIME structure and attachments. A DKIM signature the client added is dropped if the changes above would break it, and kept otherwise.
+- **Kept:** everything else, including `Reply-To`, `In-Reply-To`, `References`, custom headers, MIME structure and attachments. A DKIM signature the client added is kept on a best-effort basis: it is dropped when the changes above would break it, and Thinpost may also drop one that would still verify. Thinpost's own signature for the sender domain is always added, so this doesn't affect delivery.
 
 [Open and click tracking](/guide/tracking) and one-click unsubscribe are **not** applied to SMTP mail. The message is exactly what the client wrote, so Thinpost does not rewrite links or add a tracking pixel.
 
