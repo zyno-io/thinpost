@@ -294,7 +294,7 @@ func TestClaimReturnsTheRecipientPolicyOverride(t *testing.T) {
 	want := map[string]bool{override.ID: true, limitsOnly.ID: false, keyed: false}
 	for id := range want {
 		f.exec(`UPDATE messages SET state='prepared' WHERE id=$1`, id)
-		f.exec(`INSERT INTO deliveries(id,message_id,recipient_index,final_object_key) VALUES ($1,$2,0,'signed')`, f.id(), id)
+		f.exec(`INSERT INTO deliveries(id,message_id,recipient_index,final_object_key) VALUES ($1,$2,0,$3)`, f.id(), id, "signed/"+id)
 	}
 	lease, err := f.repo.AcquireControllerLease(f.ctx, "worker", "controller", time.Minute)
 	if err != nil {
