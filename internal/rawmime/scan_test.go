@@ -133,6 +133,10 @@ func TestScanFactEdges(t *testing.T) {
 		{"first message-id only", "Message-ID: bad\r\nMessage-ID: <a@example.com>\r\n", func(s *Scanned) bool { return !s.HasMessageID }},
 		{"require tls", "X-Thinpost-Require-TLS: true\r\n", func(s *Scanned) bool { return s.RequireTLS }},
 		{"enhanced false", "X-Thinpost-Enhanced-Protection: false\r\n", func(s *Scanned) bool { return !s.Enhanced }},
+		{"enhanced case", "X-Thinpost-Enhanced-Protection: TRUE\r\n", func(s *Scanned) bool { return s.Enhanced }},
+		{"no hold", "From: a@example.com\r\n", func(s *Scanned) bool { return !s.Hold }},
+		{"hold", "x-thinpost-hold: True\r\n", func(s *Scanned) bool { return s.Hold }},
+		{"hold false", "X-Thinpost-Hold: false\r\n", func(s *Scanned) bool { return !s.Hold }},
 		{"two froms", "From: a@example.com\r\nFrom: b@example.com\r\n", func(s *Scanned) bool { return s.FromFields == 2 && s.From == nil }},
 		{"two mailboxes", "From: a@example.com, b@example.com\r\n", func(s *Scanned) bool { return s.FromFields == 1 && s.From == nil }},
 		{"group", "From: team: a@example.com;\r\n", func(s *Scanned) bool { return s.From == nil }},
@@ -154,6 +158,8 @@ func TestScanFactEdges(t *testing.T) {
 	for _, bad := range []string{
 		"X-Thinpost-Enhanced-Protection: maybe\r\n",
 		"X-Thinpost-Enhanced-Protection: true\r\nX-Thinpost-Enhanced-Protection: true\r\n",
+		"X-Thinpost-Hold: yes\r\n",
+		"X-Thinpost-Hold: true\r\nX-Thinpost-Hold: false\r\n",
 	} {
 		if _, err := Scan([]byte(bad + "\r\n")); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%q: %v", bad, err)

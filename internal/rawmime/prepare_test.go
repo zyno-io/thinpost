@@ -123,7 +123,7 @@ func TestPrepareRewritesFromAndDropsExtras(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("0", 32), AcceptedAt: acceptedAt, Selector: "sel", Signer: testKey(t)}
+	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("0", 32), Date: acceptedAt, Selector: "sel", Signer: testKey(t)}
 	out, err := Prepare([]byte(raw), in)
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +244,7 @@ func TestPrepareWithRewrittenFromSizeMatches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("f", 32), AcceptedAt: acceptedAt, Selector: "sel", Signer: testKey(t)}
+	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("f", 32), Date: acceptedAt, Selector: "sel", Signer: testKey(t)}
 	out, err := Prepare(raw, in)
 	if err != nil {
 		t.Fatal(err)
@@ -273,7 +273,7 @@ func TestAssembleAllocatesOnlyTheOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), AcceptedAt: acceptedAt, Selector: "sel", Signer: testKey(t)}
+	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), Date: acceptedAt, Selector: "sel", Signer: testKey(t)}
 	g, err := in.check(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +338,7 @@ func TestPrepareEd25519(t *testing.T) {
 	raw := fixture(t, "basic.eml")
 	s := mustScan(t, string(raw))
 	d, _ := DecideFrom(s, "", Policy{Mode: FromOff}, verifiedSet("example.com"))
-	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), AcceptedAt: acceptedAt, Selector: "sel", Signer: key}
+	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), Date: acceptedAt, Selector: "sel", Signer: key}
 	out, err := Prepare(raw, in)
 	if err != nil {
 		t.Fatal(err)
@@ -377,7 +377,7 @@ func TestPrepareWorstCaseSignatureFitsReservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), AcceptedAt: acceptedAt, Selector: strings.Repeat("s", 63), Signer: signer}
+	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), Date: acceptedAt, Selector: strings.Repeat("s", 63), Signer: signer}
 	out, err := Prepare(raw, in)
 	if err != nil {
 		t.Fatal(err)
@@ -401,7 +401,7 @@ func TestSizeSinkOverflowIsAnError(t *testing.T) {
 	raw := fixture(t, "barelf_quoted_from.eml")
 	s := mustScan(t, string(raw))
 	d, _ := DecideFrom(s, "", Policy{Mode: FromOff}, verifiedSet("example.com"))
-	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), AcceptedAt: acceptedAt, Selector: "sel", Signer: testKey(t)}
+	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), Date: acceptedAt, Selector: "sel", Signer: testKey(t)}
 	in.Scan = &Scanned{}
 	*in.Scan = *s
 	in.Scan.BareLF = 0 // stale: the body has bare LFs
@@ -447,7 +447,7 @@ func TestPrepareEd25519Verifies(t *testing.T) {
 	raw := fixture(t, "basic.eml")
 	s := mustScan(t, string(raw))
 	d, _ := DecideFrom(s, "", Policy{Mode: FromOff}, verifiedSet("example.com"))
-	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), AcceptedAt: acceptedAt, Selector: "ed", Signer: key}
+	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), Date: acceptedAt, Selector: "ed", Signer: key}
 	out, err := Prepare(raw, in)
 	if err != nil {
 		t.Fatal(err)
@@ -466,7 +466,7 @@ func TestPrepareRejectsMismatchedInput(t *testing.T) {
 	raw := fixture(t, "basic.eml")
 	s := mustScan(t, string(raw))
 	d, _ := DecideFrom(s, "", Policy{Mode: FromOff}, verifiedSet("example.com"))
-	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), AcceptedAt: acceptedAt, Selector: "sel", Signer: testKey(t)}
+	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), Date: acceptedAt, Selector: "sel", Signer: testKey(t)}
 	if _, err := Prepare(raw[:len(raw)-1], in); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("%v", err)
 	}
@@ -522,7 +522,7 @@ func FuzzScanPrepare(f *testing.F) {
 			}
 			return
 		}
-		in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("c", 32), AcceptedAt: acceptedAt, Selector: "sel", Signer: key}
+		in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("c", 32), Date: acceptedAt, Selector: "sel", Signer: key}
 		out, err := Prepare(raw, in)
 		if err != nil {
 			if !isKnown(err) {
@@ -569,4 +569,22 @@ func fixtureBytes(name string) []byte {
 		panic(err)
 	}
 	return b
+}
+
+// A held message keeps the client's own Date when it is finally sent, and the
+// hold option header never leaves Thinpost.
+func TestPrepareKeepsClientDateAndStripsHold(t *testing.T) {
+	raw := "From: a@example.com\r\nTo: b@example.net\r\nDate: Mon, 16 Nov 2026 08:00:00 +0000\r\nX-Thinpost-Hold: true\r\nSubject: x\r\n\r\nbody"
+	s := mustScan(t, raw)
+	if !s.Hold {
+		t.Fatal("hold not seen")
+	}
+	out, _ := prepared(t, raw, "")
+	_, rest, _ := splitPrepared(t, out)
+	if !strings.Contains(rest, "Date: Mon, 16 Nov 2026 08:00:00 +0000\r\n") || strings.Count(rest, "Date:") != 1 {
+		t.Fatalf("date not kept: %q", rest)
+	}
+	if strings.Contains(strings.ToLower(rest), "x-thinpost-hold") {
+		t.Fatalf("hold header leaked: %q", rest)
+	}
 }

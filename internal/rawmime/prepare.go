@@ -20,8 +20,10 @@ type PrepareInput struct {
 	From FromDecision
 	// MessageID is the message-scoped token for the Message-ID header.
 	MessageID string
-	// AcceptedAt supplies the Date header when the message has none.
-	AcceptedAt time.Time
+	// Date supplies the Date header when the message has none. Callers pass the
+	// time the message is released for sending: acceptance, or the hold's
+	// release. A Date the client sent is always kept.
+	Date time.Time
 	// Selector is the DKIM selector. Signer signs for From.Domain; PreparedSize
 	// only reads its public key, so a SizingSigner works there.
 	Selector string
@@ -40,7 +42,7 @@ func (in *PrepareInput) check(raw []byte) (generated, error) {
 		s.BareLF < 0 || s.BareLF > len(raw)-s.BodyStart || in.Signer == nil {
 		return generated{}, ErrInvalid
 	}
-	if in.From.Domain == "" || in.MessageID == "" || strings.ContainsAny(in.MessageID, " \t\r\n<>@") || in.AcceptedAt.IsZero() {
+	if in.From.Domain == "" || in.MessageID == "" || strings.ContainsAny(in.MessageID, " \t\r\n<>@") || in.Date.IsZero() {
 		return generated{}, ErrInvalid
 	}
 	if in.From.Field == "" && s.FromFields != 1 {
@@ -52,7 +54,7 @@ func (in *PrepareInput) check(raw []byte) (generated, error) {
 		return generated{}, ErrInvalid
 	}
 	if !s.HasDate {
-		g.date = []byte("Date: " + in.AcceptedAt.UTC().Format(time.RFC1123Z) + "\r\n")
+		g.date = []byte("Date: " + in.Date.UTC().Format(time.RFC1123Z) + "\r\n")
 	}
 	return g, nil
 }

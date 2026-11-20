@@ -74,7 +74,7 @@ func prepared(t testing.TB, raw string, mailFrom string) ([]byte, PrepareInput) 
 	if err != nil {
 		t.Fatalf("DecideFrom: %v", err)
 	}
-	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a1", 16), AcceptedAt: acceptedAt, Selector: "sel", Signer: testKey(t)}
+	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a1", 16), Date: acceptedAt, Selector: "sel", Signer: testKey(t)}
 	out, err := Prepare([]byte(raw), in)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)

@@ -45,13 +45,14 @@ type Scanned struct {
 	HasDate       bool
 	RequireTLS    bool                // X-Thinpost-Require-TLS is present; callers reject it
 	Enhanced      bool                // X-Thinpost-Enhanced-Protection: true
+	Hold          bool                // X-Thinpost-Hold: true
 	To, Cc        map[string]struct{} // mailbox keys
 }
 
 // collect reads the header block, validates the field syntax and fills the facts.
 func (s *Scanned) collect(head []byte) error {
 	var h gomail.Header
-	var enhanced []string
+	var enhanced, hold []string
 	var subject, messageID string
 	var haveSubject, haveMessageID bool
 	err := eachField(head, func(_ int, f field) error {
@@ -87,24 +88,19 @@ func (s *Scanned) collect(head []byte) error {
 			s.RequireTLS = true
 		case nameIs(head, f, "X-Thinpost-Enhanced-Protection"):
 			enhanced = append(enhanced, unfoldValue(head, f))
+		case nameIs(head, f, "X-Thinpost-Hold"):
+			hold = append(hold, unfoldValue(head, f))
 		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	switch len(enhanced) {
-	case 0:
-	case 1:
-		switch strings.ToLower(enhanced[0]) {
-		case "true":
-			s.Enhanced = true
-		case "false":
-		default:
-			return ErrInvalid
-		}
-	default:
-		return ErrInvalid
+	if s.Enhanced, err = flag(enhanced); err != nil {
+		return err
+	}
+	if s.Hold, err = flag(hold); err != nil {
+		return err
 	}
 
 	if s.FromFields == 1 {
@@ -224,4 +220,22 @@ func cleanText(s string, max int) string {
 		}
 	}
 	return s
+}
+
+// flag reads an X-Thinpost-* option header, which may appear at most once and
+// must be "true" or "false" (case-insensitive), like the HTTP option headers.
+// Absent is false.
+func flag(values []string) (bool, error) {
+	switch len(values) {
+	case 0:
+		return false, nil
+	case 1:
+		switch strings.ToLower(values[0]) {
+		case "true":
+			return true, nil
+		case "false":
+			return false, nil
+		}
+	}
+	return false, ErrInvalid
 }
