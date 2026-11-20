@@ -1713,8 +1713,9 @@ components:
               type: string
               enum: [allowlist, unrestricted]
               description: >-
-                The deployment's recipient policy, present when this replica
-                enforces one (that is, when submission is available). The console
+                The deployment's recipient policy, present whenever the control bridge is
+                configured on this replica, since the recipient policy is loaded with it,
+                and omitted otherwise. The console
                 offers bypass_recipient_policy only for allowlist.
         tracking:
           type: object

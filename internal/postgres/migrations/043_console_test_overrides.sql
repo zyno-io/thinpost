@@ -18,8 +18,10 @@
 -- That is sound because every existing row has false in all three columns and
 -- satisfies the predicate; new and updated rows are checked. No index is
 -- created: the app pending count keeps using messages_app_pending_v2_idx and
--- filters limits_override on the few matching rows. No drain is needed beyond
--- the gate close.
+-- applies the limits_override filter to each of the app's pending rows it
+-- reads, which adds a boolean check per row but no scan. No drain is needed beyond
+-- the gate close. Nothing is backfilled: no console test send exists before
+-- this schema, so false is correct for every existing row.
 -- Rollout: schema-42 pods fail closed on the new schema and are fenced by the
 -- closed gate until the reopen waits for every pod to run the new image, so no
 -- older pod admits work after an override row exists. An older pod does not

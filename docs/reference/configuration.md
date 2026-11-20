@@ -111,7 +111,7 @@ By default webhook URLs must be public HTTPS endpoints. These two variables add 
 
 ### Recipient policy
 
-Read by the control plane when the control bridge is enabled, and by the Edge worker. Both processes must be configured with the same policy.
+Read by the control plane when the control bridge is enabled. The control plane is the sole authority for it: the Edge worker does not read it.
 
 | Variable | Type | Default | Required | Description |
 | --- | --- | --- | --- | --- |
@@ -138,7 +138,7 @@ The bridge is the control plane's client side of the [control protocol](/referen
 | `THINPOST_CONTROL_BOUNCE_ACTIVE_KEY` | string | none | Conditional | Version name of the key in the bounce keyring that signs new bounce addresses. Must exist in the keyring. |
 | `THINPOST_CONTROL_BOUNCE_KEYS_FILE` | path | none | Conditional | JSON object mapping key version (at most 64 characters) to a base64 key of at least 32 bytes. At most 32 keys and 16 KiB. Older versions remain to verify existing bounce addresses. |
 | `THINPOST_CONTROL_SMTP_SOURCE` | IP address | none | Conditional | The Edge's primary SMTP source address, which the control plane uses when it resolves routes. Must be in an infrastructure range. |
-| `THINPOST_CONTROL_INFRASTRUCTURE_CIDRS` | list of CIDRs | none | Conditional | Ranges the control plane's route policy treats as infrastructure and refuses as mail destinations. Must include the source address. The control plane is the only component that applies it. |
+| `THINPOST_CONTROL_INFRASTRUCTURE_CIDRS` | list of CIDRs | none | Conditional | Ranges the control plane's route policy treats as infrastructure and refuses as mail destinations. Must include the primary source address and every additional source address the Edge reports: the control plane refuses an Edge whose Ready reports a source outside these ranges, or one a route exception names, and never routes mail to a reported source. The control plane is the only component that applies this policy. |
 | `THINPOST_CONTROL_ROUTE_EXCEPTIONS_FILE` | path | none | Optional | Route-exception file, in the [format below](#route-exceptions-file). |
 
 ## Edge worker
