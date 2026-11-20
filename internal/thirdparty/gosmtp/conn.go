@@ -44,6 +44,9 @@ type Conn struct {
 	fromReceived bool
 	recipients   []string
 	didAuth      bool
+
+	// thinpost: closed when the BDAT worker goroutine has exited.
+	bdatDone chan struct{}
 }
 
 func newConn(c net.Conn, s *Server) *Conn {
@@ -1042,34 +1045,42 @@ func (c *Conn) handleBdat(arg string) {
 		var r *io.PipeReader
 		r, c.bdatPipe = io.Pipe()
 
-		c.dataResult = make(chan error, 1)
+		// thinpost: the worker uses only these locals, never Conn fields that
+		// reset() may change, so a stale worker cannot touch the next transaction.
+		session := c.Session()
+		status := c.bdatStatus
+		rcpts := c.recipients
+		result := make(chan error, 1)
+		done := make(chan struct{})
+		c.dataResult, c.bdatDone = result, done
 
 		go func() {
+			defer close(done)
 			defer func() {
 				if err := recover(); err != nil {
-					c.handlePanic(err, c.bdatStatus)
+					c.handlePanic(err, status)
 
-					c.dataResult <- errPanic
+					result <- errPanic
 					r.CloseWithError(errPanic)
 				}
 			}()
 
 			var err error
 			if !c.server.LMTP {
-				err = c.Session().Data(r)
+				err = session.Data(r)
 			} else {
-				lmtpSession, ok := c.Session().(LMTPSession)
+				lmtpSession, ok := session.(LMTPSession)
 				if !ok {
-					err = c.Session().Data(r)
-					for _, rcpt := range c.recipients {
-						c.bdatStatus.SetStatus(rcpt, err)
+					err = session.Data(r)
+					for _, rcpt := range rcpts {
+						status.SetStatus(rcpt, err)
 					}
 				} else {
-					err = lmtpSession.LMTPData(r, c.bdatStatus)
+					err = lmtpSession.LMTPData(r, status)
 				}
 			}
 
-			c.dataResult <- err
+			result <- err
 			r.CloseWithError(err)
 		}()
 	}
@@ -1123,6 +1134,9 @@ func (c *Conn) handleBdat(arg string) {
 		c.writeResponse(250, EnhancedCode{2, 0, 0}, "Continue")
 	}
 }
+
+// thinpost: how long reset() waits for the BDAT worker to exit.
+const bdatWorkerTimeout = 30 * time.Second
 
 // ErrDataReset is returned by Reader pased to Data function if client does not
 // send another BDAT command and instead closes connection or issues RSET command.
@@ -1336,12 +1350,29 @@ func (c *Conn) readLine() (string, error) {
 
 func (c *Conn) reset() {
 	c.locker.Lock()
-	defer c.locker.Unlock()
 
+	// thinpost: stop the BDAT worker and wait for it to exit before touching
+	// the session, so it cannot race the next transaction.
+	done := c.bdatDone
+	c.bdatDone = nil
 	if c.bdatPipe != nil {
 		c.bdatPipe.CloseWithError(ErrDataReset)
 		c.bdatPipe = nil
 	}
+	c.locker.Unlock()
+
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(bdatWorkerTimeout):
+			c.Close()
+			return
+		}
+	}
+
+	c.locker.Lock()
+	defer c.locker.Unlock()
+
 	c.bdatStatus = nil
 	c.bytesReceived = 0
 

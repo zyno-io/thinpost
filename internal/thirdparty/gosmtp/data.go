@@ -53,6 +53,8 @@ type dataReader struct {
 
 	limited bool
 	n       int64 // Maximum bytes remaining
+
+	tooLarge bool // thinpost: once over the limit, stay over the limit
 }
 
 func newDataReader(c *Conn) *dataReader {
@@ -69,11 +71,17 @@ func newDataReader(c *Conn) *dataReader {
 }
 
 func (r *dataReader) Read(b []byte) (n int, err error) {
+	if r.limited && r.tooLarge {
+		return 0, ErrDataTooLarge
+	}
 	if r.limited {
 		if r.n <= 0 {
-			return 0, ErrDataTooLarge
-		}
-		if int64(len(b)) > r.n {
+			// thinpost: the limit is reached. Keep decoding without emitting:
+			// the terminator means the message was exactly at the limit; any
+			// further message byte means it is too large.
+			var scratch [1]byte
+			b = scratch[:]
+		} else if int64(len(b)) > r.n {
 			b = b[0:r.n]
 		}
 	}
@@ -139,6 +147,13 @@ func (r *dataReader) Read(b []byte) (n int, err error) {
 	}
 	if err == nil && r.state == stateEOF {
 		err = io.EOF
+	}
+
+	if r.limited && r.n <= 0 && n > 0 {
+		// thinpost: a decoded byte past the limit (it was only read into scratch).
+		// The error is sticky so a reader that retries never sees a clean EOF.
+		r.tooLarge = true
+		return 0, ErrDataTooLarge
 	}
 
 	if r.limited {
