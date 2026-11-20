@@ -142,4 +142,4 @@ A success response means the message is committed to the queue, not delivered. U
 
 ## Read-back routes
 
-An app key can read its own messages through `GET /app/v1/messages/{id}` and its `/body` and `/attachments/{index}` routes, and release or cancel a held message through `POST /app/v1/messages/{id}/release` and `/cancel`. These are Thinpost routes, not part of any provider API. See the [App API](/reference/api/app).
+An app key can read its own messages through `GET /app/v1/messages/{id}` and its `/body` and `/attachments/{index}` routes, and release or cancel a held message through `POST /app/v1/messages/{id}/release` and `/cancel`. These are Thinpost routes, not part of any provider API. The same API has a native send route, `POST /app/v1/messages`, which is not a provider adapter: it takes Thinpost's own JSON and shares the limits, quotas, sender-domain checks and recipient rules of the provider routes. See [Sending with the native API](/guide/native-api) and the [App API](/reference/api/app).

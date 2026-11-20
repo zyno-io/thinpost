@@ -22,7 +22,23 @@ const (
 // transaction serializes all replicas on the app row and rechecks key state.
 // A reservation is consumed even when the later upload or commit fails.
 func (r *Repository) ReserveSubmission(ctx context.Context, appID, keyID string, messages int) error {
-	if appID == "" || len(appID) > 256 || keyID == "" || len(keyID) > 256 || messages < 1 || messages > 100 {
+	if keyID == "" || len(keyID) > 256 {
+		return submission.ErrInvalidMessage
+	}
+	return r.reserveSubmission(ctx, appID, keyID, false, true, messages)
+}
+
+// ReserveOperatorSubmission is ReserveSubmission for an operator submission:
+// the same bucket and rate checks, without a key. An inactive app is paused.
+// charge false is the console limits override: the runtime gate and the app's
+// active state are still checked, but the bucket is neither checked nor
+// consumed, so a bypassed send leaves submission_tokens exactly as it was.
+func (r *Repository) ReserveOperatorSubmission(ctx context.Context, appID string, messages int, charge bool) error {
+	return r.reserveSubmission(ctx, appID, "", true, charge, messages)
+}
+
+func (r *Repository) reserveSubmission(ctx context.Context, appID, keyID string, operator, charge bool, messages int) error {
+	if appID == "" || len(appID) > 256 || messages < 1 || messages > 100 {
 		return submission.ErrInvalidMessage
 	}
 	tx, err := r.beginRuntime(ctx)
@@ -33,21 +49,33 @@ func (r *Repository) ReserveSubmission(ctx context.Context, appID, keyID string,
 	var rate, burst int
 	var tokens int64
 	var last, now time.Time
-	err = tx.QueryRowContext(ctx, `SELECT submission_rate_per_minute,submission_burst,submission_tokens,submission_refilled_at,clock_timestamp()
-		FROM apps WHERE id=$1 AND active FOR UPDATE`, appID).Scan(&rate, &burst, &tokens, &last, &now)
+	var active bool
+	err = tx.QueryRowContext(ctx, `SELECT submission_rate_per_minute,submission_burst,submission_tokens,submission_refilled_at,clock_timestamp(),active
+		FROM apps WHERE id=$1 FOR UPDATE`, appID).Scan(&rate, &burst, &tokens, &last, &now, &active)
 	if errors.Is(err, sql.ErrNoRows) {
 		return submission.ErrInvalidMessage
 	}
 	if err != nil {
 		return err
 	}
-	var exists bool
-	err = tx.QueryRowContext(ctx, `SELECT true FROM api_keys WHERE id=$1 AND app_id=$2 AND active FOR SHARE`, keyID, appID).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		return submission.ErrInvalidKey
+	if !active {
+		if operator {
+			return submission.ErrAppPaused
+		}
+		return submission.ErrInvalidMessage
 	}
-	if err != nil {
-		return err
+	if !operator {
+		var exists bool
+		err = tx.QueryRowContext(ctx, `SELECT true FROM api_keys WHERE id=$1 AND app_id=$2 AND active FOR SHARE`, keyID, appID).Scan(&exists)
+		if errors.Is(err, sql.ErrNoRows) {
+			return submission.ErrInvalidKey
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if !charge {
+		return tx.Commit()
 	}
 	if rate < 1 || rate > maxSubmissionRate || burst < 1 || burst > maxSubmissionBurst || tokens < 0 || tokens > int64(burst)*submissionTokenUnit {
 		return submission.ErrRateLimited

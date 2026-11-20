@@ -13,6 +13,11 @@ import (
 type RuntimeFeatures struct {
 	Submission bool `json:"submission"`
 	Tracking   bool `json:"tracking"`
+	// RecipientPolicy is "allowlist" when this deployment restricts recipients
+	// to an allowlist and "unrestricted" when it does not. It is empty when the
+	// replica does not enforce a recipient policy (no control bridge), in which
+	// case the field is omitted.
+	RecipientPolicy string `json:"recipient_policy,omitempty"`
 }
 
 // RuntimeTracking is the tracking deployment configuration, present only when

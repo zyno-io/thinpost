@@ -81,6 +81,16 @@ type MessageSummary struct {
 	// SuppressedCount is the failed deliveries dropped because the recipient
 	// was on the suppression list; they are also counted in FailedCount.
 	SuppressedCount int `json:"suppressed_count"`
+	// OperatorTest is present exactly when an administrator submitted the
+	// message through the console test send, and records which operator-only
+	// options that send used.
+	OperatorTest *OperatorTest `json:"operator_test,omitempty"`
+}
+
+// OperatorTest tags a console test message with the options it was sent with.
+type OperatorTest struct {
+	BypassLimits          bool `json:"bypass_limits"`
+	BypassRecipientPolicy bool `json:"bypass_recipient_policy"`
 }
 
 // DeriveMessageStatus folds the preparation state and delivery counts into one
@@ -381,6 +391,9 @@ type Handler struct {
 	AppStatus      AppStatusStore
 	Suppressions   SuppressionStore
 	Operations     OperationsStore
+	// TestMessages submits operator test messages as an app. Without it the
+	// test-send route answers 503.
+	TestMessages TestMessageSubmitter
 	// BounceDomain is the domain of per-delivery bounce addresses and the feedback
 	// mailbox, set only on a replica that receives bounces.
 	BounceDomain string
@@ -796,6 +809,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			headers = []HeaderField{}
 		}
 		respond(w, http.StatusOK, map[string]any{"headers": headers})
+		return
+	}
+	if len(path) == 7 && path[5] == "messages" && path[6] == "test" {
+		h.testMessage(w, r, principal.Subject, appID)
 		return
 	}
 	if len(path) == 7 && path[5] == "messages" && path[6] == "search" {

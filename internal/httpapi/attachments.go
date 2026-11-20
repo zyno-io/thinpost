@@ -62,7 +62,7 @@ func decodeAttachments(data []byte, provider string, limit int) ([]submission.At
 			}
 			result = append(result, attachment)
 			continue
-		case "resend":
+		case "resend", "thinpost":
 			var item struct {
 				Filename    string  `json:"filename"`
 				Content     *string `json:"content"`

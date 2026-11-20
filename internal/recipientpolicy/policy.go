@@ -17,6 +17,21 @@ type Policy struct {
 	allowed      map[string]struct{}
 }
 
+// Unrestricted reports whether the policy allows any valid recipient.
+func (p *Policy) Unrestricted() bool { return p != nil && p.unrestricted }
+
+// Mode is "unrestricted" or "allowlist", the two values of
+// THINPOST_RECIPIENT_POLICY, and is empty for a nil policy.
+func (p *Policy) Mode() string {
+	switch {
+	case p == nil:
+		return ""
+	case p.unrestricted:
+		return "unrestricted"
+	}
+	return "allowlist"
+}
+
 // Load requires an explicit mode. An allowlist is a bounded text file of exact
 // mailbox addresses, one per line; comments beginning with # are permitted.
 // Local parts remain case-sensitive and DNS names compare case-insensitively.

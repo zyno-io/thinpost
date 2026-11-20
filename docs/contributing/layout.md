@@ -56,7 +56,7 @@ Packages under `internal/` group by responsibility.
 | --- | --- |
 | `preparation`, `message`, `signing`, `tracking` | MIME building, DKIM signing and tracking links |
 | `dispatch`, `delivery`, `mailroute`, `recipientpolicy` | Delivery attempts, MX resolution and recipient policy |
-| `egress`, `smtptransport` | The outbound destination policy and a single SMTP attempt |
+| `egress`, `smtptransport` | The control plane's destination policy, the edge's source-bound dialer, and a single SMTP attempt |
 | `webhook` | Webhook events, formats and dispatch |
 
 **Control protocol**

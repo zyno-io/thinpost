@@ -56,6 +56,37 @@ func (r *Repository) LookupKey(ctx context.Context, digest [32]byte) (submission
 	return app, nil
 }
 
+// LookupOperatorApp reads an app for an operator submission. It is the
+// operator counterpart of LookupKey: the principal is an authenticated
+// administrator, so there is no key, and an inactive app is reported as paused
+// rather than as an invalid credential.
+func (r *Repository) LookupOperatorApp(ctx context.Context, appID string) (submission.App, error) {
+	app := submission.App{ID: appID}
+	if !opaqueID(appID) {
+		return submission.App{}, admin.ErrNotFound
+	}
+	tx, err := r.beginRuntime(ctx)
+	if err != nil {
+		return submission.App{}, err
+	}
+	defer tx.Rollback()
+	var active bool
+	err = tx.QueryRowContext(ctx, `SELECT active,list_unsubscribe,default_track_opens,default_track_clicks FROM apps WHERE id=$1`, appID).Scan(&active, &app.ListUnsubscribe, &app.DefaultTrackOpens, &app.DefaultTrackClicks)
+	if errors.Is(err, sql.ErrNoRows) {
+		return submission.App{}, admin.ErrNotFound
+	}
+	if err != nil {
+		return submission.App{}, err
+	}
+	if !active {
+		return submission.App{}, submission.ErrAppPaused
+	}
+	if err = tx.Commit(); err != nil {
+		return submission.App{}, err
+	}
+	return app, nil
+}
+
 func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (submission.Receipt, error) {
 	var receipt submission.Receipt
 	if record.RecipientCount < 1 || record.RecipientCount > 100 || len(record.PreviousHashes) > 7 {
@@ -83,18 +114,40 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 	var pendingLimit int
 	err = tx.QueryRowContext(ctx, `SELECT pending_message_limit FROM apps WHERE id=$1 AND active FOR UPDATE`, record.AppID).Scan(&pendingLimit)
 	if errors.Is(err, sql.ErrNoRows) {
+		// An operator submission has no key whose revocation explains this: the
+		// app was paused after authorization, which is reported as such.
+		if record.Operator != "" && record.KeyID == "" {
+			var exists bool
+			if tx.QueryRowContext(ctx, `SELECT true FROM apps WHERE id=$1`, record.AppID).Scan(&exists) == nil {
+				return receipt, submission.ErrAppPaused
+			}
+		}
 		return receipt, submission.ErrInvalidMessage
 	}
 	if err != nil {
 		return receipt, err
 	}
 	var exists bool
-	err = tx.QueryRowContext(ctx, `SELECT true FROM api_keys WHERE id=$1 AND app_id=$2 AND active FOR SHARE`, record.KeyID, record.AppID).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
+	// Exactly one principal. A key submission rechecks its key; an operator
+	// submission has no key and is bound to the console adapter and to no
+	// idempotency key. Any other combination is refused, so a stray operator
+	// value can never open a keyless path for a provider adapter.
+	switch {
+	case record.KeyID != "" && record.Operator == "":
+		// Overrides are an operator privilege: a key principal never carries one.
+		if record.Adapter == submission.AdapterConsole || record.LimitsOverride || record.RecipientPolicyOverride {
+			return receipt, submission.ErrInvalidKey
+		}
+		err = tx.QueryRowContext(ctx, `SELECT true FROM api_keys WHERE id=$1 AND app_id=$2 AND active FOR SHARE`, record.KeyID, record.AppID).Scan(&exists)
+		if errors.Is(err, sql.ErrNoRows) {
+			return receipt, submission.ErrInvalidKey
+		}
+		if err != nil {
+			return receipt, err
+		}
+	case record.KeyID == "" && adminText(record.Operator, 256) && record.Adapter == submission.AdapterConsole && record.IdempotencyKey == "":
+	default:
 		return receipt, submission.ErrInvalidKey
-	}
-	if err != nil {
-		return receipt, err
 	}
 	for _, senderDomain := range []string{domain, record.SendingDomain} {
 		if senderDomain == "" {
@@ -146,42 +199,58 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 	}
 	// The app row is locked for the entire transaction, so concurrent replicas
 	// cannot overspend the quota. A duplicate receipt returned above is free.
-	var quotaUpdated bool
-	err = tx.QueryRowContext(ctx, `UPDATE apps SET
-		recipient_quota_used=(CASE WHEN recipient_quota_day=(statement_timestamp() AT TIME ZONE 'UTC')::date THEN recipient_quota_used ELSE 0 END)+$2,
-		recipient_quota_day=(statement_timestamp() AT TIME ZONE 'UTC')::date
-		WHERE id=$1 AND (CASE WHEN recipient_quota_day=(statement_timestamp() AT TIME ZONE 'UTC')::date THEN recipient_quota_used ELSE 0 END)+$2 <= recipient_daily_limit
-		RETURNING true`, record.AppID, record.RecipientCount).Scan(&quotaUpdated)
-	if errors.Is(err, sql.ErrNoRows) {
-		return submission.Receipt{}, submission.ErrQuotaExceeded
-	}
-	if err != nil {
-		return submission.Receipt{}, err
-	}
-	// This transaction holds the application row lock through the insert, so
-	// concurrent replicas cannot both consume the final pending-message slot.
-	// The daily-quota update also rolls back if the pending limit is reached.
-	if pendingLimit == 0 {
-		return submission.Receipt{}, submission.ErrBacklogExceeded
-	}
-	pending, err := countPendingMessages(ctx, tx, record.AppID, pendingLimit)
-	if err != nil {
-		return submission.Receipt{}, err
-	}
-	if pending >= pendingLimit {
-		return submission.Receipt{}, submission.ErrBacklogExceeded
+	// A limits override neither checks nor consumes the daily quota and the
+	// pending limit: recipient_quota_used and its day are left untouched.
+	if !record.LimitsOverride {
+		var quotaUpdated bool
+		err = tx.QueryRowContext(ctx, `UPDATE apps SET
+			recipient_quota_used=(CASE WHEN recipient_quota_day=(statement_timestamp() AT TIME ZONE 'UTC')::date THEN recipient_quota_used ELSE 0 END)+$2,
+			recipient_quota_day=(statement_timestamp() AT TIME ZONE 'UTC')::date
+			WHERE id=$1 AND (CASE WHEN recipient_quota_day=(statement_timestamp() AT TIME ZONE 'UTC')::date THEN recipient_quota_used ELSE 0 END)+$2 <= recipient_daily_limit
+			RETURNING true`, record.AppID, record.RecipientCount).Scan(&quotaUpdated)
+		if errors.Is(err, sql.ErrNoRows) {
+			return submission.Receipt{}, submission.ErrQuotaExceeded
+		}
+		if err != nil {
+			return submission.Receipt{}, err
+		}
+		// This transaction holds the application row lock through the insert, so
+		// concurrent replicas cannot both consume the final pending-message slot.
+		// The daily-quota update also rolls back if the pending limit is reached.
+		if pendingLimit == 0 {
+			return submission.Receipt{}, submission.ErrBacklogExceeded
+		}
+		pending, err := countPendingMessages(ctx, tx, record.AppID, pendingLimit)
+		if err != nil {
+			return submission.Receipt{}, err
+		}
+		if pending >= pendingLimit {
+			return submission.Receipt{}, submission.ErrBacklogExceeded
+		}
 	}
 	if err = r.lockAndVerifyObjects(ctx, tx, []string{record.ObjectKey}); err != nil {
 		return submission.Receipt{}, err
 	}
 	state, holdMS := initialMessageState(record.Hold)
-	err = tx.QueryRowContext(ctx, `INSERT INTO messages (id, app_id, object_key, enhanced_protection, subject, recipient_count, sender_domain, sender_domain_rev, sender_address, sender_name, state, hold_expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now()+$12::bigint*interval '1 millisecond') RETURNING id,accepted_at`,
-		messageID, record.AppID, record.ObjectKey, record.EnhancedProtection, record.Subject, record.RecipientCount, record.SenderDomain, reverseDomainLabels(record.SenderDomain), record.SenderAddress, nullableName(record.SenderName), state, holdMS).Scan(&receipt.ID, &receipt.AcceptedAt)
+	err = tx.QueryRowContext(ctx, `INSERT INTO messages (id, app_id, object_key, enhanced_protection, subject, recipient_count, sender_domain, sender_domain_rev, sender_address, sender_name, state, hold_expires_at, console_test, limits_override, recipient_policy_override) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now()+$12::bigint*interval '1 millisecond',$13,$14,$15) RETURNING id,accepted_at`,
+		messageID, record.AppID, record.ObjectKey, record.EnhancedProtection, record.Subject, record.RecipientCount, record.SenderDomain, reverseDomainLabels(record.SenderDomain), record.SenderAddress, nullableName(record.SenderName), state, holdMS, record.Operator != "", record.LimitsOverride, record.RecipientPolicyOverride).Scan(&receipt.ID, &receipt.AcceptedAt)
 	if err != nil {
 		return submission.Receipt{}, err
 	}
 	if err = insertRecipients(ctx, tx, record.AppID, &recipients); err != nil {
 		return submission.Receipt{}, err
+	}
+	if record.Operator != "" {
+		auditID, idErr := newOpaqueID()
+		if idErr != nil {
+			return submission.Receipt{}, idErr
+		}
+		// Only the recipient count and the two overrides: never the subject,
+		// addresses, domain or body.
+		if _, err = tx.ExecContext(ctx, `INSERT INTO audit_events(id,actor_id,app_id,action,resource_id,details)
+			VALUES ($1,$2,$3,'message.test.submitted',$4,jsonb_build_object('recipient_count',$5::integer,'bypass_limits',$6::boolean,'bypass_recipient_policy',$7::boolean))`, auditID, record.Operator, record.AppID, messageID, record.RecipientCount, record.LimitsOverride, record.RecipientPolicyOverride); err != nil {
+			return submission.Receipt{}, err
+		}
 	}
 	if record.Hold {
 		if err = insertMessageEvent(ctx, tx, record.AppID, messageID, holdEventHeld); err != nil {

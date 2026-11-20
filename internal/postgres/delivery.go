@@ -82,7 +82,7 @@ func (r *Repository) claimDeliveryOnce(ctx context.Context, lease ControllerLeas
 		addresses = append(addresses, address.String())
 	}
 	bounceDomains := append([]string{}, caps.BounceDomains...)
-	err = tx.QueryRowContext(ctx, `SELECT d.id,d.message_id,m.app_id,m.object_key,d.final_object_key,d.recipient_index,m.enhanced_protection,m.accepted_at,d.route_attempts,
+	err = tx.QueryRowContext(ctx, `SELECT d.id,d.message_id,m.app_id,m.object_key,d.final_object_key,d.recipient_index,m.enhanced_protection,m.accepted_at,d.route_attempts,m.recipient_policy_override,
 		EXISTS (SELECT 1 FROM tracking_objects t WHERE t.delivery_id=d.id AND (t.object_key IS NULL OR t.revoked_at IS NOT NULL OR (t.expires_at IS NOT NULL AND (t.post_send_validity_seconds IS NULL OR t.expires_at-t.post_send_validity_seconds*interval '1 second'<=clock_timestamp()+$1*interval '1 millisecond')))),
 		(SELECT expires_at-post_send_validity_seconds*interval '1 second' FROM tracking_objects t WHERE t.delivery_id=d.id),
 		(SELECT min(a.started_at) FROM delivery_attempts a WHERE a.delivery_id=d.id AND a.outcome IS DISTINCT FROM 'recipient_policy_denied'),clock_timestamp(),
@@ -93,7 +93,7 @@ func (r *Repository) claimDeliveryOnce(ctx context.Context, lease ControllerLeas
 		LEFT JOIN sending_ips ip ON ip.id=app.sending_ip_id OR (app.sending_ip_id IS NULL AND host(ip.address)=$2::text)
 		WHERE app.active AND d.state='queued' AND d.retry_after<=clock_timestamp()
 		AND (ip.id IS NULL OR (host(ip.address)=ANY($3::text[]) AND ip.bounce_domain=ANY($4::text[])))
-		ORDER BY d.retry_after,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1`, delivery.TrackingMinimumRemaining.Milliseconds(), primary, addresses, bounceDomains).Scan(&claim.DeliveryID, &claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.FinalKey, &claim.RecipientIndex, &claim.EnhancedProtection, &claim.AcceptedAt, &claim.RouteAttempt, &trackingUnavailable, &trackingCutoff, &firstAttempt, &now, &suppression, &ipID, &ipName, &ipAddress, &ipHelo, &ipBounce)
+		ORDER BY d.retry_after,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1`, delivery.TrackingMinimumRemaining.Milliseconds(), primary, addresses, bounceDomains).Scan(&claim.DeliveryID, &claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.FinalKey, &claim.RecipientIndex, &claim.EnhancedProtection, &claim.AcceptedAt, &claim.RouteAttempt, &claim.RecipientPolicyOverride, &trackingUnavailable, &trackingCutoff, &firstAttempt, &now, &suppression, &ipID, &ipName, &ipAddress, &ipHelo, &ipBounce)
 	if errors.Is(err, sql.ErrNoRows) {
 		return claim, false, delivery.ErrNoWork
 	}

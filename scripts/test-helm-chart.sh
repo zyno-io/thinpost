@@ -114,6 +114,12 @@ render edge_gw --set workload=edge --set publicNetwork.gateway=192.0.2.253
 for forbidden in affinity topologySpread PodDisruptionBudget hostNetwork; do
   if grep -q "$forbidden" "$tmp/edge_extra.yaml"; then fail "the Edge must not render $forbidden"; fi
 done
+# Control is the sole authority for the recipient allowlist and the egress
+# policy: the Edge renders neither their environment nor their ConfigMap.
+for forbidden in THINPOST_RECIPIENT THINPOST_EDGE_INFRASTRUCTURE_CIDRS THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE thinpost-recipient-allowlist /run/thinpost/recipients; do
+  if grep -q "$forbidden" "$tmp/edge.yaml" "$tmp/edge_extra.yaml"; then fail "the Edge must not render $forbidden"; fi
+done
+grep -q 'thinpost-recipient-allowlist' "$tmp/control.yaml" || fail "control must still render the recipient policy ConfigMap"
 # Liveness and startup check the journal only; readiness also waits for neighbours.
 [ "$(grep -c 'healthcheck, liveness\]' "$tmp/edge.yaml")" = 2 ] || fail "liveness and startup probes must use the journal-only check"
 grep -q 'type: Recreate' "$tmp/edge.yaml" || fail "the Edge must use the Recreate strategy"

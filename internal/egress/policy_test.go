@@ -1,8 +1,6 @@
 package egress
 
 import (
-	"context"
-	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -69,20 +67,6 @@ func TestInfrastructureExceptionRequiresExactRoute(t *testing.T) {
 			}
 		})
 	}
-	called := false
-	dial := func(_ context.Context, source, destination netip.Addr) (net.Conn, error) {
-		called = true
-		if source.String() != "45.0.1.62" || destination != allow.Address {
-			t.Fatal("exception did not pin source and destination")
-		}
-		return nil, nil
-	}
-	if _, err = p.dial(context.Background(), netip.Addr{}, allow.Address, "other@mailhost.example", allow.MX, dial); err == nil || called {
-		t.Fatal("unapproved recipient reached the dialer")
-	}
-	if _, err = p.dial(context.Background(), netip.Addr{}, allow.Address, allow.Recipient, allow.MX, dial); err != nil || !called {
-		t.Fatal("approved route was not passed to the dialer", err)
-	}
 	for _, invalid := range []Exception{
 		{Recipient: allow.Recipient, MX: allow.MX, Address: netip.MustParseAddr("127.0.0.1")},
 		{Recipient: allow.Recipient, MX: allow.MX, Address: netip.MustParseAddr("45.0.1.62")},
@@ -131,25 +115,10 @@ func TestLoadExceptionsIsBoundedAndStrict(t *testing.T) {
 		t.Fatal("accepted a missing configured file")
 	}
 }
-func TestDialPinsAddressAndSMTPPort(t *testing.T) {
+func TestPolicyRequiresASource(t *testing.T) {
 	p, err := NewPolicy([]netip.Prefix{netip.MustParsePrefix("45.0.1.0/24")}, []netip.Addr{netip.MustParseAddr("45.0.1.22")})
 	if err != nil {
 		t.Fatal(err)
-	}
-	var seenSource, seenDestination netip.Addr
-	dial := func(_ context.Context, source, destination netip.Addr) (net.Conn, error) {
-		seenSource, seenDestination = source, destination
-		return nil, nil
-	}
-	if _, err = p.dial(context.Background(), netip.Addr{}, netip.MustParseAddr("8.8.8.8"), "", "", dial); err != nil || seenSource.String() != "45.0.1.22" || seenDestination.String() != "8.8.8.8" {
-		t.Fatalf("unexpected source %s destination %s error %v", seenSource, seenDestination, err)
-	}
-	seenSource = netip.Addr{}
-	if _, err = p.dial(context.Background(), netip.Addr{}, netip.MustParseAddr("127.0.0.1"), "", "", dial); err == nil || seenSource.IsValid() {
-		t.Fatal("dialed blocked address")
-	}
-	if _, err = p.dial(context.Background(), netip.Addr{}, netip.MustParseAddr("2607:f8b0:4000::1"), "", "", dial); err == nil {
-		t.Fatal("dialed without configured IPv6 source")
 	}
 	if p.Allowed(netip.MustParseAddr("2607:f8b0:4000::1")) {
 		t.Fatal("selected an address family without a source")

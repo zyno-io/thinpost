@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/zyno-io/thinpost/internal/objectkey"
 	"github.com/zyno-io/thinpost/internal/oplog"
@@ -27,16 +28,23 @@ type Objects interface {
 }
 
 type Record struct {
-	AppID              string
-	KeyID              string
-	ObjectKey          string
-	RequestHash        [32]byte
-	PreviousHashes     [][32]byte
-	IdempotencyKey     string
-	Adapter            string
-	SendingDomain      string
-	From               string
-	EnhancedProtection bool
+	AppID string
+	// KeyID or Operator identifies the principal; exactly one is set. Operator
+	// is the administrator subject of a console submission.
+	KeyID    string
+	Operator string
+	// LimitsOverride and RecipientPolicyOverride record the operator test-send
+	// overrides; valid only with Operator set.
+	LimitsOverride          bool
+	RecipientPolicyOverride bool
+	ObjectKey               string
+	RequestHash             [32]byte
+	PreviousHashes          [][32]byte
+	IdempotencyKey          string
+	Adapter                 string
+	SendingDomain           string
+	From                    string
+	EnhancedProtection      bool
 	// Hold commits the message (every item of a batch) on hold: stored and
 	// counted, but not prepared until the app releases it.
 	Hold           bool
@@ -75,6 +83,19 @@ type Repository interface {
 // addresses are on the app's list.
 type SuppressionChecker interface {
 	SuppressedRecipients(ctx context.Context, appID string, lowers []string) (int, error)
+}
+
+// OperatorRepository is an optional Repository capability for operator
+// submissions (see submission.OperatorService). LookupOperatorApp reads the
+// app as LookupKey does, without a key, returning submission.ErrAppPaused for
+// an inactive app. ReserveOperatorSubmission is ReserveSubmission without the
+// key check; charge false is the limits override: it still gates on the app
+// being active but neither checks nor consumes the rate bucket. Commit must
+// accept a record with Operator set and no KeyID, and applies the overrides
+// recorded on it only for such a record.
+type OperatorRepository interface {
+	LookupOperatorApp(ctx context.Context, appID string) (submission.App, error)
+	ReserveOperatorSubmission(ctx context.Context, appID string, messages int, charge bool) error
 }
 
 type Service struct {
@@ -142,6 +163,48 @@ func (s *Service) Authenticate(ctx context.Context, key string) (submission.App,
 	return s.repository.LookupKey(ctx, digest)
 }
 
+// maxOperatorBytes bounds an operator subject, like other administrator text.
+const maxOperatorBytes = 256
+
+// AuthorizeOperator returns the app as an operator principal for the
+// administrator subject actor. The caller must have authenticated actor as an
+// administrator; the subject is recorded in the audit event, never trusted
+// from a request body. Every acceptance policy still applies in Accept.
+func (s *Service) AuthorizeOperator(ctx context.Context, appID, actor string) (submission.App, error) {
+	if s.repository == nil || s.objects == nil {
+		return submission.App{}, submission.ErrUnavailable
+	}
+	repository, ok := s.repository.(OperatorRepository)
+	if !ok {
+		return submission.App{}, submission.ErrUnavailable
+	}
+	if appID == "" || !validOperator(actor) {
+		return submission.App{}, submission.ErrInvalidRequest
+	}
+	app, err := repository.LookupOperatorApp(ctx, appID)
+	if err != nil {
+		return submission.App{}, err
+	}
+	if app.ID != appID {
+		return submission.App{}, submission.ErrUnavailable
+	}
+	app.KeyID = ""
+	app.Operator = actor
+	return app, nil
+}
+
+func validOperator(actor string) bool {
+	if actor == "" || len(actor) > maxOperatorBytes || !utf8.ValidString(actor) || strings.TrimSpace(actor) != actor {
+		return false
+	}
+	for _, c := range actor {
+		if c < 32 || c == 127 {
+			return false
+		}
+	}
+	return true
+}
+
 // maxSourceBytes mirrors the object store's plaintext limit (16 MiB).
 const maxSourceBytes = 16 << 20
 
@@ -158,13 +221,32 @@ func (s *Service) Accept(ctx context.Context, app submission.App, req submission
 	if app.ID == "" || req.Adapter == "" || req.Message.Validate() != nil {
 		return submission.Receipt{}, submission.ErrInvalidMessage
 	}
+	// The operator principal and the console adapter are bound to each other:
+	// an operator never carries a key or an idempotency key, and no key
+	// submission may claim the console adapter.
+	operator := app.Operator != ""
+	if operator && (app.KeyID != "" || !validOperator(app.Operator) || req.Adapter != submission.AdapterConsole || req.IdempotencyKey != "") || !operator && req.Adapter == submission.AdapterConsole {
+		return submission.Receipt{}, submission.ErrInvalidMessage
+	}
+	// Overrides exist only for the operator test send. A key principal, and so
+	// every native and provider route, can never carry one.
+	if req.Overrides.Any() && !operator {
+		return submission.Receipt{}, submission.ErrInvalidMessage
+	}
+	var operators OperatorRepository
+	if operator {
+		var ok bool
+		if operators, ok = s.repository.(OperatorRepository); !ok {
+			return submission.Receipt{}, submission.ErrUnavailable
+		}
+	}
 	// An app with Thinpost-managed one-click unsubscribe cannot also supply
 	// its own List-Unsubscribe headers: the two would conflict.
 	if app.ListUnsubscribe && (req.Message.ListUnsubscribe != "" || req.Message.ListUnsubscribePost) {
 		return submission.Receipt{}, submission.ErrInvalidMessage
 	}
 	for _, recipient := range req.Message.Envelope() {
-		if !s.recipients.Allows(recipient) {
+		if !req.Overrides.RecipientPolicy && !s.recipients.Allows(recipient) {
 			return submission.Receipt{}, submission.ErrInvalidMessage
 		}
 	}
@@ -176,11 +258,17 @@ func (s *Service) Accept(ctx context.Context, app submission.App, req submission
 		Message       submission.Message `json:"message"`
 		SendingDomain string             `json:"sending_domain"`
 		Hold          bool               `json:"hold,omitempty"`
-	}{app.ID, req.Adapter, req.Message, req.SendingDomain, req.Hold})
+		Limits        bool               `json:"bypass_limits,omitempty"`
+		Recipients    bool               `json:"bypass_recipient_policy,omitempty"`
+	}{app.ID, req.Adapter, req.Message, req.SendingDomain, req.Hold, req.Overrides.Limits, req.Overrides.RecipientPolicy})
 	if err != nil {
 		return submission.Receipt{}, fmt.Errorf("fingerprint submission: %w", err)
 	}
-	if err := s.repository.ReserveSubmission(ctx, app.ID, app.KeyID, 1); err != nil {
+	if operator {
+		if err := operators.ReserveOperatorSubmission(ctx, app.ID, 1, !req.Overrides.Limits); err != nil {
+			return submission.Receipt{}, err
+		}
+	} else if err := s.repository.ReserveSubmission(ctx, app.ID, app.KeyID, 1); err != nil {
 		return submission.Receipt{}, err
 	}
 	// The fingerprint is the request as sent, so it is at least as large as the
@@ -252,7 +340,7 @@ func (s *Service) Accept(ctx context.Context, app submission.App, req submission
 		_, _ = mac.Write(fingerprint)
 		copy(hashes[i][:], mac.Sum(nil))
 	}
-	receipt, err := s.repository.Commit(ctx, Record{AppID: app.ID, KeyID: app.KeyID, ObjectKey: objectKey, RequestHash: hashes[0], PreviousHashes: hashes[1:], IdempotencyKey: req.IdempotencyKey, Adapter: req.Adapter, SendingDomain: req.SendingDomain, From: req.Message.From, EnhancedProtection: req.Message.EnhancedProtection, Hold: req.Hold, RecipientCount: len(req.Message.Envelope()), Subject: metadata.Subject, Recipients: metadata.Recipients, RecipientKinds: metadata.RecipientKinds, SenderDomain: metadata.SenderDomain, SenderAddress: metadata.SenderAddress, SenderName: metadata.SenderName})
+	receipt, err := s.repository.Commit(ctx, Record{AppID: app.ID, KeyID: app.KeyID, Operator: app.Operator, LimitsOverride: req.Overrides.Limits, RecipientPolicyOverride: req.Overrides.RecipientPolicy, ObjectKey: objectKey, RequestHash: hashes[0], PreviousHashes: hashes[1:], IdempotencyKey: req.IdempotencyKey, Adapter: req.Adapter, SendingDomain: req.SendingDomain, From: req.Message.From, EnhancedProtection: req.Message.EnhancedProtection, Hold: req.Hold, RecipientCount: len(req.Message.Envelope()), Subject: metadata.Subject, Recipients: metadata.Recipients, RecipientKinds: metadata.RecipientKinds, SenderDomain: metadata.SenderDomain, SenderAddress: metadata.SenderAddress, SenderName: metadata.SenderName})
 	if err == nil && !receipt.Replayed {
 		oplog.Message(app.ID, receipt.ID, oplog.StatusAccepted)
 		if req.Hold {

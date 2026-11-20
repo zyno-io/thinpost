@@ -156,7 +156,7 @@ func TestCommittedPermitLostBeforeEdgeTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	dialer := &neverSMTP{}
-	worker := &edgeworker.Worker{Journal: j, Dialer: dialer, Recipients: allowFixtureRecipient{}, HeloName: "smtp.sender.example"}
+	worker := &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example"}
 	edge, err := edgesession.New("worker", []string{controllerID}, j, worker, authority, 2)
 	if err != nil {
 		t.Fatal(err)

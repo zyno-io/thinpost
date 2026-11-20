@@ -571,7 +571,7 @@ func TestStartPermitTimeoutEndsSessionAndReplaysUnsentResult(t *testing.T) {
 	defer cancel()
 	s.permitTimeout = 100 * time.Millisecond
 	dialer := &timeoutTestDialer{}
-	s.executor = &edgeworker.Worker{Journal: j, Dialer: dialer, Recipients: timeoutTestPolicy{}, HeloName: "smtp.sender.example"}
+	s.executor = &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example"}
 	stream := &channelStream{ctx: ctx, incoming: make(chan *controlv1.ControlFrame, 8), sent: make(chan *controlv1.EdgeFrame, 8)}
 	done := make(chan error, 1)
 	go func() { done <- s.Connect(stream) }()

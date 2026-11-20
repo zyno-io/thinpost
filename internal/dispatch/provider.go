@@ -123,7 +123,9 @@ func (p *Provider) prepare(ctx context.Context, claim delivery.Claim, caps deliv
 	if err != nil {
 		return nil, nil, err
 	}
-	if !p.Recipients.Allows(recipient.Address) {
+	// The console test send may skip the allowlist, once, at acceptance and
+	// here. Everything after this line (the route's egress filter) still runs.
+	if !claim.RecipientPolicyOverride && !p.Recipients.Allows(recipient.Address) {
 		return nil, nil, delivery.ErrRecipientPolicyDenied
 	}
 	route, err := p.Routes.ForRecipient(ctx, recipient.Address, claim.DeliveryID, claim.RouteAttempt)
@@ -132,6 +134,12 @@ func (p *Provider) prepare(ctx context.Context, claim delivery.Claim, caps deliv
 	}
 	if err != nil || route.MXName == "" || strings.ContainsAny(route.MXName, "\r\n ") || !route.Address.IsValid() || route.Address.Zone() != "" {
 		return nil, nil, errors.New("recipient route unavailable")
+	}
+	// Never route to an address this worker sends from, primary or extra: the
+	// Edge applies no destination policy, so this is the only check against
+	// delivering to the worker itself or to its own network's gateway.
+	if caps.Has(route.Address.Unmap().String()) {
+		return nil, nil, errors.New("recipient route targets an edge source address")
 	}
 	from, err := p.Envelopes.ForDelivery(ctx, claim)
 	if err != nil || from == "" {

@@ -1,7 +1,6 @@
 package edgeapp
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,7 +11,7 @@ import (
 func TestEdgeConfigRequiresExplicitPrivateControlAndOwnedPublicSource(t *testing.T) {
 	env := map[string]string{
 		"THINPOST_EDGE_WORKER_ID": "worker-1", "THINPOST_EDGE_SMTP_HOSTNAME": "smtp.example.com", "THINPOST_EDGE_BOUNCE_DOMAIN": "bounce.example.com",
-		"THINPOST_EDGE_CONTROL_LISTEN": "10.2.3.4:7443", "THINPOST_EDGE_SMTP_LISTEN": "45.0.1.22:25", "THINPOST_EDGE_INFRASTRUCTURE_CIDRS": "45.0.1.0/24,10.0.0.0/8",
+		"THINPOST_EDGE_CONTROL_LISTEN": "10.2.3.4:7443", "THINPOST_EDGE_SMTP_LISTEN": "45.0.1.22:25",
 		"THINPOST_EDGE_CONTROLLER_IDENTITIES": "spiffe://thinpost.test/controller/a", "THINPOST_EDGE_CONTROL_CA": "ca.pem", "THINPOST_EDGE_CONTROL_CERT": "control.pem", "THINPOST_EDGE_CONTROL_KEY": "control.key",
 		"THINPOST_EDGE_SMTP_CERT": "smtp.pem", "THINPOST_EDGE_SMTP_KEY": "smtp.key", "THINPOST_EDGE_JOURNAL_PATH": "/data/journal", "THINPOST_EDGE_JOURNAL_CAPACITY": "100", "THINPOST_EDGE_CLOCK_MARGIN": "5s",
 		"THINPOST_EDGE_JOURNAL_RESERVE_BYTES": "67108864",
@@ -51,7 +50,6 @@ func TestEdgeConfigRequiresExplicitPrivateControlAndOwnedPublicSource(t *testing
 		{"THINPOST_EDGE_CONTROL_LISTEN", "45.0.1.22:7443"},
 		{"THINPOST_EDGE_SMTP_LISTEN", "45.0.1.22:2525"},
 		{"THINPOST_EDGE_SMTP_LISTEN", "127.0.0.1:25"},
-		{"THINPOST_EDGE_INFRASTRUCTURE_CIDRS", "10.0.0.0/8"},
 		{"THINPOST_EDGE_SMTP_HOSTNAME", "SMTP.example.com"},
 		{"THINPOST_EDGE_JOURNAL_CAPACITY", "0"},
 		{"THINPOST_EDGE_JOURNAL_RESERVE_BYTES", ""},
@@ -77,22 +75,41 @@ func TestEdgeConfigRequiresExplicitPrivateControlAndOwnedPublicSource(t *testing
 		}
 		env[tc.key] = previous
 	}
-	path := filepath.Join(t.TempDir(), "routes")
-	env["THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE"] = path
-	if _, err := Load(get); err == nil {
-		t.Fatal("missing configured route exceptions accepted")
+}
+
+// The Edge no longer applies an egress policy or a recipient policy; control
+// does. An Edge whose environment still carries the old settings, valid or not,
+// must start with the same configuration as one without them.
+func TestEdgeConfigIgnoresRetiredPolicySettings(t *testing.T) {
+	env := map[string]string{
+		"THINPOST_EDGE_WORKER_ID": "worker-1", "THINPOST_EDGE_SMTP_HOSTNAME": "smtp.example.com", "THINPOST_EDGE_BOUNCE_DOMAIN": "bounce.example.com",
+		"THINPOST_EDGE_CONTROL_LISTEN": "10.2.3.4:7443", "THINPOST_EDGE_SMTP_LISTEN": "45.0.1.22:25",
+		"THINPOST_EDGE_CONTROLLER_IDENTITIES": "spiffe://thinpost.test/controller/a", "THINPOST_EDGE_CONTROL_CA": "ca.pem", "THINPOST_EDGE_CONTROL_CERT": "control.pem", "THINPOST_EDGE_CONTROL_KEY": "control.key",
+		"THINPOST_EDGE_SMTP_CERT": "smtp.pem", "THINPOST_EDGE_SMTP_KEY": "smtp.key", "THINPOST_EDGE_JOURNAL_PATH": "/data/journal", "THINPOST_EDGE_JOURNAL_CAPACITY": "100", "THINPOST_EDGE_CLOCK_MARGIN": "5s",
+		"THINPOST_EDGE_JOURNAL_RESERVE_BYTES": "67108864",
 	}
-	if err := os.WriteFile(path, []byte("test@mailhost.example mail.mailhost.example 45.0.1.21\n"), 0600); err != nil {
-		t.Fatal(err)
+	get := func(key string) string { return env[key] }
+	want, err := Load(get)
+	if err != nil {
+		t.Fatal("configuration without the retired settings", err)
 	}
-	config, err := Load(get)
-	if err != nil || len(config.RouteExceptions) != 1 {
-		t.Fatal("valid route exception not loaded", err)
+	for name, value := range map[string]string{
+		"THINPOST_EDGE_INFRASTRUCTURE_CIDRS":  "45.0.1.0/24,10.0.0.0/8",
+		"THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE": filepath.Join(t.TempDir(), "missing"),
+		"THINPOST_RECIPIENT_POLICY":           "allowlist",
+		"THINPOST_RECIPIENT_ALLOWLIST_FILE":   filepath.Join(t.TempDir(), "missing"),
+	} {
+		env[name] = value
 	}
-	if err := os.WriteFile(path, []byte("test@mailhost.example mail.mailhost.example 127.0.0.1\n"), 0600); err != nil {
-		t.Fatal(err)
+	got, err := Load(get)
+	if err != nil {
+		t.Fatal("retired settings made the Edge configuration fail", err)
 	}
-	if _, err := Load(get); err == nil {
-		t.Fatal("special-use route exception accepted")
+	if got.Source != want.Source || len(got.Sources()) != len(want.Sources()) {
+		t.Fatal("retired settings changed the Edge configuration")
+	}
+	env["THINPOST_EDGE_INFRASTRUCTURE_CIDRS"] = "not a cidr"
+	if _, err = Load(get); err != nil {
+		t.Fatal("an invalid retired setting made the Edge configuration fail", err)
 	}
 }

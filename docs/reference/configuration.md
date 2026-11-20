@@ -111,7 +111,7 @@ By default webhook URLs must be public HTTPS endpoints. These two variables add 
 
 ### Recipient policy
 
-Read by the control plane when the control bridge is enabled, and by the Edge worker. Both processes must be configured with the same policy.
+Read by the control plane when the control bridge is enabled. The control plane is the sole authority for it: the Edge worker does not read it.
 
 | Variable | Type | Default | Required | Description |
 | --- | --- | --- | --- | --- |
@@ -138,12 +138,12 @@ The bridge is the control plane's client side of the [control protocol](/referen
 | `THINPOST_CONTROL_BOUNCE_ACTIVE_KEY` | string | none | Conditional | Version name of the key in the bounce keyring that signs new bounce addresses. Must exist in the keyring. |
 | `THINPOST_CONTROL_BOUNCE_KEYS_FILE` | path | none | Conditional | JSON object mapping key version (at most 64 characters) to a base64 key of at least 32 bytes. At most 32 keys and 16 KiB. Older versions remain to verify existing bounce addresses. |
 | `THINPOST_CONTROL_SMTP_SOURCE` | IP address | none | Conditional | The Edge's primary SMTP source address, which the control plane uses when it resolves routes. Must be in an infrastructure range. |
-| `THINPOST_CONTROL_INFRASTRUCTURE_CIDRS` | list of CIDRs | none | Conditional | Ranges the control plane's route policy treats as infrastructure and refuses as mail destinations. Must include the source address. Use the same value as the Edge's `THINPOST_EDGE_INFRASTRUCTURE_CIDRS`. |
-| `THINPOST_CONTROL_ROUTE_EXCEPTIONS_FILE` | path | none | Optional | Route-exception file, in the [format below](#route-exceptions-file). Use the same file as the Edge. |
+| `THINPOST_CONTROL_INFRASTRUCTURE_CIDRS` | list of CIDRs | none | Conditional | Ranges the control plane's route policy treats as infrastructure and refuses as mail destinations. Must include the primary source address and every additional source address the Edge reports: the control plane refuses an Edge whose Ready reports a source outside these ranges, or one a route exception names, and never routes mail to a reported source. The control plane is the only component that applies this policy. |
+| `THINPOST_CONTROL_ROUTE_EXCEPTIONS_FILE` | path | none | Optional | Route-exception file, in the [format below](#route-exceptions-file). |
 
 ## Edge worker
 
-The `thinpost-edge` binary reads these when it starts. See the [command-line reference](/reference/cli#thinpost-edge) for its subcommands. Besides the listed variables it also reads `THINPOST_RECIPIENT_POLICY` and `THINPOST_RECIPIENT_ALLOWLIST_FILE` (see [Recipient policy](#recipient-policy)). The Edge refuses to run as root.
+The `thinpost-edge` binary reads these when it starts. See the [command-line reference](/reference/cli#thinpost-edge) for its subcommands. It reads no recipient policy and no egress policy: the control plane is the sole authority for both. An Edge whose environment still sets `THINPOST_RECIPIENT_POLICY`, `THINPOST_RECIPIENT_ALLOWLIST_FILE`, `THINPOST_EDGE_INFRASTRUCTURE_CIDRS` or `THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE` from an earlier release starts normally and ignores them. The Edge refuses to run as root.
 
 ### Identity and listeners
 
@@ -154,7 +154,7 @@ The `thinpost-edge` binary reads these when it starts. See the [command-line ref
 | `THINPOST_EDGE_BOUNCE_DOMAIN` | DNS name | none | Required | Global bounce domain this Edge accepts mail for. Lowercase ASCII, at most 219 characters. |
 | `THINPOST_EDGE_SMTP_LISTEN` | `ipv4:25` | none | Required | Address of the SMTP listener. Must be a literal IPv4 address on port `25`. It is also the primary outbound source address. |
 | `THINPOST_EDGE_CONTROL_LISTEN` | `host:port` | none | Required | Address of the private control listener, which only the control plane connects to. The host must be a literal private or loopback IP address. |
-| `THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES` | list of IPv4 addresses | none | Optional | Further public IPv4 addresses to listen on and send from, at most 15. Each must lie inside `THINPOST_EDGE_INFRASTRUCTURE_CIDRS` and differ from every other source. |
+| `THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES` | list of IPv4 addresses | none | Optional | Further public IPv4 addresses to listen on and send from, at most 15. Each must be a public address and differ from every other source. |
 | `THINPOST_EDGE_SMTP_ADDITIONAL_HOSTNAMES` | list of DNS names | none | Conditional | Exactly one name per additional source, in the same order. Each is lowercase, at most 219 characters, unique and different from the primary name. Required with additional sources and rejected without them. |
 | `THINPOST_EDGE_SMTP_ADDITIONAL_CERT_ROOT` | path | none | Conditional | Directory holding the TLS certificates of the additional sources: `<root>/<N>/tls.crt` and `tls.key`, numbered from `0` in source order. Required with additional sources; must be a clean absolute path. |
 | `THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS` | list of DNS names | none | Optional | Extra bounce domains the Edge accepts, for domains that still receive bounces. The global bounce domain and every listener name are always accepted and must not be repeated. In total at most 24 bounce domains. |
@@ -170,13 +170,6 @@ The `thinpost-edge` binary reads these when it starts. See the [command-line ref
 | `THINPOST_EDGE_CONTROLLER_IDENTITIES` | list of URIs | none | Required | URI identities the Edge accepts from the control plane. At least one; empty entries are an error. |
 | `THINPOST_EDGE_SMTP_CERT` | path | none | Required | Certificate for the public SMTP listener (STARTTLS) covering the primary name. |
 | `THINPOST_EDGE_SMTP_KEY` | path | none | Required | Private key for the SMTP certificate. |
-
-### Egress policy
-
-| Variable | Type | Default | Required | Description |
-| --- | --- | --- | --- | --- |
-| `THINPOST_EDGE_INFRASTRUCTURE_CIDRS` | list of CIDRs | none | Required | Ranges the Edge never connects to when delivering mail, and the ranges its own sources must belong to. Include the operator's own public addresses. |
-| `THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE` | path | none | Optional | Route-exception file; see [below](#route-exceptions-file). A configured but empty file is an error. |
 
 ### Journal and clock
 
@@ -213,7 +206,7 @@ Each timeout must be between `1s` and `30m`.
 
 ## Route exceptions file
 
-`THINPOST_CONTROL_ROUTE_EXCEPTIONS_FILE` and `THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE` point at a text file that lets a specific route through the infrastructure deny ranges. It is not a general allowlist. Each non-blank line that does not start with `#` holds three whitespace-separated fields:
+`THINPOST_CONTROL_ROUTE_EXCEPTIONS_FILE` points at a text file that lets a specific route through the infrastructure deny ranges. It is not a general allowlist. Each non-blank line that does not start with `#` holds three whitespace-separated fields:
 
 ```text
 recipient@example.com mx.example.com 203.0.113.25

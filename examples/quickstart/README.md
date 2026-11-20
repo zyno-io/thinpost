@@ -74,13 +74,13 @@ the operator API.
   audience `thinpost-api`, which differs from the console client ID
   `thinpost-console` (see `docs/operator-auth.md`).
 - **Edge source address.** The Edge's SMTP source must be public, not a
-  documentation range, and inside the infrastructure CIDRs. It is
+  documentation range, and inside the control plane's infrastructure CIDRs. It is
   `11.42.51.10` on an `internal: true` Docker network (`11.42.51.0/24`), so
   nothing is routed off the host. The control listener is on a second
   internal network (`10.99.51.0/24`), where control reaches it by its numeric
   private address.
 - **Route exception.** Mailpit is on that same range (`11.42.51.25`), which the
-  Edge refuses as a destination by default. `route-exceptions` allows exactly
+  control plane refuses as a destination by default. `route-exceptions` (read by control) allows exactly
   `demo@quickstart.example` at `mx.quickstart.example` / `11.42.51.25`.
 - **No Internet route, and a fenced Edge.** The `front` network (control,
   postgres, s3, devidp, coredns) and both Edge networks are `internal`. Only

@@ -32,8 +32,6 @@ type fakeDialer struct {
 	mx         string
 }
 
-type allowRecipients bool
-
 type greetingRejectionDialer struct{}
 
 type timeoutDialer struct{}
@@ -102,8 +100,6 @@ func (greetingRejectionDialer) Dial(context.Context, netip.Addr, netip.Addr, str
 	}()
 	return client, nil
 }
-
-func (a allowRecipients) Allows(string) bool { return bool(a) }
 
 func allowStart(context.Context, *controlv1.DeliveryStart) error { return nil }
 
@@ -177,7 +173,7 @@ func setup(t *testing.T) (*journal.Journal, journal.Fence, *controlv1.DeliverySt
 func TestExecutePersistsResultBeforeReturning(t *testing.T) {
 	j, fence, start, mime := setup(t)
 	dialer := &fakeDialer{}
-	worker := &Worker{Journal: j, Dialer: dialer, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+	worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example"}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result, err := worker.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)
@@ -206,7 +202,7 @@ func TestSMTPAttemptTimeoutPreservesAmbiguity(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			j, fence, start, mime := setup(t)
 			done := make(chan error, 1)
-			worker := &Worker{Journal: j, Dialer: stalledSMTPDialer{afterData: test.afterData, done: done}, Recipients: allowRecipients(true), HeloName: "smtp.sender.example", smtpTimeout: 500 * time.Millisecond}
+			worker := &Worker{Journal: j, Dialer: stalledSMTPDialer{afterData: test.afterData, done: done}, HeloName: "smtp.sender.example", smtpTimeout: 500 * time.Millisecond}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			result, err := worker.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)
@@ -228,7 +224,7 @@ func TestSMTPConnectTimeoutIsJournaledAsRejected(t *testing.T) {
 	j, fence, start, mime := setup(t)
 	policy := smtptransport.DefaultTimeouts()
 	policy.Connect = time.Second
-	worker := &Worker{Journal: j, Dialer: timeoutDialer{}, Recipients: allowRecipients(true), HeloName: "smtp.sender.example", SMTPTimeouts: &policy}
+	worker := &Worker{Journal: j, Dialer: timeoutDialer{}, HeloName: "smtp.sender.example", SMTPTimeouts: &policy}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	result, err := worker.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)
@@ -246,7 +242,7 @@ func TestTrackingDeadlineStopsDelayedPermitAndBoundsSMTP(t *testing.T) {
 		j, fence, start, mime := setup(t)
 		start.TrackingSendCutoffUnixMs = time.Now().Add(delivery.TrackingClockMargin - time.Second).UnixMilli()
 		dialer := &fakeDialer{}
-		worker := &Worker{Journal: j, Dialer: dialer, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+		worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example"}
 		permits := 0
 		result, err := worker.Execute(context.Background(), fence, start, mime, func() bool { return true }, func(context.Context, *controlv1.DeliveryStart) error { permits++; return nil })
 		if err != nil || result.Outcome != controlv1.DeliveryOutcome_DELIVERY_OUTCOME_REJECTED || permits != 0 || dialer.dials != 0 {
@@ -257,7 +253,7 @@ func TestTrackingDeadlineStopsDelayedPermitAndBoundsSMTP(t *testing.T) {
 		j, fence, start, mime := setup(t)
 		start.TrackingSendCutoffUnixMs = time.Now().Add(delivery.TrackingClockMargin + time.Second).UnixMilli()
 		dialer := &fakeDialer{}
-		worker := &Worker{Journal: j, Dialer: dialer, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+		worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example"}
 		result, err := worker.Execute(context.Background(), fence, start, mime, func() bool { return true }, func(context.Context, *controlv1.DeliveryStart) error { time.Sleep(1200 * time.Millisecond); return nil })
 		if err != nil || result.Outcome != controlv1.DeliveryOutcome_DELIVERY_OUTCOME_REJECTED || dialer.dials != 0 {
 			t.Fatal("delayed permit allowed expired tracking to reach the network", err)
@@ -267,7 +263,7 @@ func TestTrackingDeadlineStopsDelayedPermitAndBoundsSMTP(t *testing.T) {
 		j, fence, start, mime := setup(t)
 		start.TrackingSendCutoffUnixMs = time.Now().Add(delivery.TrackingClockMargin + 1500*time.Millisecond).UnixMilli()
 		done := make(chan error, 1)
-		worker := &Worker{Journal: j, Dialer: stalledSMTPDialer{afterData: true, done: done}, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+		worker := &Worker{Journal: j, Dialer: stalledSMTPDialer{afterData: true, done: done}, HeloName: "smtp.sender.example"}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		result, err := worker.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)
@@ -282,7 +278,7 @@ func TestTrackingDeadlineStopsDelayedPermitAndBoundsSMTP(t *testing.T) {
 
 func TestGreetingRejectionPreservesRouteScopeAndReply(t *testing.T) {
 	j, fence, start, mime := setup(t)
-	w := &Worker{Journal: j, Dialer: greetingRejectionDialer{}, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+	w := &Worker{Journal: j, Dialer: greetingRejectionDialer{}, HeloName: "smtp.sender.example"}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	result, err := w.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)
@@ -303,18 +299,19 @@ func TestGreetingRejectionPreservesRouteScopeAndReply(t *testing.T) {
 	}
 }
 
-func TestRecipientPolicyStopsBeforePermitAndDial(t *testing.T) {
+// The Edge enforces neither a recipient allowlist nor an egress deny range:
+// control is authoritative for both and has already filtered the route it
+// authorized. The worker dials exactly the numeric address it was given, for
+// any recipient, and delivers.
+func TestWorkerExecutesWhatControlAuthorized(t *testing.T) {
 	j, fence, start, mime := setup(t)
+	start.DestinationIp = "10.0.0.5"
+	start.Recipient = "anyone@example.org"
 	d := &fakeDialer{}
-	w := &Worker{Journal: j, Dialer: d, Recipients: allowRecipients(false), HeloName: "smtp.sender.example"}
-	permits := 0
-	result, err := w.Execute(context.Background(), fence, start, mime, func() bool { return true }, func(context.Context, *controlv1.DeliveryStart) error { permits++; return nil })
-	if err != nil || result.Outcome != controlv1.DeliveryOutcome_DELIVERY_OUTCOME_RECIPIENT_POLICY_DENIED || result.SmtpCode != 0 || permits != 0 || d.dials != 0 {
-		t.Fatal("denied recipient reached SMTP", err)
-	}
-	items, err := j.List()
-	if err != nil || len(items) != 1 || items[0].Outcome != journal.RecipientPolicyDenied {
-		t.Fatal("denial was not journaled", err)
+	w := &Worker{Journal: j, Dialer: d, HeloName: "smtp.sender.example"}
+	result, err := w.Execute(context.Background(), fence, start, mime, func() bool { return true }, allowStart)
+	if err != nil || result.Outcome != controlv1.DeliveryOutcome_DELIVERY_OUTCOME_ACCEPTED || d.dials != 1 || d.address.String() != "10.0.0.5" || d.recipient != "anyone@example.org" {
+		t.Fatalf("worker second-guessed control: %+v dials=%d %v", result, d.dials, err)
 	}
 }
 
@@ -322,7 +319,7 @@ func TestDialerReceivesAuthorizedRoute(t *testing.T) {
 	j, fence, start, mime := setup(t)
 	start.EnhancedProtection = true
 	d := &fakeDialer{fail: true}
-	w := &Worker{Journal: j, Dialer: d, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+	w := &Worker{Journal: j, Dialer: d, HeloName: "smtp.sender.example"}
 	if _, err := w.Execute(context.Background(), fence, start, mime, func() bool { return true }, allowStart); err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +331,7 @@ func TestRequiredTLSAndJournalFailure(t *testing.T) {
 	t.Run("missing start permit prevents SMTP", func(t *testing.T) {
 		j, fence, start, mime := setup(t)
 		d := &fakeDialer{}
-		worker := &Worker{Journal: j, Dialer: d, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+		worker := &Worker{Journal: j, Dialer: d, HeloName: "smtp.sender.example"}
 		result, err := worker.Execute(context.Background(), fence, start, mime, func() bool { return true }, func(context.Context, *controlv1.DeliveryStart) error { return errors.New("denied") })
 		if err != nil || result.Outcome != controlv1.DeliveryOutcome_DELIVERY_OUTCOME_REJECTED || d.dials != 0 {
 			t.Fatal("SMTP started without permit", err)
@@ -347,7 +344,7 @@ func TestRequiredTLSAndJournalFailure(t *testing.T) {
 	t.Run("canceled stream cannot start work", func(t *testing.T) {
 		j, fence, start, mime := setup(t)
 		d := &fakeDialer{}
-		worker := &Worker{Journal: j, Dialer: d, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+		worker := &Worker{Journal: j, Dialer: d, HeloName: "smtp.sender.example"}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		if _, err := worker.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart); err == nil || d.dials != 0 {
@@ -362,7 +359,7 @@ func TestRequiredTLSAndJournalFailure(t *testing.T) {
 		for _, allowedChecks := range []int{1, 2, 3} {
 			j, fence, start, mime := setup(t)
 			d := &fakeDialer{}
-			w := &Worker{Journal: j, Dialer: d, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+			w := &Worker{Journal: j, Dialer: d, HeloName: "smtp.sender.example"}
 			checks := 0
 			result, err := w.Execute(context.Background(), fence, start, mime, func() bool { checks++; return checks <= allowedChecks }, allowStart)
 			expectedDials := 0
@@ -385,7 +382,7 @@ func TestRequiredTLSAndJournalFailure(t *testing.T) {
 		j, fence, start, mime := setup(t)
 		start.EnhancedProtection = true
 		d := &fakeDialer{}
-		w := &Worker{Journal: j, Dialer: d, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+		w := &Worker{Journal: j, Dialer: d, HeloName: "smtp.sender.example"}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		result, err := w.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)
@@ -401,7 +398,7 @@ func TestRequiredTLSAndJournalFailure(t *testing.T) {
 	t.Run("result write failure", func(t *testing.T) {
 		j, fence, start, mime := setup(t)
 		d := &fakeDialer{}
-		w := &Worker{Journal: failingJournal{j}, Dialer: d, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+		w := &Worker{Journal: failingJournal{j}, Dialer: d, HeloName: "smtp.sender.example"}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if _, err := w.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart); !errors.Is(err, ErrJournal) || d.dials != 1 {
@@ -419,7 +416,7 @@ func TestRequiredTLSAndJournalFailure(t *testing.T) {
 	t.Run("tampered MIME", func(t *testing.T) {
 		j, fence, start, mime := setup(t)
 		d := &fakeDialer{}
-		w := &Worker{Journal: j, Dialer: d, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+		w := &Worker{Journal: j, Dialer: d, HeloName: "smtp.sender.example"}
 		mime[0] ^= 1
 		if _, err := w.Execute(context.Background(), fence, start, mime, func() bool { return true }, allowStart); err == nil || d.dials != 0 {
 			t.Fatal("tampered MIME was sent")
@@ -488,7 +485,7 @@ func TestResultsCarryStageAndEnhancedCodeWithoutReplyText(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			j, fence, start, mime := setup(t)
-			w := &Worker{Journal: j, Dialer: tc.dialer, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+			w := &Worker{Journal: j, Dialer: tc.dialer, HeloName: "smtp.sender.example"}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			result, err := w.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)
@@ -509,13 +506,13 @@ func TestResultsCarryStageAndEnhancedCodeWithoutReplyText(t *testing.T) {
 
 func TestSetupRepliesAndAcceptanceCarryNoStage(t *testing.T) {
 	j, fence, start, mime := setup(t)
-	w := &Worker{Journal: j, Dialer: greetingRejectionDialer{}, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+	w := &Worker{Journal: j, Dialer: greetingRejectionDialer{}, HeloName: "smtp.sender.example"}
 	result, err := w.Execute(context.Background(), fence, start, mime, func() bool { return true }, allowStart)
 	if err != nil || result.SmtpStage != controlv1.SmtpStage_SMTP_STAGE_UNSPECIFIED || result.SmtpEnhanced != "" {
 		t.Fatalf("route rejection carries a stage: %+v %v", result, err)
 	}
 	j, fence, start, mime = setup(t)
-	w = &Worker{Journal: j, Dialer: replyDialer{}, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+	w = &Worker{Journal: j, Dialer: replyDialer{}, HeloName: "smtp.sender.example"}
 	result, err = w.Execute(context.Background(), fence, start, mime, func() bool { return true }, allowStart)
 	if err != nil || result.Outcome != controlv1.DeliveryOutcome_DELIVERY_OUTCOME_ACCEPTED || result.SmtpStage != controlv1.SmtpStage_SMTP_STAGE_UNSPECIFIED || result.SmtpEnhanced != "" {
 		t.Fatalf("acceptance carries a stage: %+v %v", result, err)

@@ -92,7 +92,7 @@ func TestReservedJournalRecordsSMTPAcceptanceOnFullFilesystem(t *testing.T) {
 		MxName: "mx.example", DestinationIp: "8.8.8.8", EnvelopeFrom: "bounce@example.com",
 		Recipient: "to@example.net", ExpectedSize: uint64(len(mime)), Sha256: digest[:]}
 	dialer := &fillingDialer{dir: dir, limit: fillerLimit}
-	worker := &Worker{Journal: j, Dialer: dialer, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+	worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example"}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result, err := worker.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)

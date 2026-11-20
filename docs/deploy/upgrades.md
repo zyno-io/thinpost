@@ -145,6 +145,10 @@ The edge release is independent. Its Deployment uses `Recreate`, so an upgrade s
 
 Control and edge may run different versions while you roll one after the other, and either order is safe unless a release note says otherwise. A rollout across several clusters is not atomic, so keep changes compatible across overlapping versions. Once a receiving domain is live, treat the edge as roll-forward only: an edge that predates inbound mail answers `550` for such a domain, which is permanent for the sender. See [Helm: Edge](/deploy/helm-edge).
 
+### Schema 43 and the edge's policy settings
+
+Schema 43 adds the console test-send columns on `messages` (catalog-only, no table rewrite). It also moves the recipient allowlist and the egress policy to the control plane alone. The edge no longer reads `THINPOST_RECIPIENT_POLICY`, `THINPOST_RECIPIENT_ALLOWLIST_FILE`, `THINPOST_EDGE_INFRASTRUCTURE_CIDRS` or `THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE`, and the chart no longer maps them into the edge. An edge that still sets them starts normally and ignores them. An older edge keeps enforcing its own copy of both, so the two versions can overlap in either order; control still handles the `RECIPIENT_POLICY_DENIED` outcome an older edge reports. Before you upgrade the edge, make sure the network around it allows only outbound TCP 25 to public destinations, because the edge no longer checks destinations itself (see the [threat model](/security/threat-model#outbound-smtp-egress-policy)).
+
 These jobs never initialize or reset a database, a journal or a keyring.
 
 ## Next

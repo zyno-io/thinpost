@@ -175,7 +175,7 @@ Tracking applies to HTML bodies only.
 
 ## Reading messages back
 
-An app key can also read back its own messages through `GET /app/v1/messages/{id}` and its `/body` and `/attachments/{index}` sub-routes, and release or cancel a held message with `POST /app/v1/messages/{id}/release` and `/cancel`. These are Thinpost routes, not a provider API, and are described in the [App API reference](/reference/api/app).
+An app key can also read back its own messages through `GET /app/v1/messages/{id}` and its `/body` and `/attachments/{index}` sub-routes, and release or cancel a held message with `POST /app/v1/messages/{id}/release` and `/cancel`. These are Thinpost routes, not a provider API, and are described in the [App API reference](/reference/api/app). The same app API has its own send route, which is not tied to a provider's request shape. See [Sending with the native API](/guide/native-api).
 
 ## Next
 

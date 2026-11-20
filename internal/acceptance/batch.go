@@ -52,7 +52,7 @@ func (s *Service) AcceptBatch(ctx context.Context, app submission.App, req submi
 	if !ok || s.objects == nil {
 		return submission.BatchReceipt{}, submission.ErrUnavailable
 	}
-	if app.ID == "" || len(req.Messages) == 0 || len(req.Messages) > maxBatchMessages || (req.Adapter != "resend" && req.Adapter != "sendgrid") || (req.Adapter == "sendgrid" && req.IdempotencyKey != "") || len(req.IdempotencyKey) > 256 || !utf8.ValidString(req.IdempotencyKey) || strings.ContainsRune(req.IdempotencyKey, 0) {
+	if app.ID == "" || app.Operator != "" || len(req.Messages) == 0 || len(req.Messages) > maxBatchMessages || (req.Adapter != "resend" && req.Adapter != "sendgrid") || (req.Adapter == "sendgrid" && req.IdempotencyKey != "") || len(req.IdempotencyKey) > 256 || !utf8.ValidString(req.IdempotencyKey) || strings.ContainsRune(req.IdempotencyKey, 0) {
 		return submission.BatchReceipt{}, submission.ErrInvalidMessage
 	}
 	// Validate every item before any upload. The repository repeats all

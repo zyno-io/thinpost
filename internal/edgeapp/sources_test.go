@@ -9,7 +9,7 @@ import (
 func sourcesEnv() map[string]string {
 	return map[string]string{
 		"THINPOST_EDGE_WORKER_ID": "worker-1", "THINPOST_EDGE_SMTP_HOSTNAME": "smtp.example.com", "THINPOST_EDGE_BOUNCE_DOMAIN": "bounce.example.com",
-		"THINPOST_EDGE_CONTROL_LISTEN": "10.2.3.4:7443", "THINPOST_EDGE_SMTP_LISTEN": "45.0.1.22:25", "THINPOST_EDGE_INFRASTRUCTURE_CIDRS": "45.0.1.0/24,45.0.0.0/24,10.0.0.0/8",
+		"THINPOST_EDGE_CONTROL_LISTEN": "10.2.3.4:7443", "THINPOST_EDGE_SMTP_LISTEN": "45.0.1.22:25",
 		"THINPOST_EDGE_CONTROLLER_IDENTITIES": "spiffe://thinpost.test/controller/a", "THINPOST_EDGE_CONTROL_CA": "ca.pem", "THINPOST_EDGE_CONTROL_CERT": "control.pem", "THINPOST_EDGE_CONTROL_KEY": "control.key",
 		"THINPOST_EDGE_SMTP_CERT": "smtp.pem", "THINPOST_EDGE_SMTP_KEY": "smtp.key", "THINPOST_EDGE_JOURNAL_PATH": "/data/journal", "THINPOST_EDGE_JOURNAL_CAPACITY": "100", "THINPOST_EDGE_CLOCK_MARGIN": "5s",
 		"THINPOST_EDGE_JOURNAL_RESERVE_BYTES": "67108864",
@@ -60,7 +60,6 @@ func TestEdgeConfigAdditionalSourcesAndBounceDomains(t *testing.T) {
 	for name, tc := range map[string][2]string{
 		"duplicate of the primary": {"THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES", "45.0.1.22"},
 		"duplicate additional":     {"THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES", "45.0.0.10,45.0.0.10"},
-		"outside infrastructure":   {"THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES", "8.8.8.8"},
 		"private":                  {"THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES", "10.1.1.1"},
 		"IPv6":                     {"THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES", "2607:f8b0:4000::1"},
 		"not an address":           {"THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES", "mail.example.com"},
@@ -88,7 +87,6 @@ func TestEdgeConfigAdditionalSourcesAndBounceDomains(t *testing.T) {
 func TestEdgeConfigRequiresAnIPv4Primary(t *testing.T) {
 	env := sourcesEnv()
 	env["THINPOST_EDGE_SMTP_LISTEN"] = "[2607:f8b0:4000::5]:25"
-	env["THINPOST_EDGE_INFRASTRUCTURE_CIDRS"] = "2607:f8b0:4000::/48,10.0.0.0/8"
 	if _, err := Load(func(key string) string { return env[key] }); err == nil {
 		t.Fatal("accepted an IPv6 primary, which control would reject in Ready")
 	}

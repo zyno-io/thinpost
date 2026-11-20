@@ -62,7 +62,8 @@ const summaryColumnsTemplate = `m.id,m.state,m.enhanced_protection,m.accepted_at
 		CASE WHEN m.enhanced_protection THEN NULL ELSE m.subject END,
 		m.enhanced_protection AND m.subject IS NOT NULL, m.sender_domain, m.sender_address, m.sender_name, m.recipient_count,
 		(SELECT json_agg(json_build_array(r.address,r.kind) ORDER BY r.recipient_index) FROM
-			(SELECT address,kind,recipient_index FROM message_recipients WHERE message_id=m.id ORDER BY recipient_index LIMIT %d) r)`
+			(SELECT address,kind,recipient_index FROM message_recipients WHERE message_id=m.id ORDER BY recipient_index LIMIT %d) r),
+		m.console_test,m.limits_override,m.recipient_policy_override`
 
 func summaryColumns(recipients int) string {
 	return fmt.Sprintf(summaryColumnsTemplate, recipients)
@@ -90,12 +91,16 @@ func scanSummary(row rowScanner, item *admin.MessageSummary, extra ...any) error
 	var count sql.NullInt64
 	var counts admin.DeliveryCounts
 	var recipients []byte
-	dest := []any{&item.ID, &item.State, &item.EnhancedProtection, &item.AcceptedAt, &item.DeliveryCount, &item.AcceptedCount, &item.FailedCount, &item.UncertainCount, &counts.Pending, &counts.Held, &counts.RecoveryHeld, &counts.Retrying, &item.SuppressedCount, &subject, &item.SubjectMasked, &senderDomain, &senderAddress, &senderName, &count, &recipients}
+	var consoleTest, limitsOverride, policyOverride bool
+	dest := []any{&item.ID, &item.State, &item.EnhancedProtection, &item.AcceptedAt, &item.DeliveryCount, &item.AcceptedCount, &item.FailedCount, &item.UncertainCount, &counts.Pending, &counts.Held, &counts.RecoveryHeld, &counts.Retrying, &item.SuppressedCount, &subject, &item.SubjectMasked, &senderDomain, &senderAddress, &senderName, &count, &recipients, &consoleTest, &limitsOverride, &policyOverride}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return err
 	}
 	counts.Total, counts.Accepted, counts.Failed, counts.Uncertain, counts.Suppressed = item.DeliveryCount, item.AcceptedCount, item.FailedCount, item.UncertainCount, item.SuppressedCount
 	item.Status = admin.DeriveMessageStatus(item.State, counts)
+	if consoleTest {
+		item.OperatorTest = &admin.OperatorTest{BypassLimits: limitsOverride, BypassRecipientPolicy: policyOverride}
+	}
 	if subject.Valid {
 		item.Subject = &subject.String
 	}

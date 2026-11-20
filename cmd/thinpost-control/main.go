@@ -259,7 +259,10 @@ func run() error {
 		}
 		// Same source as the HTTP tracking option and trackingPreparation.
 		service.ApplyTrackingDefaults = config.Tracking != nil
-		handler = submissionHandler(service, config, repository)
+		server := submissionHandler(service, config, repository)
+		handler = server
+		// Operator test sends use the same acceptance service as the app API.
+		operator.TestMessages = server
 		// App-key reads share the submission service's key authentication and the
 		// operator API's store and content reader (nil without object storage).
 		appReads = &admin.AppReadHandler{Service: service, Store: repository, ContentReader: operator.ContentReader, Holds: repository}
@@ -268,6 +271,7 @@ func run() error {
 	if config.Tracking != nil {
 		runtimeInfo.Tracking = &admin.RuntimeTracking{Origin: config.Tracking.Origin, LinkEventLimit: config.Tracking.EventLimit}
 	}
+	runtimeInfo.Features.RecipientPolicy = recipients.Mode()
 	operator.Runtime = runtimeInfo
 	operatorHealth := controlapp.StartOperatorHealth(ctx, db.PingContext)
 	defer operatorHealth.Close()
@@ -317,7 +321,7 @@ func run() error {
 	}
 }
 
-func submissionHandler(service submission.Service, config controlapp.Config, suppressions submission.SuppressionStore) http.Handler {
+func submissionHandler(service submission.Service, config controlapp.Config, suppressions submission.SuppressionStore) *httpapi.Server {
 	return httpapi.NewWithOptions(service, httpapi.Options{MaxAttachmentBytes: config.MaxAttachmentBytes, Tracking: config.Tracking != nil, Suppressions: suppressions})
 }
 

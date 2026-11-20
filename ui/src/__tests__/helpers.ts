@@ -2,9 +2,9 @@ import { flushPromises, type VueWrapper } from '@vue/test-utils';
 import { OpenApiError } from '@zyno-io/openapi-client-codegen';
 
 /** An error shaped like the generated client's failure for an HTTP response. */
-export function httpError(status: number): OpenApiError {
-    const response = new Response(JSON.stringify({ error: 'x' }), { status });
-    return new OpenApiError(`x (${status})`, new Request('http://localhost/api/v1/x'), response, { error: 'x' });
+export function httpError(status: number, body: unknown = { error: 'x' }): OpenApiError {
+    const response = new Response(JSON.stringify(body), { status });
+    return new OpenApiError(`x (${status})`, new Request('http://localhost/api/v1/x'), response, body);
 }
 
 /** An error shaped like the generated client's failure when no response arrives. */

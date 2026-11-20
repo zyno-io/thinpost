@@ -22,8 +22,8 @@ The Applications screen lists apps and creates new ones. An app opens into its o
 | Tab | What you do there |
 | --- | --- |
 | **API keys** | List, issue and revoke the app's keys. A new key's secret appears once in a dialog, is held only in memory and is discarded when you close it. It is never written to browser storage, the URL or logs. |
-| **Sending domains** | Request a domain, copy its TXT challenge, verify it and reissue a pending challenge. The challenge value is shown only on the page that requested it. DKIM, SPF and DMARC readiness are shown separately because the API does not report them. See [Sender domains](/guide/domains). |
-| **Messages** | History with cursor paging, search and message detail (below). |
+| **Sending domains** | Request a domain, copy its TXT challenge, verify it, reissue a pending challenge and start a test send from a verified domain. The challenge value is shown only on the page that requested it. DKIM, SPF and DMARC readiness are shown separately because the API does not report them. See [Sender domains](/guide/domains). |
+| **Messages** | History with cursor paging, search, message detail and **Send test message** (below). |
 | **Webhooks** | Create, edit, enable, disable, test and delete endpoints, view delivery history and replay failed deliveries. See [Webhooks](/guide/webhooks). |
 | **Tracking** | Open and click defaults, one-click unsubscribe, the daily event budget, deployment state and the day's recorded and unrecorded events. See [Open and click tracking](/guide/tracking). |
 | **Suppressions** | Search, filter, add and remove entries. See [Suppressions](/guide/suppressions). |
@@ -37,6 +37,28 @@ The app area stays mounted as you move between tabs. The console remembers the l
 - **Search.** By message ID, recipient, recipient domain, sender domain or subject. Terms go in a `POST` body and are kept only in memory, never in the URL, router state, document title, browser storage, logs or notifications. They are not restored after a reload. Pasting an exact 32-character ID opens that message.
 - **Detail.** Sender domain, recipients, and per-delivery state with the retry count, earliest next attempt and latest outcome. HTML content appears on **Rendered**, **Text** and **HTML source** tabs. The rendered view is sanitized, shown in a `sandbox` iframe with its own policy, and blocks all remote content, with a count of what it blocked. Inline `cid:` images are resolved within size limits. Attachments download as `application/octet-stream`. A **Headers** view shows every synthesized header in order. Everything is held in memory and discarded when you leave. A held message also shows its hold: when it expires, or when it was released, cancelled or expired. Operators cannot release or cancel it; only the app can.
 - **Enhanced Protection.** The subject of a protected message is masked in lists and excluded from search. Revealing it, showing content, downloading an attachment and viewing headers each ask for confirmation and are recorded in the audit log. Unprotected messages show none of these dialogs. See [Concepts](/guide/concepts#enhanced-protection).
+
+### Send a test message
+
+**Send test message** on the Messages tab (and **Send test** on a verified domain's row) sends one real message as the app, to check that delivery works end to end. You choose a local part and one of the app's verified sending domains for From, an optional display name, one to five To recipients, a subject and a text body (both prefilled with neutral text), an optional HTML body, and optionally Enhanced Protection and the two options under [Test send options](#test-send-options). There is no Cc, Bcc, reply address, custom header, attachment, tracking choice or hold in a test send.
+
+By default, a test send is a normal submission as far as Thinpost is concerned:
+
+- It goes through the same acceptance path as the app API, so sender-domain verification, the recipient rules, the [suppression list](/guide/suppressions), the submission rate, the daily recipient quota and the pending-message limit all apply, and it counts against them. A new app has a submission rate of zero and refuses test sends until one is set in the **Sending limit** panel on the **API keys** tab.
+- The app's [webhooks](/guide/webhooks) receive its events like those of any other message.
+- Open and click tracking and the one-click unsubscribe link follow the app's settings. If a recipient clicks unsubscribe, that address is suppressed for the app.
+- A paused app refuses it, and the button is disabled with an explanation. It is also disabled when the server has no submission configured, or when you are signed out. It needs no API key.
+
+The console shows the message detail once Thinpost accepts the message. The form is held only in memory. The console never retries the request. If no answer arrives, or Thinpost answers with a server error, the console cannot tell whether the message was queued: it reloads the message list and blocks another test send until that reload succeeds, so check the list before trying again. A test send has no idempotency key, so a second send after a lost answer can deliver twice.
+
+Each test send is audited as `message.test.submitted` with the administrator as the actor, and only the recipient count and the two option flags as detail. The message list and the message detail tag it **Console test**, and add **limits skipped** and **allowlist skipped** when those options were used.
+
+#### Test send options
+
+Both options are off by default, are sent only when ticked, and exist only in the console's test send: the app API and every provider route reject them with a `400`, even when false.
+
+- **Skip sending limits.** The send is not checked against, and is not counted in, the app's sending rate, daily recipient quota or pending-message limit. The rate bucket and the daily quota stay as they were, and the message does not count toward the app's pending-message limit (the Operations backlog still shows it). Everything else still applies: a verified sender domain, DKIM signing, the suppression list, a paused app, the deployment's admission gate, the size and profile limits, the egress policy and Enhanced Protection TLS.
+- **Skip recipient allowlist.** Shown only when this deployment restricts recipients to an allowlist. The message is not held by the allowlist, so it can reach people outside it. Submitting with it ticked asks you to confirm, naming the number of recipients. It skips only the allowlist: the egress policy still refuses special-use and infrastructure destinations, and the other checks above still apply.
 
 ### Webhook history and replay
 

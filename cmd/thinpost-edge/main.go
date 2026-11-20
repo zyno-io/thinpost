@@ -25,7 +25,6 @@ import (
 	"github.com/zyno-io/thinpost/internal/envguard"
 	"github.com/zyno-io/thinpost/internal/journal"
 	"github.com/zyno-io/thinpost/internal/leaseproof"
-	"github.com/zyno-io/thinpost/internal/recipientpolicy"
 	"golang.org/x/net/netutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -86,9 +85,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	policy, err := egress.NewPolicy(c.Infrastructure, c.Sources(), c.RouteExceptions...)
+	// Control is the sole authority for the egress deny ranges: it filters
+	// every route when it resolves the recipient. The Edge dials the numeric
+	// address it was given, from a source it owns, and judges nothing.
+	dialer, err := egress.NewSourceDialer(c.Sources())
 	if err != nil {
-		return errors.New("invalid SMTP egress policy")
+		return errors.New("invalid SMTP source address")
 	}
 	// Refuse to start, as for an unbindable listener, when a configured source
 	// is missing from this host; a worker must not advertise one it cannot bind.
@@ -109,11 +111,13 @@ func run() error {
 	if err != nil {
 		return errors.New("invalid lease configuration")
 	}
-	recipients, err := recipientpolicy.Load(os.Getenv)
-	if err != nil {
-		return err
-	}
-	worker := &edgeworker.Worker{Journal: j, Dialer: policy, Recipients: recipients, HeloName: c.Hostname, Sources: c.Sources(), SMTPTimeouts: &c.OutboundSMTPTimeouts}
+	// The Edge enforces neither the recipient allowlist nor the egress deny
+	// ranges: control is authoritative for both. THINPOST_RECIPIENT_POLICY,
+	// THINPOST_RECIPIENT_ALLOWLIST_FILE, THINPOST_EDGE_INFRASTRUCTURE_CIDRS and
+	// THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE are not read here, so an Edge that
+	// still has them set starts normally. Network controls on the Edge are the
+	// boundary against a compromised control plane.
+	worker := &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: c.Hostname, Sources: c.Sources(), SMTPTimeouts: &c.OutboundSMTPTimeouts}
 	edge, err := edgesession.New(c.WorkerID, c.ControllerIdentities, j, worker, authority, 2)
 	if err != nil {
 		return errors.New("invalid edge session configuration")
