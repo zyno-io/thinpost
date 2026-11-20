@@ -54,7 +54,7 @@ It owns application authorization, delivery decisions, queues, database records,
 
 The edge worker sends SMTP, and receives delivery-status mail and inbound mail. It runs as non-root, and runs as a single replica with a journal volume that only one pod may hold. It has no database or object-storage credentials. It receives only the bytes of the delivery it is asked to send.
 
-It binds each sending IP it is configured with, greets with that address's own name, and listens for SMTP on every one of them. With [SMTP submission](/guide/smtp) enabled it also listens on ports 465 and 587 of each address, for clients that send mail with a credential. The edge verifies nothing itself: it passes the credential and the message to the control plane, which checks the credential, applies the app's policy and limits and commits the message, and the client gets its final reply only after that. Like inbound mail, submission is answered with `451` when the stream to the control plane is down, and the edge keeps no spool.
+It binds each sending IP it is configured with, greets with that address's own name, and listens for SMTP on every one of them. With [SMTP submission](/guide/smtp) enabled it also listens on ports 465 and 587 of each address, for clients that send mail with a credential. The edge verifies nothing itself: it passes the credential and the message to the control plane, which checks the credential, applies the app's policy and limits and commits the message, and the client gets its final reply only after that. When the stream to the control plane is down, a sign-in gets `454 4.7.0` and a message gets `451`, and the edge keeps no spool.
 
 ## Control protocol
 

@@ -18,7 +18,7 @@ Two things must happen before a client can send:
 1. **An operator enables submission on the edge.** Set `THINPOST_EDGE_SUBMISSION=true`, or `smtpSubmission.enabled: true` in the Helm chart. See [Helm: Edge](/deploy/helm-edge#smtp-submission) and the [router rules](/deploy/direct-public-networking) for ports 465 and 587. Port 25 is unchanged and never offers AUTH.
 2. **You create a credential for the app.** In the [console](/guide/console#smtp), open the app's **SMTP** tab and choose **Create credential**. The username and password are shown once, so copy them into the sending software before you close the dialog. An app can have 10 active credentials, so give each device or application its own and revoke one without touching the others.
 
-The SMTP tab only appears when the deployment has submission available, and it also tells you the server name and which ports Thinpost last saw listening.
+The SMTP tab follows the control plane's `smtp_submission` feature, so it can be visible even while submission is still off at the edge. Its port badges show which ports Thinpost last saw listening, and it tells you the server name.
 
 ## Connection settings
 
@@ -31,7 +31,7 @@ The SMTP tab only appears when the deployment has submission available, and it a
 | Password | The credential's password, `tps_` followed by 43 characters. |
 | Authentication | `PLAIN` or `LOGIN`. |
 
-Thinpost offers AUTH only after TLS is up, so a password is never sent in clear text. A client that tries to sign in on port 587 before STARTTLS gets `523 5.7.10 TLS is required`, and one that skips signing in gets `530 5.7.0 Authentication required`. Use the server name rather than an IP address, so the certificate matches. Mail servers inside your cluster can use the [internal listener](/deploy/helm-edge#smtp-submission), which your operator sets up separately.
+Thinpost offers AUTH only after TLS is up, so a correctly configured client never sends its password in clear text. Set the client to require TLS: a client that sends AUTH too early has already put the bytes on the network by the time Thinpost refuses it. A client that tries to sign in on port 587 before STARTTLS gets `523 5.7.10 TLS is required`, and one that skips signing in gets `530 5.7.0 Authentication required`. Use the server name rather than an IP address, so the certificate matches. Mail servers inside your cluster can use the [internal listener](/deploy/helm-edge#smtp-submission), which your operator sets up separately.
 
 ### Generic client settings
 
@@ -53,7 +53,8 @@ Use 587 with STARTTLS only if the device cannot do implicit TLS. Leave "authenti
 # ~/.msmtprc
 defaults
 tls on
-tls_starttls off          # port 465 uses implicit TLS
+# port 465 uses implicit TLS
+tls_starttls off
 
 account thinpost
 host smtp.example.com
@@ -66,7 +67,7 @@ from alerts@example.com
 account default : thinpost
 ```
 
-For port 587, set `port 587` and `tls_starttls on`.
+For port 587, set `port 587` and `tls_starttls on`. msmtp verifies the certificate against the system trust store by default.
 
 ### Postfix as a relay
 
@@ -76,18 +77,21 @@ On a server that already runs Postfix, relay everything through Thinpost:
 # Postfix main configuration file
 relayhost = [smtp.example.com]:465
 smtp_tls_wrappermode = yes
-smtp_tls_security_level = encrypt
+smtp_tls_security_level = secure
+smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
+tls_append_default_CA = no
 smtp_sasl_auth_enable = yes
 smtp_sasl_security_options = noanonymous
 smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
 ```
 
 ```text
-# /etc/postfix/sasl_passwd   (then: postmap /etc/postfix/sasl_passwd)
+# /etc/postfix/sasl_passwd
+# Key it exactly as relayhost is written, then run: postmap /etc/postfix/sasl_passwd
 [smtp.example.com]:465 0123456789abcdef0123456789abcdef:tps_REPLACE_WITH_THE_PASSWORD
 ```
 
-For port 587 use `relayhost = [smtp.example.com]:587`, `smtp_tls_security_level = encrypt` and leave out the wrapper mode. Postfix queues and retries on its own, which is what you want: see [Retries and duplicate protection](#retries-and-duplicate-protection).
+`secure` makes Postfix verify the certificate against the CA file (the path shown is the Debian and Ubuntu bundle, so use your system's), and the host in `relayhost` must be the server name on the SMTP tab so the name matches. For port 587 use `relayhost = [smtp.example.com]:587`, leave out the wrapper mode, key the `sasl_passwd` entry as `[smtp.example.com]:587`, and run `postmap` again. Postfix queues and retries on its own, which is what you want: see [Retries and duplicate protection](#retries-and-duplicate-protection).
 
 ### Testing with curl
 
@@ -110,7 +114,7 @@ Thinpost only sends from domains that are [verified for the app](/guide/domains)
 | **Send from one of my domains** | Rewrites the `From` onto a verified domain you choose and keeps the part before the `@`. Optionally keeps the original domain after a `+`. |
 | **Always send from one address** | Replaces the `From` with one fixed address on a verified domain. |
 
-The two rewriting policies can leave a `From` alone when its domain is already verified for the app ("Leave addresses on my verified domains alone"). The display name is always kept, and the `Sender` header is removed when the `From` changes.
+The two rewriting policies can leave a `From` alone when its domain is already verified for the app ("Leave addresses on my verified domains alone"). The display name is always kept, and the `Sender` header is removed when the `From` changes, and also when there are several `Sender` headers or one is not a single address on a verified domain, even if the `From` is unchanged.
 
 For an app whose domain is `example.com`:
 
@@ -138,13 +142,13 @@ The SMTP tab warns you when the chosen domain would not be signed yet.
 | Limit | Value |
 | --- | --- |
 | Message size | 7.5 MiB (7,864,320 bytes) once decoded, headers included. Thinpost also checks that the final signed message fits, so a message close to the limit can be refused. |
-| Recipients per message | 100 distinct envelope addresses |
+| Recipients per message | 100 `RCPT TO` commands. Duplicates count, and the 101st is refused with `452 4.5.3`. |
 | Header block | 56 KiB and 200 header fields |
 | Line length | 998 characters, in headers and in the body |
 | Header characters | ASCII only. Encode non-ASCII text in a header (a `Subject` with an accent, a display name) as an [RFC 2047](https://www.rfc-editor.org/rfc/rfc2047) encoded word, as every mail library does. |
 | Body | 8-bit text is accepted and passed on as written. NUL bytes and a bare carriage return are refused. Use `quoted-printable` or `base64` for the widest compatibility. |
 | Addresses | ASCII only. Thinpost does not offer SMTPUTF8. |
-| Connection | A connection allows three sign-in attempts and 100 messages, and lasts up to 30 minutes after sign-in. A single message transfer that takes longer than 10 minutes is cut. |
+| Connection | A connection allows three sign-in attempts and 100 messages, and is closed 30 minutes after it was opened, a limit enforced once the client has signed in. A single message transfer that takes longer than 10 minutes is cut. |
 
 On top of these, the app's own [limits](/guide/console#app-limits) apply: the submission rate, the daily recipient quota and the pending-message limit. A new app starts with all three at zero, which blocks everything until an administrator raises them.
 
@@ -158,7 +162,7 @@ Thinpost replies with standard codes, so any SMTP client or relay will queue and
 | --- | --- |
 | `250 2.0.0 OK: queued as <id>` | The message was accepted. `<id>` is the Thinpost message ID. |
 | `250 2.0.0 OK: held as <id>` | The message was accepted [on hold](#holding-a-message). |
-| `235 2.7.0 Authentication successful` | Sign-in worked. |
+| `235 2.0.0 Authentication succeeded` | Sign-in worked. |
 | `535 5.7.8 Authentication credentials invalid` | Wrong, unknown or revoked credential. Repeated failures from one address are blocked for a while. |
 | `530 5.7.0 Authentication required` | `MAIL` before signing in. |
 | `523 5.7.10 TLS is required` | AUTH before STARTTLS on port 587. |
@@ -166,20 +170,20 @@ Thinpost replies with standard codes, so any SMTP client or relay will queue and
 | `451 4.4.5 Sending rate limit reached, try again later` | The app's submission rate is used up. |
 | `452 4.3.1 Sending limit reached, try again later` | The app's daily recipient quota is used up. |
 | `451 4.3.1 Too many messages are queued, try again later` | The app's pending-message limit is reached. |
-| `451 4.3.5 Sender configuration is not ready, try again later` | The From domain is not verified or cannot be DKIM-signed yet. |
+| `451 4.3.5 Sender configuration is not ready, try again later` | The domain the message will be sent from, after the From policy, is not verified or cannot be DKIM-signed yet. Under the default policy an unverified `From` gets `550 5.7.1` instead, but a missing DKIM key gets this under any policy. |
 | `550 5.7.1 Sender address not permitted` | The `From` is not allowed by the app's From policy. |
 | `550 5.7.1 Sending is paused for this app` | An administrator paused the app. |
 | `550 5.7.1 Recipient not permitted` | A recipient is blocked by the deployment's recipient allowlist. The whole message is refused. |
 | `550 5.7.10 Encryption required` | The message asks for Enhanced Protection without an encrypted connection. |
-| `552 5.3.4 Message too large` | Over the size limit. |
+| `552 5.3.4 Message size exceeds the limit` (or `Max message size exceeded` when `SIZE=` is declared too big, or `Message too large`) | Over the size limit, or a header block over 56 KiB or 200 fields. |
 | `554 5.6.0 Message headers are invalid` | A header is malformed, `X-Thinpost-*` has a bad value, or there is no usable sender. |
 | `554 5.6.0 Message content not supported` | Non-ASCII or NUL bytes in headers, a line over 998 characters, a bare carriage return or NUL in the body. |
 | `554 5.6.0 Message is empty` | No data. |
-| `452 4.5.3 Too many recipients` | More than 100 recipients. |
-| `451 4.3.0 Temporary failure, try again later` | Thinpost could not decide right now: the database, storage or the control connection is unavailable. Nothing was accepted. |
+| `452 4.5.3` (`Maximum limit of 100 recipients reached`) | More than 100 `RCPT TO` commands. |
+| `451 4.3.0 Temporary failure, try again later` or `Temporary delivery failure` | Thinpost could not decide right now: the database, storage or the control connection is unavailable. |
 | `421 4.3.2` or `421 4.7.0`, then the connection closes | The service is going away, or the client misbehaved too often on this connection. |
 
-A `4xx` means nothing was accepted and it is safe to send again. A `5xx` means the message will not be accepted as it is.
+The text after the code can differ slightly from the table, so match on the code. A `4xx` means retry. Very rarely the message was in fact accepted and only the final reply was lost, and then the retry is answered with the original ID if the message has a `Message-ID` or a `Date` (see below). A `5xx` means the message will not be accepted as it is.
 
 ## Retries and duplicate protection
 
@@ -213,7 +217,7 @@ The header takes `true` or `false`, once. Anything else is refused with `554 5.6
 
 Thinpost sends the message you submit, with a few changes that keep it safe and deliverable:
 
-- **Removed:** `Bcc`, `Resent-Bcc`, `Return-Path`, `Received`, any ARC headers, `Authentication-Results`, every `X-Thinpost-*` header, and `Sender` when the `From` was changed.
+- **Removed:** `Bcc`, `Resent-Bcc`, `Return-Path`, `Received`, any ARC headers, `Authentication-Results`, every `X-Thinpost-*` header, and `Sender` when the `From` was changed (or when it is not a single address on a verified domain).
 - **Replaced:** `Message-ID`. Thinpost uses its own, `<message-id@your-domain>`, so replies and bounces can be matched. Your client's `Message-ID` is used for retry protection only. The consequence: a client that wants to thread a later message under this one has no way to know the new ID, unless it reads it from the reply and builds `<id@domain>` itself.
 - **Added:** a `DKIM-Signature` for the sender domain, and a `Date` when there is none. A `Date` the client sent is always kept, including on held mail. Line endings are normalized to CRLF.
 - **Kept:** everything else, including `Reply-To`, `In-Reply-To`, `References`, custom headers, MIME structure and attachments. A DKIM signature the client added is dropped if the changes above would break it, and kept otherwise.

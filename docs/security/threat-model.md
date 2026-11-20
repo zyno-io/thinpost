@@ -45,7 +45,7 @@ flowchart LR
 - **It never connects into the trusted zone.** The control plane dials the edge, and the edge never opens a connection into the trusted zone. It holds no address or credential for the database or object store.
 - **It cannot decide to send.** Before any SMTP connection it must ask for a start permit, and the control plane commits the authorization in the database first.
 - **It cannot accept inbound mail or bounces on its own.** The edge answers `250` to a bounce or inbound message only after the control plane has stored and committed it, and answers `451` otherwise.
-- **It cannot accept submitted mail on its own.** With SMTP submission on, the edge answers `250` only after the control plane has verified the credential, applied the app's policy and limits and committed the message. It never holds a credential digest, so it cannot tell a valid credential from an invalid one.
+- **It cannot accept submitted mail on its own.** With SMTP submission on, the edge answers `250` only after the control plane has verified the credential, applied the app's policy and limits and committed the message. It cannot verify a credential itself: it relays the control plane's verdict.
 - **It runs as non-root.** The process refuses to start as root.
 
 The edge can see the mail it is delivering and the mail it receives, and with SMTP submission on, the credentials and message content of every client that connects, while they are in transit. Compromise of the edge exposes those, so treat the edge zone as sensitive and keep its network policy tight. [Enhanced Protection](/guide/concepts) requires TLS for the SMTP hop but cannot protect content from the process that delivers it.
@@ -65,9 +65,9 @@ They **cannot**:
 - learn credential digests, app IDs or the replay secret, which stay in the trusted zone;
 - mint a credential or guess one: the control plane checks every attempt against its digest, and the secrets are 256-bit random values;
 - use a stolen SMTP credential on the HTTP APIs, or an API key for SMTP;
-- steer clients to another server or make them skip TLS. A client trusts the server name and certificate it was configured with.
+- steer clients elsewhere or make a careful client skip TLS, as long as the certificate keys are uncompromised. The edge does hold the private keys of its public SMTP certificates (and of the internal listener's certificate) and enforces TLS-before-AUTH itself, so with those keys an attacker can impersonate the server to any client, and a client that does not require TLS or does not verify the certificate can be tricked into sending credentials in clear text.
 
-If you suspect the edge was compromised, revoke and reissue every SMTP credential. See [the runbook](/operations/rotation#edge-compromise).
+If you suspect the edge was compromised, revoke and reissue every SMTP credential. See [the runbook](/operations/rotation#smtp-credentials-and-an-edge-compromise).
 
 ## The control protocol
 
@@ -156,7 +156,7 @@ The issuer's origin is the only external connection allowed. Extra origins for a
 - The database holds plaintext metadata that the console needs: recipients, sender domains and addresses, and subjects, including Enhanced Protection subjects. Treat the database, its backups and its WAL as sensitive. See [Data handling](/security/data-handling).
 - Webhook signing secrets are sealed with the object keyring and never returned.
 - SMTP credentials are stored as SHA-256 digests, with the password shown once at creation. Mail sent over SMTP is stored as the client's original message in the object store, encrypted like any other submission.
-- Retry protection for SMTP mail stores keyed digests only (an HMAC of the app, sender, recipients, `Message-ID` and message bytes), so database content cannot confirm a guess about what was sent. The key is sealed under the object keyring and kept for 24 hours or 10 minutes, depending on what the message carries. See [Data handling](/security/data-handling#smtp-submission).
+- Retry protection for SMTP mail stores keyed digests only (an HMAC of the app, sender, recipients, `Message-ID` and message bytes), so database content cannot confirm a guess about what was sent. The digests expire after 24 hours or 10 minutes, depending on what the message carries. The key is permanent: it is sealed once under the object keyring and never re-sealed. See [Data handling](/security/data-handling#smtp-submission).
 
 ## Out of scope
 

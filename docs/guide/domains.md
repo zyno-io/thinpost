@@ -79,7 +79,7 @@ See [Key and certificate rotation](/operations/rotation).
 
 ## SMTP and DKIM
 
-[SMTP submission](/guide/smtp) uses the same verified domains and the same DKIM keys. If an app's From policy moves or replaces the sender address, the target domain must be a **verified** sender domain of the app **and** have a DKIM key in the signing catalog with a matching DNS record. Otherwise Thinpost answers `451 4.3.5` and the client keeps the message queued until it is fixed. The SMTP tab warns you when the chosen domain would not be signed yet.
+[SMTP submission](/guide/smtp) uses the same verified domains and the same DKIM keys. Whatever the From policy, the domain a message is sent from must have a DKIM key in the signing catalog with a matching DNS record, or Thinpost answers `451 4.3.5` and the client keeps the message queued until it is fixed. If the policy moves or replaces the sender address, its target domain must also be a **verified** sender domain of the app, with the same `451 4.3.5` if it is not. Under the default policy, a `From` on an unverified domain is refused with `550 5.7.1`. The SMTP tab warns you when the chosen domain would not be signed yet.
 
 ## SPF and bounces
 

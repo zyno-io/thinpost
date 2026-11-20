@@ -114,9 +114,10 @@ To rotate one credential, create a new one on the app's SMTP tab, switch the dev
 
 If you suspect the edge was compromised:
 
-1. Rebuild or replace the edge and replace its certificates, as for any edge compromise ([Control PKI](/deploy/control-pki)).
-2. For every app with SMTP credentials, **revoke every credential and create new ones**. An app can hold ten, so you can create the replacements first. Each credential must be replaced on the device that uses it.
-3. Review recent SMTP messages in the console for mail you do not recognize.
+1. Rebuild or replace the edge, and replace its control certificates as for any edge compromise ([Control PKI](/deploy/control-pki)).
+2. The edge holds the private keys of the public SMTP certificates, so **reissue every public SMTP certificate with a new key** (the primary's and each additional address's Secret), revoking the old certificates at your CA where possible, and rotate the internal listener's certificate if you use it. Do this before reissuing credentials, or a still-trusted stolen key can capture the new passwords.
+3. For every app with SMTP credentials, **revoke every credential and create new ones**. An app may have at most 10 unrevoked credentials: if it has 5 or fewer you can create the replacements first, otherwise revoke before creating. Each credential must be replaced on the device that uses it.
+4. Review recent SMTP messages in the console for mail you do not recognize.
 
 The SMTP retry secret and the credential digests never reached the edge, so they do not need rotating.
 
