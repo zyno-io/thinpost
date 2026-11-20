@@ -177,6 +177,11 @@ describe('SMTP helpers', () => {
                 { sent: 'scanner@office.example.net', becomes: 'no-reply@billing.example.com' }
             ]);
             expect(smtp.fromExamples(form({ mode: 'off' }), verified)).toEqual([]);
+            // A long target leaves less room: the example is shortened like the server's, with the hash shown as <hash>.
+            const longTarget = `${'t'.repeat(63)}.${'u'.repeat(63)}.${'v'.repeat(63)}.${'w'.repeat(40)}.example.com`;
+            const [long] = smtp.fromExamples(form({ mode: 'domain', domain: longTarget, onlyUnauthorized: false }), [longTarget]);
+            expect(long!.becomes.endsWith(`-<hash>@${longTarget}`)).toBe(true);
+            expect(long!.becomes.length - '<hash>'.length + 8).toBeLessThanOrEqual(254);
         });
     });
 });
