@@ -397,6 +397,12 @@ func (s *submissionSession) Rcpt(address string, _ *smtp.RcptOptions) error {
 	if !ok {
 		return &smtp.SMTPError{Code: 501, EnhancedCode: smtp.EnhancedCode{5, 1, 3}, Message: "Bad recipient address syntax"}
 	}
+	// Control re-parses recipients as addresses, which would turn a quoted
+	// local part ("\"ops\""@example.net, decoded to "ops"@example.net) into a
+	// different mailbox. Only plain dot-atom local parts are carried.
+	if !dotAtomLocal(local) {
+		return &smtp.SMTPError{Code: 553, EnhancedCode: smtp.EnhancedCode{5, 1, 3}, Message: "Quoted addresses are not supported"}
+	}
 	key := local + "@" + domain
 	if _, dup := txn.seen[key]; dup {
 		return nil
@@ -407,6 +413,29 @@ func (s *submissionSession) Rcpt(address string, _ *smtp.RcptOptions) error {
 	txn.seen[key] = struct{}{}
 	txn.rcpts = append(txn.rcpts, key)
 	return nil
+}
+
+// dotAtomLocal reports whether local is a dot-atom: atext runs separated by
+// single dots.
+func dotAtomLocal(local string) bool {
+	prevDot := true
+	for i := 0; i < len(local); i++ {
+		c := local[i]
+		switch {
+		case c == '.':
+			if prevDot {
+				return false
+			}
+			prevDot = true
+			continue
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
+			strings.IndexByte("!#$%&'*+-/=?^_`{|}~", c) >= 0:
+		default:
+			return false
+		}
+		prevDot = false
+	}
+	return !prevDot
 }
 
 func roundUpChunk(n int64) int64 {

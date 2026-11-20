@@ -681,6 +681,27 @@ func TestSubmissionRecipientAllowlistIsRefusedAtData(t *testing.T) {
 	}
 }
 
+// TestSubmissionQuotedRecipientIsRefused: a quoted local part decodes at the
+// edge to a different mailbox once re-parsed, so RCPT refuses it and nothing is
+// stored or sent to the unquoted mailbox.
+func TestSubmissionQuotedRecipientIsRefused(t *testing.T) {
+	r := newSubmissionRig(t, rigOptions{allowlist: []string{"ops@example.net"}})
+	stop := r.start("controller", r.lossy)
+	defer stop()
+	r.waitAvailable()
+	c := r.dial()
+	if code, _ := c.auth(r.cred, r.secret); code != 235 {
+		t.Fatal("AUTH")
+	}
+	code, msg := c.send(e2eFrom, []string{`"\"ops\""@example.net`}, e2eMessage("client-q", "Quoted"))
+	if code != 553 || !strings.Contains(msg, "5.1.3") {
+		t.Fatalf("got %d %q", code, msg)
+	}
+	if r.count(`SELECT count(*) FROM messages`) != 0 {
+		t.Fatal("a refused message was stored")
+	}
+}
+
 // TestSubmissionPauseAfterLostAcknowledgement: the commit happened but the
 // client never heard. Even with the app paused, the retry is answered with the
 // same ID and one row; a different message is refused.

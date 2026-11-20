@@ -829,3 +829,51 @@ func TestSubmissionSuccessfulAuthRefundsTheAttempt(t *testing.T) {
 		t.Fatalf("checks=%d refunds=%d", checks, refunds)
 	}
 }
+
+func TestSubmissionRcptRefusesQuotedLocalParts(t *testing.T) {
+	// A quoted local part would be re-parsed downstream as a different mailbox
+	// ("\"ops\""@example.net -> ops@example.net), so it is refused here.
+	env := startSubmission(t, subOptions{implicit: true, cfg: SubmissionConfig{Submission: newFakeSubmission()}})
+	c := env.ready()
+	c.expect(250, "MAIL FROM:<sender@example.com>")
+	for _, rcpt := range []string{
+		`"\"ops\""@example.net`,
+		`"a\\b"@example.net`,
+		`a..b@example.net`,
+		`.a@example.net`,
+		`a.@example.net`,
+	} {
+		msg := c.expect(553, "RCPT TO:<"+rcpt+">")
+		if !strings.Contains(msg, "5.1.3") || !strings.Contains(msg, "Quoted addresses are not supported") {
+			t.Fatalf("%s: %q", rcpt, msg)
+		}
+	}
+	c.expect(501, `RCPT TO:<"a b"@example.net>`) // whitespace is bad syntax, as before
+	// Plain dot-atom recipients still pass, and the local part keeps its case.
+	c.expect(250, "RCPT TO:<First.Last+tag@Example.NET>")
+	c.expect(250, "RCPT TO:<o'brien@example.net>")
+	// A needlessly quoted atom decodes to the same plain mailbox, so it is fine.
+	c.expect(250, `RCPT TO:<"plain"@example.net>`)
+	c.expect(354, "DATA")
+	c.send(stuff(simpleBody))
+	if code, _ := c.reply(); code != 250 {
+		t.Fatalf("DATA: %d", code)
+	}
+}
+
+func TestSubmissionRefusedQuotedRecipientIsNotForwarded(t *testing.T) {
+	f := newFakeSubmission()
+	env := startSubmission(t, subOptions{implicit: true, cfg: SubmissionConfig{Submission: f}})
+	c := env.ready()
+	c.expect(250, "MAIL FROM:<sender@example.com>")
+	c.expect(553, `RCPT TO:<"\"ops\""@example.net>`)
+	c.expect(250, "RCPT TO:<Ops@example.net>")
+	c.expect(354, "DATA")
+	c.send(stuff(simpleBody))
+	if code, _ := c.reply(); code != 250 {
+		t.Fatalf("DATA: %d", code)
+	}
+	if rcpts := f.messages[len(f.messages)-1].Rcpts; len(rcpts) != 1 || rcpts[0] != "Ops@example.net" {
+		t.Fatalf("%v", rcpts)
+	}
+}
