@@ -1,0 +1,9 @@
+From: Alice <alice@example.com>
+To: bob@example.net
+Subject: signed
+DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=old; h=from:to:subject:message-id;
+ bh=AAAA; b=BBBB
+DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=keep; h=from:to:subject;
+ bh=AAAA; b=BBBB
+
+body
