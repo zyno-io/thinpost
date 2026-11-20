@@ -168,6 +168,15 @@ func run() error {
 		smtpListeners = append(smtpListeners, wrapped)
 	}
 	log.Printf("smtp listeners=%d", len(smtpListeners))
+	// Authenticated submission (587 STARTTLS, 465 implicit TLS per sending IP,
+	// plus the optional in-cluster listener) has its own admission and rate
+	// limits; the MX admission above is untouched. Port 25 keeps CHUNKING and
+	// never offers AUTH.
+	sub, err := startSubmission(c, edge, listeners, bounceListeners)
+	if err != nil {
+		return err
+	}
+	defer sub.closeListeners()
 	healthListener, err := net.Listen("tcp4", healthAddress)
 	if err != nil {
 		return errors.New("cannot bind loopback health listener")
@@ -180,6 +189,7 @@ func run() error {
 	defer stop()
 	go logSMTPAdmissionStats(ctx, admissionStats, time.Minute, log.Printf)
 	go logInboundStats(ctx, inboundCounters, time.Minute, log.Printf)
+	sub.logStats(ctx)
 	health := startJournalHealth(ctx, func() error {
 		_, err := j.Identity()
 		return err
@@ -204,11 +214,15 @@ func run() error {
 		for _, server := range smtpServers {
 			_ = server.Close()
 		}
+		sub.closeServers()
 	}
-	results := make(chan error, 2+len(smtpServers))
+	results := make(chan error, 2+len(smtpServers)+len(sub.servers))
 	go func() { results <- grpcServer.Serve(controlListener) }()
 	for i, server := range smtpServers {
 		go func() { results <- server.Serve(smtpListeners[i]) }()
+	}
+	for i, server := range sub.servers {
+		go func() { results <- server.Serve(sub.serve[i]) }()
 	}
 	go func() { results <- healthServer.Serve(healthListener) }()
 	select {

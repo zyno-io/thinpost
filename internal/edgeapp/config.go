@@ -42,7 +42,32 @@ type Config struct {
 	SMTPGlobalInterval, SMTPSourceInterval time.Duration
 	SMTPGlobalBurst, SMTPSourceBurst       int
 	OutboundSMTPTimeouts                   smtptransport.Timeouts
+
+	// Submission opens authenticated submission on every sending IP: 587
+	// (STARTTLS) and 465 (implicit TLS), each presenting that IP's own listener
+	// certificate. Port 25 is unchanged.
+	Submission bool
+	// SubmissionInternal is the optional in-cluster submission listener (STARTTLS
+	// with a certificate from the cluster-local CA). It is not shown to clients.
+	SubmissionInternal SubmissionInternal
 }
+
+// SubmissionInternal configures the optional internal submission listener.
+type SubmissionInternal struct {
+	// Listen is a literal private (or loopback) ip:port; empty disables it.
+	Listen netip.AddrPort
+	// Hostname is the name it greets with and its certificate is issued for.
+	Hostname string
+	// Cert and Key are the certificate files; CA is the cluster-local CA that
+	// verifies the certificate.
+	Cert, Key, CA string
+}
+
+// Enabled reports whether the internal listener is configured.
+func (i SubmissionInternal) Enabled() bool { return i.Listen.IsValid() }
+
+// SubmissionPublicPorts are the ports submission opens on every sending IP.
+var SubmissionPublicPorts = []uint32{587, 465}
 
 // Load requires literal private control and public SMTP bind addresses. The
 // public source address is explicit and is also used for outbound SMTP.
@@ -194,7 +219,53 @@ func Load(getenv func(string) string) (Config, error) {
 			}
 		}
 	}
+	if err = c.loadSubmission(getenv, controlAddr, controlPort); err != nil {
+		return Config{}, err
+	}
 	return c, nil
+}
+
+// loadSubmission reads the submission settings. Submission is off unless
+// THINPOST_EDGE_SUBMISSION is exactly "true".
+func (c *Config) loadSubmission(getenv func(string) string, controlAddr netip.Addr, controlPort string) error {
+	switch getenv("THINPOST_EDGE_SUBMISSION") {
+	case "", "false":
+	case "true":
+		c.Submission = true
+	default:
+		return errors.New("THINPOST_EDGE_SUBMISSION must be true or false")
+	}
+	listen := getenv("THINPOST_EDGE_SUBMISSION_INTERNAL_LISTEN")
+	hostname := getenv("THINPOST_EDGE_SUBMISSION_INTERNAL_HOSTNAME")
+	cert, key, ca := getenv("THINPOST_EDGE_SUBMISSION_INTERNAL_CERT"), getenv("THINPOST_EDGE_SUBMISSION_INTERNAL_KEY"), getenv("THINPOST_EDGE_SUBMISSION_INTERNAL_CA")
+	if listen == "" {
+		if hostname != "" || cert != "" || key != "" || ca != "" {
+			return errors.New("the internal submission settings need THINPOST_EDGE_SUBMISSION_INTERNAL_LISTEN")
+		}
+		return nil
+	}
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return errors.New("invalid internal submission listener")
+	}
+	address, err := netip.ParseAddr(host)
+	if err != nil || address.Zone() != "" || address.IsUnspecified() || !(address.IsPrivate() || address.IsLoopback()) || !validPort(port) {
+		return errors.New("internal submission listener must use a literal private address")
+	}
+	if port == "25" || port == controlPort && address == controlAddr {
+		return errors.New("internal submission listener port conflicts with another listener")
+	}
+	normalized, ok := admin.NormalizeDomain(hostname)
+	if !ok || normalized != hostname || len(hostname) > 219 || cert == "" || key == "" || ca == "" {
+		return errors.New("the internal submission listener needs a hostname, certificate, key and CA")
+	}
+	c.SubmissionInternal = SubmissionInternal{Listen: netip.AddrPortFrom(address, mustPort(port)), Hostname: hostname, Cert: cert, Key: key, CA: ca}
+	return nil
+}
+
+func mustPort(value string) uint16 {
+	port, _ := strconv.Atoi(value)
+	return uint16(port)
 }
 
 // MaxAdditionalSources and MaxBounceDomains bound the optional lists. The
