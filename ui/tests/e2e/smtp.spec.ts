@@ -39,11 +39,11 @@ test('the SMTP tab connects, creates a credential and saves a From policy', asyn
 
     await page.getByTestId('smtp-mode-domain').check();
     await page.locator('#smtp-from-domain').selectOption('billing.example.com');
-    await expect(page.getByTestId('smtp-examples')).toContainText('printer@billing.example.com');
+    await expect(page.getByTestId('smtp-examples')).toContainText('scanner=office.example.net@billing.example.com');
     await page.getByTestId('smtp-save').click();
     await expect(page.getByTestId('smtp-signing-warning')).toContainText('billing.example.com');
     const put = requests.find(r => r.method === 'PUT' && r.url.endsWith('/smtp/settings'));
-    expect(JSON.parse(put!.body!)).toEqual({ from: { mode: 'domain', domain: 'billing.example.com', keep_origin: false, only_unauthorized: true } });
+    expect(JSON.parse(put!.body!)).toEqual({ from: { mode: 'domain', domain: 'billing.example.com', only_unauthorized: true } });
 });
 
 test('the From address form rejects an address on an unverified domain', async ({ page }) => {

@@ -11,12 +11,12 @@ import (
 	"github.com/zyno-io/thinpost/internal/admin"
 )
 
-const smtpPolicyColumns = `smtp_from_mode,smtp_from_domain,smtp_from_keep_origin,smtp_from_address,smtp_from_only_unauthorized`
+const smtpPolicyColumns = `smtp_from_mode,smtp_from_domain,smtp_from_address,smtp_from_only_unauthorized`
 
 func scanSMTPPolicy(row rowScanner) (admin.SMTPFromPolicy, error) {
 	var p admin.SMTPFromPolicy
 	var domain, address sql.NullString
-	if err := row.Scan(&p.Mode, &domain, &p.KeepOrigin, &address, &p.OnlyUnauthorized); err != nil {
+	if err := row.Scan(&p.Mode, &domain, &address, &p.OnlyUnauthorized); err != nil {
 		return admin.SMTPFromPolicy{}, err
 	}
 	if domain.Valid {
@@ -30,7 +30,7 @@ func scanSMTPPolicy(row rowScanner) (admin.SMTPFromPolicy, error) {
 
 func samePolicy(a, b admin.SMTPFromPolicy) bool {
 	same := func(x, y *string) bool { return x == nil && y == nil || x != nil && y != nil && *x == *y }
-	return a.Mode == b.Mode && a.KeepOrigin == b.KeepOrigin && a.OnlyUnauthorized == b.OnlyUnauthorized && same(a.Domain, b.Domain) && same(a.Address, b.Address)
+	return a.Mode == b.Mode && a.OnlyUnauthorized == b.OnlyUnauthorized && same(a.Domain, b.Domain) && same(a.Address, b.Address)
 }
 
 // GetSMTPSettings reads the app's From policy without the gate.
@@ -72,7 +72,14 @@ func (r *Repository) SetSMTPSettings(ctx context.Context, actor, appID string, p
 	if samePolicy(previous, policy) {
 		return policy, tx.Commit()
 	}
-	for _, target := range admin.SMTPPolicyDomains(policy) {
+	target := ""
+	switch {
+	case policy.Domain != nil:
+		target = *policy.Domain
+	case policy.Address != nil:
+		target = admin.SMTPAddressDomain(*policy.Address)
+	}
+	if target != "" {
 		var verified bool
 		err = tx.QueryRowContext(ctx, `SELECT true FROM sender_domains WHERE app_id=$1 AND domain=$2 AND active FOR SHARE`, appID, target).Scan(&verified)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -82,8 +89,8 @@ func (r *Repository) SetSMTPSettings(ctx context.Context, actor, appID string, p
 			return admin.SMTPFromPolicy{}, err
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE apps SET smtp_from_mode=$2,smtp_from_domain=$3,smtp_from_keep_origin=$4,smtp_from_address=$5,smtp_from_only_unauthorized=$6 WHERE id=$1`,
-		appID, policy.Mode, policy.Domain, policy.KeepOrigin, policy.Address, policy.OnlyUnauthorized); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE apps SET smtp_from_mode=$2,smtp_from_domain=$3,smtp_from_address=$4,smtp_from_only_unauthorized=$5 WHERE id=$1`,
+		appID, policy.Mode, policy.Domain, policy.Address, policy.OnlyUnauthorized); err != nil {
 		return admin.SMTPFromPolicy{}, err
 	}
 	if err = recordAudit(ctx, tx, actor, appID, "smtp_settings.updated", appID); err != nil {
