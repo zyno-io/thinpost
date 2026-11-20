@@ -34,8 +34,8 @@ The app area stays mounted as you move between tabs. The console remembers the l
 
 ### SMTP
 
-::: warning Not available yet
-SMTP submission is being added in stages. The SMTP tab and the admin API behind it are here so that credentials and the From policy can be managed, but the tab stays hidden until your deployment reports the `smtp_submission` runtime feature, which no release sets yet. Until then no mail can be sent over SMTP. A direct link to `/apps/<id>/smtp` shows a notice instead.
+::: tip When the tab is shown
+The tab appears when the control plane has the SMTP intake configured (the edge bridge, signing and object storage), which it reports as the `smtp_submission` runtime feature. Mail only flows once an administrator has also turned submission on at the edge, which opens ports 465 and 587. The badges next to the ports show whether Thinpost last saw each one listening, so a tab that is visible with "Not checked yet" or "Not available right now" badges means the edge is not offering submission (yet). A direct link to `/apps/<id>/smtp` on a server without the feature shows a notice instead.
 :::
 
 The tab has three panels. The wording is meant for the developers and support staff who set up the sending software, not only for administrators.

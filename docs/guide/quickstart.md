@@ -93,6 +93,10 @@ Open `http://localhost:8025`. Within a few seconds the message appears in Mailpi
 
 Back in the console, open the app's **Messages** tab. The message shows as delivered. The edge sent it to the local Mailpit server, which the quickstart allows as the only destination; nothing is routed off your machine.
 
+### Send over SMTP
+
+The quickstart edge also accepts authenticated SMTP submission on ports 465 and 587 of its sending address. Those ports exist only on the stack's internal network, so `smoke.sh` sends from a helper container: it creates an SMTP credential, sends one message on each port with `curl`, checks that `Bcc` and the client's `Received` header were removed and that the message carries Thinpost's `Message-ID` and a valid DKIM signature, and revokes the credential. See `examples/quickstart/README.md` for the command.
+
 ## 7. Try a provider SDK
 
 The same key works with any supported SDK pointed at `https://localhost:8443`. For example, with the Postmark Node SDK:

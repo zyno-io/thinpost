@@ -49,6 +49,20 @@ These values apply when `workload` is `edge`.
 | `additionalSources[].mtu` | integer 576 to 9000 | `publicNetwork.mtu` | MTU for this address's attachment. |
 | `additionalBounceDomains` | list of strings | `[]` | Extra bounce domains the Edge accepts, only for retired domains that still receive bounces. At most 7. Each must be a lowercase DNS name, unique and different from `bounceDomain` and every additional hostname. The Edge already accepts `bounceDomain` and each listener's hostname. |
 
+## SMTP submission
+
+Authenticated SMTP submission on the Edge workload. See [Helm: Edge](/deploy/helm-edge#smtp-submission).
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `smtpSubmission.enabled` | boolean | `false` | Opens ports 587 (STARTTLS) and 465 (implicit TLS) on every sending address, each with that address's own certificate. Allow both ports to every address in the router. Port 25 is unchanged. |
+| `smtpSubmission.internal.enabled` | boolean | `false` | Opens the in-cluster listener and renders the `thinpost-edge-submission` ClusterIP Service and a NetworkPolicy rule for the allowed clients. |
+| `smtpSubmission.internal.port` | integer | `587` | Listener port on the pod address. The Service always exposes `587`. Not `25` or `7443`. |
+| `smtpSubmission.internal.hostname` | string | `''` | DNS name of the listener certificate, for example `thinpost-edge-submission.<namespace>.svc`. Required when enabled. |
+| `smtpSubmission.internal.certificateSecret` | string | `thinpost-edge-submission-internal` | Secret with `tls.crt`, `tls.key` and `ca.crt` from the cluster-local CA, mounted as a directory so renewals propagate. |
+| `smtpSubmission.internal.clientCidrs` | list of CIDRs | `[]` | Source addresses allowed to connect. |
+| `smtpSubmission.internal.clientNamespaceSelector` | object | `{}` | Namespaces allowed to connect. At least one of `clientCidrs` and `clientNamespaceSelector` is required when enabled. |
+
 ## Edge journal, clock and rate limits
 
 | Value | Type | Default | Description |

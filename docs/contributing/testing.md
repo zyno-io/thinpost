@@ -31,7 +31,7 @@ Do the same when you run against a fixture database yourself.
 CI also runs the SMTP-facing packages under `-race`. It needs cgo and a C compiler, unlike the CGO-free production build:
 
 ```sh
-CGO_ENABLED=1 go test -race -count=1 ./internal/thirdparty/gosmtp ./internal/bounce ./internal/edgesession ./internal/controlsession
+CGO_ENABLED=1 go test -race -count=1 ./internal/thirdparty/gosmtp ./internal/bounce ./internal/edgesession ./internal/controlsession ./cmd/thinpost-edge
 ```
 
 See [SMTP server](/contributing/smtp-server) for why these packages are raced.

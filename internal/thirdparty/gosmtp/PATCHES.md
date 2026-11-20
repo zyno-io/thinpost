@@ -67,7 +67,7 @@ CHUNKING.
 
 **Why (v0.26.0).** Upstream v0.26.0 fixed the desync after an early BDAT
 refusal (the "Missing RCPT TO" 502 now discards the chunk). P2 stays for other
-reasons: DATA-only keeps `Session.Data` synchronous on the connection
+reasons: DATA-only keeps the session's `Data` call synchronous on the connection
 goroutine, which the submission session model and clampConn's drain modes
 assume; it avoids the BDAT worker goroutine; and it avoids discarding an
 oversize chunk of up to the client-declared size (4 GiB) outside the drain

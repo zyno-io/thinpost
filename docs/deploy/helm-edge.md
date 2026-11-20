@@ -187,6 +187,27 @@ Rules and consequences:
 - Changing the list restarts the worker. The pod carries a `checksum/public-network` annotation, so any change to an address, gateway or table rolls it.
 - Add the address in the console only after the release is up. See [Sending IPs](/guide/sending-ips) for DNS, PTR and the rollout order.
 
+## SMTP submission
+
+Set `smtpSubmission.enabled: true` to open ports **587** (STARTTLS) and **465** (implicit TLS) on every sending address, so apps and devices can send mail with an SMTP credential. Each address presents the certificate it already uses for port 25, so no new certificate is needed. Port 25 is unchanged and never offers AUTH. The router must allow inbound TCP 465 and 587 to every sending address ([Direct public networking](/deploy/direct-public-networking)).
+
+For clients inside the cluster, prefer the internal listener. Traffic that goes out through a public address and back is source-NATed, so all those clients share one source address and its per-source limits.
+
+```yaml
+smtpSubmission:
+  enabled: true
+  internal:
+    enabled: true
+    hostname: thinpost-edge-submission.thinpost-edge.svc
+    certificateSecret: thinpost-edge-submission-internal   # tls.crt, tls.key, ca.crt
+    clientNamespaceSelector:
+      matchLabels:
+        thinpost-submission: allowed
+    clientCidrs: []
+```
+
+The chart then renders a ClusterIP Service `thinpost-edge-submission` on port 587, reachable as `thinpost-edge-submission.<namespace>.svc`, and a NetworkPolicy ingress rule for the listed clients. The Secret must come from a cluster-local CA (for example cert-manager) and cover `hostname`; clients trust that CA. The internal listener is not shown in the console. Clients' namespaces with a default-deny egress policy need a rule that allows port 587 to the edge.
+
 ## Control Service and network policy
 
 The control plane dials a stable address. Create a ClusterIP Service in the edge namespace and use its address as `THINPOST_CONTROL_EDGE_TARGET`:
