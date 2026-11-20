@@ -18,6 +18,9 @@ type RuntimeFeatures struct {
 	// replica does not enforce a recipient policy (no control bridge), in which
 	// case the field is omitted.
 	RecipientPolicy string `json:"recipient_policy,omitempty"`
+	// SMTPSubmission is true when this replica accepts mail over SMTP. The
+	// console shows the SMTP tab only then.
+	SMTPSubmission bool `json:"smtp_submission"`
 }
 
 // RuntimeTracking is the tracking deployment configuration, present only when

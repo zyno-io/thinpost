@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"net/http"
 	"net/netip"
 	"strings"
 	"time"
@@ -174,4 +175,141 @@ func normalizeSMTPAddress(value string) (string, bool) {
 		return "", false
 	}
 	return local + "@" + domain, true
+}
+
+// SigningReadiness is the slice of the signing resolver the SMTP tab needs.
+// Ready returns nil when mail from the domain would be DKIM-signed now.
+type SigningReadiness interface {
+	Ready(ctx context.Context, appID, domain string) error
+}
+
+// smtpRoute serves /api/v1/apps/{appId}/smtp...; it reports whether it handled
+// the request.
+func (h *Handler) smtpRoute(w http.ResponseWriter, r *http.Request, actor, appID string, path []string) bool {
+	if len(path) < 6 || path[5] != "smtp" {
+		return false
+	}
+	store, ok := h.Store.(SMTPStore)
+	if !ok {
+		fail(w, http.StatusServiceUnavailable)
+		return true
+	}
+	switch {
+	case len(path) == 6:
+		if r.Method != http.MethodGet {
+			method(w, "GET")
+			return true
+		}
+		h.getAppSMTP(w, r, store, appID)
+	case len(path) == 7 && path[6] == "settings":
+		if r.Method != http.MethodPut {
+			method(w, "PUT")
+			return true
+		}
+		h.updateAppSMTPSettings(w, r, store, actor, appID)
+	case len(path) == 7 && path[6] == "credentials":
+		if r.Method != http.MethodPost {
+			method(w, "POST")
+			return true
+		}
+		var request struct {
+			Name string `json:"name"`
+		}
+		if decode(r, &request) != nil || !safeText(request.Name, 128) {
+			fail(w, http.StatusBadRequest)
+			return true
+		}
+		issued, err := store.IssueSMTPCredential(r.Context(), actor, appID, request.Name)
+		if err != nil {
+			storeError(w, err)
+			return true
+		}
+		respond(w, http.StatusCreated, issued)
+	case len(path) == 8 && path[6] == "credentials" && opaqueID(path[7]):
+		if r.Method != http.MethodDelete {
+			method(w, "DELETE")
+			return true
+		}
+		if err := store.RevokeSMTPCredential(r.Context(), actor, appID, path[7]); err != nil {
+			storeError(w, err)
+			return true
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.NotFound(w, r)
+	}
+	return true
+}
+
+func (h *Handler) getAppSMTP(w http.ResponseWriter, r *http.Request, store SMTPStore, appID string) {
+	policy, err := store.GetSMTPSettings(r.Context(), appID)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	credentials, err := store.ListSMTPCredentials(r.Context(), appID)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	connection, err := store.SMTPConnection(r.Context(), appID, h.PrimarySource)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	if credentials == nil {
+		credentials = []SMTPCredential{}
+	}
+	respond(w, http.StatusOK, AppSMTP{Settings: h.smtpSettings(r.Context(), appID, policy), Credentials: credentials, Connection: connection})
+}
+
+func (h *Handler) updateAppSMTPSettings(w http.ResponseWriter, r *http.Request, store SMTPStore, actor, appID string) {
+	var request struct {
+		From *struct {
+			Mode             string  `json:"mode"`
+			Domain           *string `json:"domain"`
+			KeepOrigin       *bool   `json:"keep_origin"`
+			Address          *string `json:"address"`
+			OnlyUnauthorized *bool   `json:"only_unauthorized"`
+		} `json:"from"`
+	}
+	if decode(r, &request) != nil || request.From == nil || request.From.KeepOrigin == nil || request.From.OnlyUnauthorized == nil {
+		fail(w, http.StatusBadRequest)
+		return
+	}
+	policy, ok := NormalizeSMTPFromPolicy(SMTPFromPolicy{
+		Mode: request.From.Mode, Domain: request.From.Domain, KeepOrigin: *request.From.KeepOrigin,
+		Address: request.From.Address, OnlyUnauthorized: *request.From.OnlyUnauthorized,
+	})
+	if !ok {
+		fail(w, http.StatusBadRequest)
+		return
+	}
+	stored, err := store.SetSMTPSettings(r.Context(), actor, appID, policy)
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	respond(w, http.StatusOK, h.smtpSettings(r.Context(), appID, stored))
+}
+
+// smtpSettings adds the signing check for the domain the policy targets. It is
+// null without a signing catalog and empty when the policy targets no domain.
+func (h *Handler) smtpSettings(ctx context.Context, appID string, policy SMTPFromPolicy) SMTPSettings {
+	settings := SMTPSettings{From: policy}
+	if h.SigningReadiness == nil {
+		return settings
+	}
+	settings.SigningReady = []SMTPSigningReady{}
+	target := ""
+	switch {
+	case policy.Domain != nil:
+		target = *policy.Domain
+	case policy.Address != nil:
+		target = SMTPAddressDomain(*policy.Address)
+	}
+	if target != "" {
+		settings.SigningReady = append(settings.SigningReady, SMTPSigningReady{Domain: target, Ready: h.SigningReadiness.Ready(ctx, appID, target) == nil})
+	}
+	return settings
 }
