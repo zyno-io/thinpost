@@ -43,8 +43,10 @@ func (SubmissionCredential) GoString() string { return "<smtp credential redacte
 // Format redacts under every verb, including %+v.
 func (c SubmissionCredential) Format(f fmt.State, _ rune) { _, _ = f.Write([]byte(c.String())) }
 
-// SubmissionMessage is one submission to send to control. Body must not be
-// modified until Submit returns: its bytes are sent in place, not copied.
+// SubmissionMessage is one submission to send to control. Body is sent in
+// place, not copied, and the stream may still be serializing it after Submit
+// returns (a write abandoned on cancellation or timeout keeps running). Body
+// is therefore immutable forever: never modify it, pool it or reuse it.
 type SubmissionMessage struct {
 	// ID is the 32-hex transfer ID; a random one is used when empty.
 	ID         string
@@ -52,6 +54,11 @@ type SubmissionMessage struct {
 	MailFrom   string
 	Rcpts      []string
 	ClientIP   netip.Addr
+	// TLSVersion is the version name from the connection's real
+	// tls.ConnectionState (for example "TLS 1.3"). Empty means the message did
+	// not arrive over TLS; any non-empty value means it did, and control relies
+	// on that for Enhanced Protection. Values not shaped like a TLS or SSL
+	// version name are refused.
 	TLSVersion string
 	Received   time.Time
 	// Port is 465 or 587; 0 for the internal listener.
@@ -79,6 +86,9 @@ type SubmissionClient interface {
 	Available() bool
 	// Verify checks a credential. The verdict is never UNSPECIFIED or unknown.
 	Verify(ctx context.Context, c SubmissionCredential, clientIP netip.Addr) (controlv1.SubmissionAuthVerdict, error)
+	// Submit sends one message. Its Body is immutable forever (see
+	// SubmissionMessage). A permanent envelope or credential problem comes back
+	// as a verdict, not an error.
 	// Submit sends one message and waits for control's durable verdict. It has
 	// no spool: an error means nothing was committed that the client has been
 	// told about, and the SMTP side answers 451.
@@ -385,8 +395,13 @@ func (b *submissionBridge) Submit(ctx context.Context, m SubmissionMessage) (Sub
 	if m.ClientIP.IsValid() {
 		start.ClientIp = m.ClientIP.String()
 	}
-	if !edgeprotocol.ValidSubmissionStart(start) {
+	if !edgeprotocol.ValidSubmissionFraming(start) {
 		return SubmitResult{}, errors.New("invalid submission")
+	}
+	if verdict := edgeprotocol.SubmissionStartVerdict(start); verdict != controlv1.SubmissionVerdict_SUBMISSION_VERDICT_UNSPECIFIED {
+		// A permanent envelope or credential problem: answer it like control
+		// would, instead of an error that makes the client retry forever.
+		return SubmitResult{Verdict: verdict}, nil
 	}
 	b.mu.Lock()
 	c := b.active

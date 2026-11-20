@@ -48,6 +48,7 @@ func TestValidSubmissionStartBounds(t *testing.T) {
 		"ip":         func(s *controlv1.SubmissionStart) { s.ClientIp = "nope" },
 		"tls":        func(s *controlv1.SubmissionStart) { s.TlsVersion = strings.Repeat("a", 65) },
 		"port":       func(s *controlv1.SubmissionStart) { s.Port = 25 },
+		"tls none":   func(s *controlv1.SubmissionStart) { s.TlsVersion = "none" },
 		"time":       func(s *controlv1.SubmissionStart) { s.ReceivedUnixMs = -1 },
 	}
 	for name, mutate := range mutations {
@@ -59,7 +60,10 @@ func TestValidSubmissionStartBounds(t *testing.T) {
 	}
 	// Max-size recipients and null path are fine.
 	s := submissionStart(body)
-	s.MailFrom, s.ClientIp, s.Port = "", "", 0
+	s.MailFrom, s.ClientIp, s.Port, s.TlsVersion = "", "", 0, ""
+	if !ValidSubmissionStart(func() *controlv1.SubmissionStart { c := submissionStart(body); c.TlsVersion = "TLS 1.3"; return c }()) {
+		t.Fatal("TLS 1.3 rejected")
+	}
 	s.RcptTo = make([]string, MaxSubmissionRecipients)
 	for i := range s.RcptTo {
 		s.RcptTo[i] = "u@example.com"

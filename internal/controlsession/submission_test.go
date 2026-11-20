@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -791,5 +792,87 @@ func TestSubmissionDrainWaitsForBothLanes(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the drain did not finish")
+	}
+}
+
+// A bad Ready.submission_ports ends a session only when the worker reported
+// submission/1 and this controller serves it; otherwise the console-only field
+// is ignored and the session (deliveries, inbound) carries on.
+func TestBadSubmissionPortsAreIgnoredWithoutTheCapability(t *testing.T) {
+	for name, tc := range map[string]struct {
+		service Submission
+		cap     bool
+	}{
+		"edge without the capability":     {newFakeSubmission(), false},
+		"control without the service":     {nil, true},
+		"neither side has the capability": {nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			runner, out, in := setupRunner(&fakeIssuer{}, &fakeResults{})
+			runner.Submission = tc.service
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- runner.Run(ctx) }()
+			open := (<-out).GetOpen()
+			ready := readyFrame(open)
+			if tc.cap {
+				ready.GetReady().Capabilities = []string{edgeprotocol.CapSubmission}
+			}
+			ready.GetReady().SubmissionPorts = []uint32{0, 587, 587}
+			in <- ready
+			in <- &controlv1.EdgeFrame{Body: &controlv1.EdgeFrame_ReplayComplete{ReplayComplete: &controlv1.ReplayComplete{}}}
+			assertReconciled(t, <-out, open)
+			select {
+			case err := <-done:
+				t.Fatalf("the session ended: %v", err)
+			default:
+			}
+		})
+	}
+}
+
+type shiftedClock struct{ offset atomic.Int64 }
+
+func (c *shiftedClock) now() time.Time { return time.Now().Add(time.Duration(c.offset.Load())) }
+
+// The lease guards on credential results and acknowledgements are exercised by
+// making validLease false while the session context is still live: the
+// guard timer runs on the real clock, the runner's lease check on a shifted one.
+func TestResultsAreNotSentWhenTheLeaseIsInvalidButTheSessionIsLive(t *testing.T) {
+	for _, kind := range []string{"auth", "submit"} {
+		t.Run(kind, func(t *testing.T) {
+			sub := newFakeSubmission()
+			sub.verifyBlock = make(chan struct{})
+			clock := &shiftedClock{}
+			h := startSubmissionSession(t, sub, true, func(r *Runner) { r.clock = clock.now })
+			if kind == "auth" {
+				h.auth(subA)
+				time.Sleep(50 * time.Millisecond)
+				clock.offset.Store(int64(time.Hour))
+				close(sub.verifyBlock)
+			} else {
+				h.send(t, subA, []byte("hello"))
+				<-sub.started
+				clock.offset.Store(int64(time.Hour))
+				sub.release <- smtpintake.Result{Outcome: smtpintake.Accepted, MessageID: "0123456789abcdef0123456789abcdef"}
+			}
+			deadline := time.After(5 * time.Second)
+			for {
+				select {
+				case frame := <-h.out:
+					if frame.GetAuthResult() != nil || frame.GetSubmissionAck() != nil {
+						t.Fatal("a result was sent without a valid lease")
+					}
+				case err := <-h.done:
+					if !errors.Is(err, ErrLeaseExpired) {
+						t.Fatalf("%v", err)
+					}
+					return
+				case <-deadline:
+					t.Fatal("the session did not end")
+				}
+			}
+		})
 	}
 }

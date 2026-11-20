@@ -320,8 +320,19 @@ func TestSubmitRefusedWithoutASessionOrWhenInvalid(t *testing.T) {
 	if _, err := h.b.Submit(context.Background(), SubmissionMessage{Credential: testCredential, Rcpts: []string{"u@example.com"}}); err == nil {
 		t.Fatal("an empty body was sent")
 	}
-	if _, err := h.b.Submit(context.Background(), SubmissionMessage{Credential: SubmissionCredential{ID: "x", Secret: "y"}, Rcpts: []string{"u@example.com"}, Body: []byte("x")}); err == nil {
-		t.Fatal("a malformed credential was sent")
+	// A permanent problem is a verdict, not an error the client retries forever.
+	if r, err := h.b.Submit(context.Background(), SubmissionMessage{Credential: SubmissionCredential{ID: "x", Secret: "y"}, Rcpts: []string{"u@example.com"}, Body: []byte("x")}); err != nil || r.Verdict != controlv1.SubmissionVerdict_SUBMISSION_VERDICT_CREDENTIAL_INVALID {
+		t.Fatalf("a malformed credential: %+v %v", r, err)
+	}
+	noRcpt := testMessage([]byte("x"))
+	noRcpt.Rcpts = nil
+	if r, err := h.b.Submit(context.Background(), noRcpt); err != nil || r.Verdict != controlv1.SubmissionVerdict_SUBMISSION_VERDICT_MESSAGE_INVALID {
+		t.Fatalf("no recipients: %+v %v", r, err)
+	}
+	bogusTLS := testMessage([]byte("x"))
+	bogusTLS.TLSVersion = "none"
+	if r, err := h.b.Submit(context.Background(), bogusTLS); err != nil || r.Verdict != controlv1.SubmissionVerdict_SUBMISSION_VERDICT_MESSAGE_INVALID {
+		t.Fatalf("bogus TLS version: %+v %v", r, err)
 	}
 	if len(h.sent) != 0 {
 		t.Fatal("an invalid submission reached the stream")
@@ -630,5 +641,21 @@ func TestNilSubmissionFramesEndTheSession(t *testing.T) {
 	ss.stream.incoming <- &controlv1.ControlFrame{Body: &controlv1.ControlFrame_SubmissionAck{}}
 	if err := <-ss.done; err == nil {
 		t.Fatal("a nil acknowledgement was accepted")
+	}
+}
+
+func TestEnableSubmissionRejectsBadPorts(t *testing.T) {
+	for _, ports := range [][]uint32{{0}, {65536}, {587, 587}, {1, 2, 3, 4, 5, 6, 7, 8, 9}} {
+		s, _, _, _ := setup(t, true)
+		if err := s.EnableSubmission(ports...); err == nil {
+			t.Fatalf("%v accepted", ports)
+		}
+		if s.submission.isEnabled() {
+			t.Fatalf("%v enabled the capability", ports)
+		}
+	}
+	s, _, _, _ := setup(t, true)
+	if err := s.EnableSubmission(465, 587); err != nil || !s.submission.isEnabled() {
+		t.Fatal(err)
 	}
 }

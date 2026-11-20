@@ -176,7 +176,7 @@ The control plane validates the lists and treats a violation as an invalid readi
 - `source_addresses`: at most 16 entries, each unique, in canonical text form, and a public address.
 - `source_hostnames`: absent, or exactly one normalized, unique DNS name per source address, each at most 219 characters.
 - `bounce_domains`: at most 24 entries, normalized and unique, each at most 219 characters.
-- `submission_ports`: at most 8 entries, each unique and from 1 to 65535. A violation is an invalid readiness. The control plane records the ports for display only when it serves `submission/1` itself and the Edge reported the capability; otherwise it records none.
+- `submission_ports`: at most 8 entries, each unique and from 1 to 65535. It is checked only when the Edge reported `submission/1` and the control plane serves it, and a violation then is an invalid readiness; otherwise the field is ignored. The Edge refuses to enable submission with an invalid list. The control plane records the ports for display only when it serves `submission/1` itself and the Edge reported the capability; otherwise it records none.
 - No sources with bounce domains or host names is malformed. No sources and no domains means a legacy Edge, which sends only from its primary address.
 
 The control plane never hands the Edge a delivery whose source or bounce domain the Edge did not report. Such a delivery stays queued.
@@ -397,7 +397,7 @@ The result never reports app state, so a client of a paused app can still authen
 | `mail_from` | string | The SMTP reverse path: printable ASCII, at most 320 bytes. Empty for the null sender. |
 | `rcpt_to` | repeated string | Envelope recipients. 1 to 100 entries, each 1 to 320 bytes. |
 | `client_ip` | string | Empty or a valid IP address. |
-| `tls_version` | string | TLS version of the SMTP connection, at most 64 bytes. |
+| `tls_version` | string | TLS version of the SMTP connection as the TLS library names it (`TLS 1.3`), at most 64 bytes. Empty means the message did not arrive over TLS; any non-empty value means it did, and the control plane relies on that for Enhanced Protection. The Edge sets it only from the real connection state. Values not shaped like a TLS or SSL version name are refused. |
 | `received_unix_ms` | int64 | Receipt time in Unix milliseconds. |
 | `port` | uint32 | `465` or `587`; `0` for the internal listener. |
 
@@ -546,7 +546,7 @@ SMTP submission from app clients uses the same stream behind the `submission/1` 
 
 **Credential check.** The Edge sends `SubmissionAuth` when a client authenticates and waits at most 10 seconds. It has at most 16 checks pending and answers `THROTTLED` itself beyond that. The control plane applies a per-session limit of 20 checks per second with a burst of 40, and the same pending cap, answering `THROTTLED` without a database call. While draining it answers `TEMPFAIL`. It replies only while its lease is valid, and the Edge accepts a result only while its own lease and fence are valid.
 
-**Transfer.** For each message the Edge sends `SubmissionStart` and the decoded message in chunks of at most 64 KiB, and answers the SMTP client only after the verdict. The chunks are sent from the message buffer without copying. Chunks of different messages can interleave.
+**Transfer.** For each message the Edge sends `SubmissionStart` and the decoded message in chunks of at most 64 KiB, and answers the SMTP client only after the verdict. The chunks are sent from the message buffer without copying, and the stream can still be serializing them after the send returns, so the Edge treats the buffer as immutable and never reuses it. Chunks of different messages can interleave.
 
 | Verdict | Meaning | Edge SMTP answer |
 | --- | --- | --- |
@@ -663,7 +663,7 @@ An Edge that rejects a session or frame ends the stream with a gRPC status. The 
 | `UNIMPLEMENTED` | `control frame not implemented` | A frame the Edge does not accept. |
 | `DEADLINE_EXCEEDED` | `control stream write timed out` | The Edge could not write to the stream within 15 seconds. |
 
-The control plane ends its own session, without a status, when the Edge violates the sequence: a repeated or mismatched `Ready`, a result or pull out of order, a `StartRequest` that does not match the active delivery or its descriptor digest, an unexpected bounce or chunk, an invalid chunk, or a `LeaseAccepted` that does not match the pending renewal. For submission it also ends the session on `submission not available` (a submission frame without the negotiated capability or before reconciliation, a duplicate or over-numerous transfer), `invalid submission chunk` and `invalid final submission chunk` (a chunk out of order or a bad length), `unexpected submission chunk` (a chunk for an unknown transfer) and `submission straggler overflow` (a chunk for a transfer that aged out of the straggler memory). It also ends the session when its own lease expires (`controller lease expired`) or when a database commit fails.
+The control plane ends its own session, without a status, when the Edge violates the sequence: a repeated or mismatched `Ready`, a result or pull out of order, a `StartRequest` that does not match the active delivery or its descriptor digest, an unexpected bounce or chunk, an invalid chunk, or a `LeaseAccepted` that does not match the pending renewal. For submission it also ends the session on `submission not available` (a submission frame without the negotiated capability or before reconciliation, a malformed `request_id`, bad start framing, or a duplicate or over-numerous transfer), `invalid chunk`, `invalid final chunk` and `digest mismatch` (the assembler's errors for a chunk out of order, a bad length or final flag, or a wrong SHA-256), `invalid submission chunk` and `invalid final submission chunk` (the same checks on a discarded transfer), `unexpected submission chunk` (a chunk for an unknown transfer) and `submission straggler overflow` (a chunk for a transfer that aged out of the straggler memory). It also ends the session when its own lease expires (`controller lease expired`) or when a database commit fails.
 
 ## Reconnection
 

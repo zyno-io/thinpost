@@ -2537,7 +2537,11 @@ type SubmissionStart struct {
 	// 1..100 recipients.
 	RcptTo []string `protobuf:"bytes,7,rep,name=rcpt_to,json=rcptTo,proto3" json:"rcpt_to,omitempty"`
 	// Empty or a valid IP address.
-	ClientIp       string `protobuf:"bytes,8,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`
+	ClientIp string `protobuf:"bytes,8,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`
+	// Empty means the message did not arrive over TLS; any non-empty value (as
+	// the TLS library names it, such as "TLS 1.3") means it did. Control relies
+	// on this for Enhanced Protection, so the worker sets it only from the real
+	// connection state.
 	TlsVersion     string `protobuf:"bytes,9,opt,name=tls_version,json=tlsVersion,proto3" json:"tls_version,omitempty"`
 	ReceivedUnixMs int64  `protobuf:"varint,10,opt,name=received_unix_ms,json=receivedUnixMs,proto3" json:"received_unix_ms,omitempty"`
 	// 465 or 587; 0 for the internal listener.

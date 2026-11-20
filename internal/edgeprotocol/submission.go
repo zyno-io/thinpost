@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"net/netip"
+	"strings"
 
 	controlv1 "github.com/zyno-io/thinpost/api/control/v1"
 )
@@ -118,7 +119,7 @@ func ValidSubmissionStart(start *controlv1.SubmissionStart) bool {
 	if !ValidSubmissionFraming(start) || !ValidSubmissionID(start.CredentialId) || !ValidSubmissionSecret(start.Secret) {
 		return false
 	}
-	if len(start.RcptTo) == 0 || len(start.RcptTo) > MaxSubmissionRecipients || len(start.TlsVersion) > 64 || !validPath(start.MailFrom) {
+	if len(start.RcptTo) == 0 || len(start.RcptTo) > MaxSubmissionRecipients || !validTLSVersion(start.TlsVersion) || !validPath(start.MailFrom) {
 		return false
 	}
 	for _, rcpt := range start.RcptTo {
@@ -132,6 +133,16 @@ func ValidSubmissionStart(start *controlv1.SubmissionStart) bool {
 		return false
 	}
 	return validOptionalIP(start.ClientIp) && start.ReceivedUnixMs >= 0 && start.ReceivedUnixMs <= 253402300799999
+}
+
+// validTLSVersion accepts the empty string (plaintext) or a name as the TLS
+// library reports it ("TLS 1.3", "SSL 3.0"). Anything else, such as "none", is
+// refused.
+func validTLSVersion(v string) bool {
+	if v == "" {
+		return true
+	}
+	return len(v) <= 64 && (strings.HasPrefix(v, "TLS ") || strings.HasPrefix(v, "SSL ")) && validPath(v)
 }
 
 func validPath(value string) bool {
