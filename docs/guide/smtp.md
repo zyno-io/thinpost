@@ -147,7 +147,7 @@ The SMTP tab warns you when the chosen domain would not be signed yet.
 | Line length | 998 characters, in headers and in the body |
 | Header characters | ASCII only. Encode non-ASCII text in a header (a `Subject` with an accent, a display name) as an [RFC 2047](https://www.rfc-editor.org/rfc/rfc2047) encoded word, as every mail library does. |
 | Body | 8-bit text is accepted and passed on as written. NUL bytes and a bare carriage return are refused. Use `quoted-printable` or `base64` for the widest compatibility. |
-| Addresses | ASCII only. Thinpost does not offer SMTPUTF8. Recipients must be plain addresses: a quoted local part such as `"a b"@example.com` is refused with `553 5.1.3`. |
+| Addresses | ASCII only. Thinpost does not offer SMTPUTF8. Recipients must be plain addresses. A quoted local part that isn't a plain name is refused: `"a b"@example.com` gets `501 5.1.3`, and quoting that hides characters such as `"\"ops\""@example.com` gets `553 5.1.3`. Quotes around a plain name (`"ops"@example.com`) are harmless and accepted. |
 | Connection | A connection allows three sign-in attempts and 100 messages. A client must sign in within 2 minutes of connecting, and the connection is closed 30 minutes after it was opened. A single message transfer that takes longer than 10 minutes, or stalls, is cut and the connection closed. |
 
 On top of these, the app's own [limits](/guide/console#app-limits) apply: the submission rate, the daily recipient quota and the pending-message limit. A new app starts with all three at zero, which blocks everything until an administrator raises them.
@@ -180,7 +180,7 @@ Thinpost replies with standard codes, so any SMTP client or relay will queue and
 | `554 5.6.0 Message content not supported` | Non-ASCII or NUL bytes in headers, a line over 998 characters, a bare carriage return or NUL in the body. |
 | `554 5.6.0 Message is empty` | No data. |
 | `452 4.5.3` (`Maximum limit of 100 recipients reached`) | More than 100 `RCPT TO` commands. |
-| `553 5.1.3 Quoted addresses are not supported` | A `RCPT TO` address with a quoted local part. Use a plain address. |
+| `501 5.1.3` or `553 5.1.3 Quoted addresses are not supported` | A `RCPT TO` address whose local part isn't a plain name (spaces, escaped quotes and similar). Use a plain address. |
 | `451 4.3.0 Temporary failure, try again later` or `Temporary delivery failure` | Thinpost could not decide right now: the database, storage or the control connection is unavailable. |
 | `421 4.3.2` or `421 4.7.0`, then the connection closes | The service is going away, or the client misbehaved too often on this connection. |
 
