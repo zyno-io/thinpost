@@ -450,3 +450,29 @@ func TestIntakeSigningReadiness(t *testing.T) {
 		t.Fatal("readiness is checked for the effective sender domain", f.signer.calls)
 	}
 }
+
+// Identical concurrent submissions are resolved by the primary-key conflict in
+// Commit: one message, and every caller gets its ID.
+func TestIntakeConcurrentIdenticalSubmits(t *testing.T) {
+	for name, body := range map[string]string{"kind M": withID, "kind C": dated} {
+		f := newDBFixture(t)
+		const n = 8
+		results := make(chan Result, n)
+		start := make(chan struct{})
+		for i := 0; i < n; i++ {
+			go func() { <-start; results <- f.submit(body) }()
+		}
+		close(start)
+		ids := map[string]int{}
+		for i := 0; i < n; i++ {
+			r := <-results
+			if r.Outcome != Accepted {
+				t.Fatalf("%s: %v", name, r.Outcome)
+			}
+			ids[r.MessageID]++
+		}
+		if len(ids) != 1 || f.messages() != 1 || f.count("SELECT count(*) FROM idempotency_keys") != 1 {
+			t.Fatalf("%s: ids %v, messages %d", name, ids, f.messages())
+		}
+	}
+}

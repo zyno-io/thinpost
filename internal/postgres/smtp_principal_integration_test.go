@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/zyno-io/thinpost/internal/acceptance"
+	"github.com/zyno-io/thinpost/internal/delivery"
 	"github.com/zyno-io/thinpost/internal/smtpcred"
 	"github.com/zyno-io/thinpost/internal/submission"
 )
@@ -217,10 +218,19 @@ func TestHTTPIdempotencyKeepsTheLiteralWindow(t *testing.T) {
 	if _, err := f.repo.Commit(f.ctx, again); !errors.Is(err, submission.ErrIdempotencyConflict) {
 		t.Fatal("conflict", err)
 	}
-	// A batch commit never accepts the SMTP principal.
-	batch := acceptance.BatchRecord{Record: acceptance.Record{AppID: f.app, SMTPCredentialID: f.cred, Adapter: "resend"}, Items: []acceptance.BatchItem{{}}}
+	// A batch commit never accepts the SMTP principal. The batch is otherwise
+	// valid and carries a real key, so the credential is the only thing refused.
+	item := func() acceptance.BatchItem {
+		return withItemMetadata(acceptance.BatchItem{ObjectKey: fixtureObjectKey("submissions", f.randomID()), From: "sender@example.com", RecipientCount: 1})
+	}
+	batch := acceptance.BatchRecord{Record: acceptance.Record{AppID: f.app, KeyID: f.key, SMTPCredentialID: f.cred, Adapter: "resend"}, Items: []acceptance.BatchItem{item()}}
 	if _, err := f.repo.CommitBatch(f.ctx, batch); !errors.Is(err, submission.ErrInvalidMessage) {
-		t.Fatal("batch", err)
+		t.Fatal("batch with a credential", err)
+	}
+	batch.SMTPCredentialID = ""
+	batch.Items = []acceptance.BatchItem{item()}
+	if _, err := f.repo.CommitBatch(f.ctx, batch); err != nil {
+		t.Fatal("the same batch without the credential must commit", err)
 	}
 }
 
@@ -232,8 +242,22 @@ func TestReserveSMTPSubmissionChecksTheCredential(t *testing.T) {
 	if err := f.repo.ReserveSMTPSubmission(f.ctx, f.app, f.cred, sha256.Sum256([]byte("wrong"))); !errors.Is(err, submission.ErrInvalidKey) {
 		t.Fatal("wrong digest", err)
 	}
-	if err := f.repo.ReserveSMTPSubmission(f.ctx, strings.Repeat("c", 32), f.cred, f.digest); !errors.Is(err, submission.ErrInvalidMessage) {
-		t.Fatal("another app", err)
+	other := strings.Repeat("c", 32)
+	f.exec(`INSERT INTO apps(id,name,submission_rate_per_minute,submission_burst) VALUES ($1,'Other',6000,100)`, other)
+	f.exec(`UPDATE apps SET submission_tokens=100::bigint*60000000,submission_refilled_at=clock_timestamp() WHERE id=$1`, other)
+	otherIssued, err := f.repo.IssueSMTPCredential(f.ctx, "operator", other, "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDigest := sha256.Sum256([]byte(otherIssued.Password))
+	if err := f.repo.ReserveSMTPSubmission(f.ctx, other, f.cred, f.digest); !errors.Is(err, submission.ErrInvalidKey) {
+		t.Fatal("the first app's credential must be refused for another app", err)
+	}
+	if err := f.repo.ReserveSMTPSubmission(f.ctx, f.app, otherIssued.Username, otherDigest); !errors.Is(err, submission.ErrInvalidKey) {
+		t.Fatal("another app's credential must be refused for this app", err)
+	}
+	if err := f.repo.ReserveSMTPSubmission(f.ctx, other, otherIssued.Username, otherDigest); err != nil {
+		t.Fatal("the other app's own credential", err)
 	}
 	f.exec(`UPDATE apps SET active=false WHERE id=$1`, f.app)
 	if err := f.repo.ReserveSMTPSubmission(f.ctx, f.app, f.cred, f.digest); !errors.Is(err, submission.ErrAppPaused) {
@@ -251,4 +275,28 @@ func TestReserveSMTPSubmissionChecksTheCredential(t *testing.T) {
 		t.Fatal("key on an empty bucket", err)
 	}
 	_ = smtpcred.SecretPrefix
+}
+
+// HTTP keeps ErrInvalidMessage where the SMTP path reports server-side faults
+// with their own sentinels.
+func TestSentinelsOnHTTPAndSMTPPaths(t *testing.T) {
+	f := newSMTPCommitFixture(t)
+	f.exec(`UPDATE sender_domains SET active=false`)
+	if _, err := f.repo.Commit(f.ctx, f.httpRecord()); !errors.Is(err, submission.ErrInvalidMessage) {
+		t.Fatal("HTTP with an inactive sender domain", err)
+	}
+	if _, err := f.repo.Commit(f.ctx, f.smtpRecord()); !errors.Is(err, submission.ErrSenderDomainInactive) || errors.Is(err, submission.ErrInvalidMessage) {
+		t.Fatal("SMTP with an inactive sender domain", err)
+	}
+	f.exec(`UPDATE sender_domains SET active=true`)
+	record := f.smtpRecord()
+	record.Fence.Epoch = 0
+	if _, err := f.repo.Commit(f.ctx, record); !errors.Is(err, delivery.ErrLeaseInvalid) {
+		t.Fatal("a malformed fence", err)
+	}
+	record = f.smtpRecord()
+	record.IdempotencyKey = "smtp1:x"
+	if _, err := f.repo.Commit(f.ctx, record); !errors.Is(err, ErrSMTPRecordInvalid) || errors.Is(err, submission.ErrInvalidMessage) {
+		t.Fatal("a key without a TTL", err)
+	}
 }

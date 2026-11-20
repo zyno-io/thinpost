@@ -26,6 +26,11 @@ import (
 //go:embed schema.sql migrations/*.sql
 var Schema embed.FS
 
+// ErrSMTPRecordInvalid reports an SMTP commit record that breaks a server-side
+// invariant (a key without a TTL, a malformed original From). It is a bug in
+// the caller, not a bad message, so intake answers it as a temporary failure.
+var ErrSMTPRecordInvalid = errors.New("invalid SMTP commit record")
+
 type Repository struct {
 	DB *sql.DB
 	// Generation comes from deployment configuration, independently of SQL.
@@ -116,11 +121,15 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 		// The fence names the control session lease the commit is valid under;
 		// without a usable one nothing can be fenced, so nothing is committed.
 		lease = ControllerLease{WorkerID: record.Fence.WorkerID, ControllerID: record.Fence.ControllerID, Epoch: record.Fence.Epoch}
-		if !leaseID(lease.WorkerID) || !leaseID(lease.ControllerID) || lease.Epoch == 0 ||
-			len(record.OriginalFromAddress) > maxRecordedAddressBytes || !utf8.ValidString(record.OriginalFromAddress) || strings.ContainsAny(record.OriginalFromAddress, "\x00\r\n") ||
+		// A fence that cannot name a lease is a server-side fault, answered as a
+		// lost lease (a temporary failure), never as a bad message.
+		if !leaseID(lease.WorkerID) || !leaseID(lease.ControllerID) || lease.Epoch == 0 {
+			return receipt, delivery.ErrLeaseInvalid
+		}
+		if len(record.OriginalFromAddress) > maxRecordedAddressBytes || !utf8.ValidString(record.OriginalFromAddress) || strings.ContainsAny(record.OriginalFromAddress, "\x00\r\n") ||
 			record.OriginalFromAddress != "" && len(record.OriginalFromAddress) < 3 ||
 			(record.IdempotencyKey == "") != (record.IdempotencyTTL == 0) || record.IdempotencyTTL < 0 || record.IdempotencyTTL > 24*time.Hour || len(record.IdempotencyKey) > 256 {
-			return receipt, submission.ErrInvalidMessage
+			return receipt, ErrSMTPRecordInvalid
 		}
 	}
 	tx, err := r.beginRuntime(ctx)
@@ -192,6 +201,9 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 		}
 		err = tx.QueryRowContext(ctx, `SELECT true FROM sender_domains WHERE app_id=$1 AND domain=$2 AND active FOR SHARE`, record.AppID, strings.ToLower(senderDomain)).Scan(&exists)
 		if errors.Is(err, sql.ErrNoRows) {
+			if smtp {
+				return receipt, submission.ErrSenderDomainInactive
+			}
 			return receipt, submission.ErrInvalidMessage
 		}
 		if err != nil {

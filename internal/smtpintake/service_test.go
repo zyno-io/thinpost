@@ -490,3 +490,50 @@ func TestReplayKindOf(t *testing.T) {
 		}
 	}
 }
+
+// The zero values must never read as success.
+func TestZeroValuesAreNotSuccess(t *testing.T) {
+	var auth AuthResult
+	var result Result
+	if auth == AuthOK || auth != AuthUnspecified || result.Outcome == Accepted || result.Outcome != OutcomeUnspecified {
+		t.Fatal("a zero value means success")
+	}
+	if Accepted == OutcomeUnspecified || AuthOK == AuthUnspecified {
+		t.Fatal("success shares the zero value")
+	}
+	if OutcomeUnspecified.String() != "unspecified" {
+		t.Fatal(OutcomeUnspecified.String())
+	}
+	// Submit never hands the zero value on, even if a stage were to.
+	r := newRig(t)
+	r.service.Replay = nil
+	if got := r.submit(dated); got.Outcome != Tempfail {
+		t.Fatal(got)
+	}
+}
+
+func TestSubmitSenderDomainInactiveIsMisconfigured(t *testing.T) {
+	r := newRig(t)
+	r.repo.commitErr = submission.ErrSenderDomainInactive
+	if got := r.submit(dated); got.Outcome != Misconfigured {
+		t.Fatal(got)
+	}
+	r.repo.commitErr = postgres.ErrSMTPRecordInvalid
+	if got := r.submit(dated); got.Outcome != Tempfail {
+		t.Fatal(got)
+	}
+}
+
+func TestMessageRedactsSecretAndBody(t *testing.T) {
+	m := message(dated)
+	m.Secret = "tps_very-secret"
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%d"} {
+		for _, out := range []string{fmt.Sprintf(verb, m), fmt.Sprintf(verb, &m), fmt.Sprintf(verb, []Message{m})} {
+			for _, leak := range []string{"tps_very-secret", "body", "sender@example.com", "rcpt@example.net", "From:"} {
+				if strings.Contains(out, leak) {
+					t.Fatalf("%s leaks %q: %s", verb, leak, out)
+				}
+			}
+		}
+	}
+}

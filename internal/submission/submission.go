@@ -27,6 +27,10 @@ var (
 	// is, so a paused app reads as an invalid key to a key principal). The batch
 	// adapters never see it.
 	ErrAppPaused = errors.New("application is paused")
+	// ErrSenderDomainInactive reports that the sender domain stopped being an
+	// active domain of the app between the policy decision and the commit. It
+	// is returned on the raw (SMTP) path only; HTTP reports ErrInvalidMessage.
+	ErrSenderDomainInactive = errors.New("sender domain is not active")
 	// ErrMessageTooLarge reports a raw message whose prepared form would not
 	// fit the delivery limits. It is returned on the raw (SMTP) path only.
 	ErrMessageTooLarge = errors.New("message too large")

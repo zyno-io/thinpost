@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/netip"
 	"strings"
 	"time"
@@ -26,7 +27,10 @@ import (
 type AuthResult uint8
 
 const (
-	AuthOK AuthResult = iota
+	// AuthUnspecified is the zero value. It is never a success: callers treat
+	// it as a temporary failure.
+	AuthUnspecified AuthResult = iota
+	AuthOK
 	AuthInvalid
 	AuthTempfail
 	AuthUnavailable
@@ -36,7 +40,10 @@ const (
 type Outcome uint8
 
 const (
-	Accepted Outcome = iota
+	// OutcomeUnspecified is the zero value. It is never a success: callers
+	// treat it as a temporary failure.
+	OutcomeUnspecified Outcome = iota
+	Accepted
 	Tempfail
 	RateLimited
 	QuotaExceeded
@@ -54,7 +61,8 @@ const (
 )
 
 var outcomeNames = [...]string{
-	Accepted: "accepted", Tempfail: "tempfail", RateLimited: "rate_limited", QuotaExceeded: "quota_exceeded",
+	OutcomeUnspecified: "unspecified",
+	Accepted:           "accepted", Tempfail: "tempfail", RateLimited: "rate_limited", QuotaExceeded: "quota_exceeded",
 	Backlog: "backlog", Unavailable: "unavailable", CredentialInvalid: "credential_invalid", AppPaused: "app_paused",
 	FromNotPermitted: "from_not_permitted", MessageInvalid: "message_invalid", TooLarge: "too_large",
 	RecipientNotPermitted: "recipient_not_permitted", EncryptionRequired: "encryption_required",
@@ -77,7 +85,8 @@ type Result struct {
 	Held      bool
 }
 
-// Message is one submission as the edge received it.
+// Message is one submission as the edge received it. It carries the secret and
+// the body, so every formatting verb prints a placeholder.
 type Message struct {
 	TransferID   string
 	CredentialID string
@@ -89,6 +98,13 @@ type Message struct {
 	Received     time.Time
 	Body         []byte
 }
+
+func (Message) String() string   { return "<submission message redacted>" }
+func (Message) GoString() string { return "<submission message redacted>" }
+
+// Format redacts under every verb, including %+v, which would otherwise
+// bypass String.
+func (m Message) Format(f fmt.State, _ rune) { _, _ = f.Write([]byte(m.String())) }
 
 // Repository is the database side of intake. postgres.Repository implements it.
 type Repository interface {
@@ -139,6 +155,9 @@ func (s *Service) Verify(ctx context.Context, id, secret string, clientIP netip.
 func (s *Service) Submit(ctx context.Context, fence submission.Fence, m Message) Result {
 	appID := ""
 	result := s.submit(ctx, fence, m, &appID)
+	if result.Outcome == OutcomeUnspecified {
+		result = Result{Outcome: Tempfail}
+	}
 	oplog.Submission(result.Outcome.String(), appID, m.TransferID)
 	return result
 }
@@ -290,6 +309,8 @@ func outcomeOf(err error) Outcome {
 		return TooLarge
 	case errors.Is(err, submission.ErrRecipientNotPermitted):
 		return RecipientNotPermitted
+	case errors.Is(err, submission.ErrSenderDomainInactive):
+		return Misconfigured
 	case errors.Is(err, submission.ErrInvalidMessage), errors.Is(err, submission.ErrInvalidRequest):
 		return MessageInvalid
 	case errors.Is(err, postgres.ErrRuntimeClosed):

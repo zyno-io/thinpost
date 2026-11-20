@@ -45,6 +45,23 @@ func (g *gatedVerifier) VerifyPresent(ctx context.Context, _ string) error {
 	}
 }
 
+// lockWaiter counts backends of this database blocked on a heavyweight lock.
+const lockWaiter = "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'"
+
+// waitFor polls until the query returns a positive count, as a deterministic
+// signal that a concurrent backend reached the state a test needs.
+func (f *smtpCommitFixture) waitFor(what, query string) {
+	f.t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.count(query) > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	f.t.Fatal("timed out waiting for " + what)
+}
+
 func (f *smtpCommitFixture) messageCount() int { return f.count("SELECT count(*) FROM messages") }
 
 func TestSMTPCommitRecordsTheRawMessage(t *testing.T) {
@@ -114,7 +131,7 @@ func TestSMTPCommitFromShapes(t *testing.T) {
 	}
 	record = f.smtpRecord()
 	record.OriginalFromAddress = "a\r\nb@example.org"
-	if _, err := f.repo.Commit(f.ctx, record); !errors.Is(err, submission.ErrInvalidMessage) {
+	if _, err := f.repo.Commit(f.ctx, record); !errors.Is(err, ErrSMTPRecordInvalid) {
 		t.Fatal("original from with a line break", err)
 	}
 }
@@ -128,18 +145,18 @@ func TestSMTPCommitRefusals(t *testing.T) {
 	for name, c := range map[string]refusal{
 		"paused app":         {func(f *smtpCommitFixture) { f.exec("UPDATE apps SET active=false") }, nil, submission.ErrAppPaused},
 		"revoked credential": {func(f *smtpCommitFixture) { f.exec("UPDATE smtp_credentials SET revoked_at=clock_timestamp()") }, nil, submission.ErrInvalidKey},
-		"deactivated domain": {func(f *smtpCommitFixture) { f.exec("UPDATE sender_domains SET active=false") }, nil, submission.ErrInvalidMessage},
-		"no fence":           {nil, func(r *acceptance.Record) { r.Fence = submission.Fence{} }, submission.ErrInvalidMessage},
-		"bad worker":         {nil, func(r *acceptance.Record) { r.Fence.WorkerID = "a b" }, submission.ErrInvalidMessage},
+		"deactivated domain": {func(f *smtpCommitFixture) { f.exec("UPDATE sender_domains SET active=false") }, nil, submission.ErrSenderDomainInactive},
+		"no fence":           {nil, func(r *acceptance.Record) { r.Fence = submission.Fence{} }, delivery.ErrLeaseInvalid},
+		"bad worker":         {nil, func(r *acceptance.Record) { r.Fence.WorkerID = "a b" }, delivery.ErrLeaseInvalid},
 		"unknown worker":     {nil, func(r *acceptance.Record) { r.Fence.WorkerID = "worker-2" }, delivery.ErrLeaseInvalid},
 		"other controller":   {nil, func(r *acceptance.Record) { r.Fence.ControllerID = "controller-9" }, delivery.ErrLeaseInvalid},
 		"other epoch":        {nil, func(r *acceptance.Record) { r.Fence.Epoch++ }, delivery.ErrLeaseInvalid},
 		"expired lease": {func(f *smtpCommitFixture) {
 			f.exec("UPDATE controller_leases SET expires_at=clock_timestamp()-interval '1 second'")
 		}, nil, delivery.ErrLeaseInvalid},
-		"ttl without key": {nil, func(r *acceptance.Record) { r.IdempotencyTTL = time.Minute }, submission.ErrInvalidMessage},
-		"key without ttl": {nil, func(r *acceptance.Record) { r.IdempotencyKey = "smtp1:x" }, submission.ErrInvalidMessage},
-		"ttl over a day":  {nil, func(r *acceptance.Record) { r.IdempotencyKey, r.IdempotencyTTL = "smtp1:x", 25*time.Hour }, submission.ErrInvalidMessage},
+		"ttl without key": {nil, func(r *acceptance.Record) { r.IdempotencyTTL = time.Minute }, ErrSMTPRecordInvalid},
+		"key without ttl": {nil, func(r *acceptance.Record) { r.IdempotencyKey = "smtp1:x" }, ErrSMTPRecordInvalid},
+		"ttl over a day":  {nil, func(r *acceptance.Record) { r.IdempotencyKey, r.IdempotencyTTL = "smtp1:x", 25*time.Hour }, ErrSMTPRecordInvalid},
 	} {
 		f := newSMTPCommitFixture(t)
 		if c.prepare != nil {
@@ -307,12 +324,13 @@ func TestSMTPCommitOrdersBeforeALaterEpoch(t *testing.T) {
 		_, commitErr = f.repo.Commit(f.ctx, f.smtpRecord())
 		committed = time.Now()
 	}()
-	time.Sleep(700 * time.Millisecond) // the commit is inside the recipient insert, lease held
+	f.waitFor("the commit to be inside the recipient insert, lease held", "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event='PgSleep'")
 	go func() {
 		defer wg.Done()
 		_, acquireErr = f.repo.AcquireControllerLease(f.ctx, f.lease.WorkerID, "controller-1", time.Minute)
 		acquired = time.Now()
 	}()
+	f.waitFor("the takeover to wait on the commit's lease lock", lockWaiter)
 	wg.Wait()
 	if commitErr != nil || acquireErr != nil {
 		t.Fatal(commitErr, acquireErr)
@@ -350,12 +368,13 @@ func TestSMTPRevocationWaitsForAnInFlightCommit(t *testing.T) {
 		_, commitErr = f.repo.Commit(f.ctx, f.smtpRecord())
 		committed = time.Now()
 	}()
-	time.Sleep(700 * time.Millisecond)
+	f.waitFor("the commit to be inside the recipient insert, credential locked", "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event='PgSleep'")
 	go func() {
 		defer wg.Done()
 		revokeErr = f.repo.RevokeSMTPCredential(f.ctx, "operator", f.app, f.cred)
 		revoked = time.Now()
 	}()
+	f.waitFor("the revocation to wait on the commit's lock", lockWaiter)
 	wg.Wait()
 	if commitErr != nil || revokeErr != nil {
 		t.Fatal(commitErr, revokeErr)
