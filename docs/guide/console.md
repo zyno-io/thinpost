@@ -21,7 +21,7 @@ The Applications screen lists apps and creates new ones. An app opens into its o
 
 | Tab | What you do there |
 | --- | --- |
-| **API keys** | List, issue and revoke the app's keys. A new key's secret appears once in a dialog, is held only in memory and is discarded when you close it. It is never written to browser storage, the URL or logs. |
+| **API keys** | View and set the app's sending limit, daily recipient limit and pending-message limit (below), then list, issue and revoke its keys. A new key's secret appears once in a dialog, is held only in memory and is discarded when you close it. It is never written to browser storage, the URL or logs. |
 | **Sending domains** | Request a domain, copy its TXT challenge, verify it, reissue a pending challenge and start a test send from a verified domain. The challenge value is shown only on the page that requested it. DKIM, SPF and DMARC readiness are shown separately because the API does not report them. See [Sender domains](/guide/domains). |
 | **Messages** | History with cursor paging, search, message detail and **Send test message** (below). |
 | **Webhooks** | Create, edit, enable, disable, test and delete endpoints, view delivery history and replay failed deliveries. See [Webhooks](/guide/webhooks). |
@@ -30,6 +30,16 @@ The Applications screen lists apps and creates new ones. An app opens into its o
 | **Inbound** | Receiving domains, per-app limits, received messages and their webhook history. See [Inbound mail](/guide/inbound). |
 
 The app area stays mounted as you move between tabs. The console remembers the last app you used so that the shortcuts `/domains`, `/messages` and `/webhooks` go straight to it. The app picker appears only when none is remembered.
+
+### App limits
+
+The **API keys** tab has three panels that show and set an app's submission limits. Each shows the current setting and when it was loaded, has **Reload limit** and **Change limit** buttons. A failed load or save says why, and a change with an unknown outcome is flagged until you reload.
+
+- **Sending limit.** The submission rate: messages per minute and a burst size.
+- **Daily recipient limit.** The number of recipients the app can send to each UTC day. The panel shows how many have been used today (UTC) and the day. Changing the limit does not reset today's count.
+- **Pending-message limit.** The number of the app's messages that can be pending at once. The panel shows the pending count, which is a snapshot. When more messages are pending than Thinpost counts, it shows a lower bound ("or more") and says it is approximate.
+
+A limit of **zero blocks all new messages** for the app, and every new app starts at zero for all three. In the dialog, choose **Block all new messages** to set zero (it asks you to acknowledge), or **Allow, up to a limit**. For the daily recipient and pending-message limits, enter a whole number from 1 up to the maximum (1,000,000 recipients per day, 100,000 pending messages); the sending limit takes a rate from 1 to 60,000 messages per minute and a burst from 1 to 10,000. Changes take effect immediately and are audited. Messages already accepted are not affected. The admin API equivalents are `GET` and `PUT` on `/api/v1/apps/{appId}/submission-rate`, `/recipient-quota` and `/pending-quota`.
 
 ### Messages
 
@@ -44,7 +54,7 @@ The app area stays mounted as you move between tabs. The console remembers the l
 
 By default, a test send is a normal submission as far as Thinpost is concerned:
 
-- It goes through the same acceptance path as the app API, so sender-domain verification, the recipient rules, the [suppression list](/guide/suppressions), the submission rate, the daily recipient quota and the pending-message limit all apply, and it counts against them. A new app has a submission rate of zero and refuses test sends until one is set in the **Sending limit** panel on the **API keys** tab.
+- It goes through the same acceptance path as the app API, so sender-domain verification, the recipient rules, the [suppression list](/guide/suppressions), the submission rate, the daily recipient quota and the pending-message limit all apply, and it counts against them. A new app has a submission rate, daily recipient limit and pending-message limit of zero and refuses test sends until each is set in its panel on the **API keys** tab (see [App limits](#app-limits)).
 - The app's [webhooks](/guide/webhooks) receive its events like those of any other message.
 - Open and click tracking and the one-click unsubscribe link follow the app's settings. If a recipient clicks unsubscribe, that address is suppressed for the app.
 - A paused app refuses it, and the button is disabled with an explanation. It is also disabled when the server has no submission configured, or when you are signed out. It needs no API key.
