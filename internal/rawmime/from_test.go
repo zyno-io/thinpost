@@ -283,20 +283,20 @@ func TestEncodeFromTable(t *testing.T) {
 	cases := []struct{ in, target, want string }{
 		{"scanner@office.example.net", "example.com", "scanner=office.example.net"},
 		{"Scanner@Office.Example.NET", "example.com", "Scanner=office.example.net"},
-		{"a.b_c-d@x.org", "example.com", "a.b_c-d=x.org"},
+		{"a.b_c-d@example.org", "example.com", "a.b_c-d=example.org"},
 		{"al@example.com", "example.com", "al"},
 		{"al@EXAMPLE.com", "example.com", "al"},
-		{"team ops@x.org", "example.com", "team-ops=x.org-" + encHash("team ops@x.org")},
-		{"a=b@x.org", "example.com", "a-b=x.org-" + encHash("a=b@x.org")},
-		{"a+b@x.org", "example.com", "a-b=x.org-" + encHash("a+b@x.org")},
+		{"team ops@example.org", "example.com", "team-ops=example.org-" + encHash("team ops@example.org")},
+		{"a=b@example.org", "example.com", "a-b=example.org-" + encHash("a=b@example.org")},
+		{"a+b@example.org", "example.com", "a-b=example.org-" + encHash("a+b@example.org")},
 		{"a+b@example.com", "example.com", "a-b-" + encHash("a+b@example.com")},
-		{`a"b(c)@x.org`, "example.com", "a-b-c-=x.org-" + encHash(`a"b(c)@x.org`)},
-		{"a..b@x.org", "example.com", "a.b=x.org-" + encHash("a..b@x.org")},
-		{".a.@x.org", "example.com", "a=x.org-" + encHash(".a.@x.org")},
-		{"...@x.org", "example.com", "-=x.org-" + encHash("...@x.org")},
-		{"a_b@x_y.org", "example.com", "a_b=x-y.org-" + encHash("a_b@x_y.org")},
-		{"a!#$%&'*/?^`{|}~@x.org", "example.com", "a" + strings.Repeat("-", 15) + "=x.org-" + encHash("a!#$%&'*/?^`{|}~@x.org")},
-		{long + "@x.org", "example.com", long[:55] + "-" + encHash(long+"@x.org")},
+		{`a"b(c)@example.org`, "example.com", "a-b-c-=example.org-" + encHash(`a"b(c)@example.org`)},
+		{"a..b@example.org", "example.com", "a.b=example.org-" + encHash("a..b@example.org")},
+		{".a.@example.org", "example.com", "a=example.org-" + encHash(".a.@example.org")},
+		{"...@example.org", "example.com", "-=example.org-" + encHash("...@example.org")},
+		{"a_b@x_y.example.org", "example.com", "a_b=x-y.example.org-" + encHash("a_b@x_y.example.org")},
+		{"a!#$%&'*/?^`{|}~@example.org", "example.com", "a" + strings.Repeat("-", 15) + "=example.org-" + encHash("a!#$%&'*/?^`{|}~@example.org")},
+		{long + "@example.org", "example.com", long[:55] + "-" + encHash(long+"@example.org")},
 	}
 	for _, c := range cases {
 		if got := encodeFrom(c.in, c.target); got != c.want {
@@ -327,7 +327,7 @@ func TestEncodeFromLimits(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 	// Distinct originals that sanitize alike stay distinct.
-	if encodeFrom("a b@x.org", "example.com") == encodeFrom("a+b@x.org", "example.com") {
+	if encodeFrom("a b@example.org", "example.com") == encodeFrom("a+b@example.org", "example.com") {
 		t.Fatal("collision")
 	}
 }
