@@ -116,7 +116,8 @@ func SMTPPorts() []SMTPPort {
 
 // NormalizeSMTPFromPolicy checks the shape of a policy and returns it with only
 // the fields of its mode set. The configured address must be an ASCII dot-atom
-// local part with a normalized domain.
+// local part with a normalized domain. In mode domain the address is optional:
+// the fallback used when the original local part cannot be reused.
 func NormalizeSMTPFromPolicy(p SMTPFromPolicy) (SMTPFromPolicy, bool) {
 	out := SMTPFromPolicy{Mode: p.Mode, OnlyUnauthorized: p.OnlyUnauthorized}
 	switch p.Mode {
@@ -125,7 +126,7 @@ func NormalizeSMTPFromPolicy(p SMTPFromPolicy) (SMTPFromPolicy, bool) {
 			return SMTPFromPolicy{}, false
 		}
 	case SMTPFromDomain:
-		if p.Domain == nil || p.Address != nil {
+		if p.Domain == nil {
 			return SMTPFromPolicy{}, false
 		}
 		domain, ok := NormalizeDomain(*p.Domain)
@@ -133,6 +134,13 @@ func NormalizeSMTPFromPolicy(p SMTPFromPolicy) (SMTPFromPolicy, bool) {
 			return SMTPFromPolicy{}, false
 		}
 		out.Domain, out.KeepOrigin = &domain, p.KeepOrigin
+		if p.Address != nil {
+			address, ok := normalizeSMTPAddress(*p.Address)
+			if !ok || address != *p.Address {
+				return SMTPFromPolicy{}, false
+			}
+			out.Address = &address
+		}
 	case SMTPFromAddress:
 		if p.Address == nil || p.Domain != nil || p.KeepOrigin {
 			return SMTPFromPolicy{}, false
@@ -146,6 +154,22 @@ func NormalizeSMTPFromPolicy(p SMTPFromPolicy) (SMTPFromPolicy, bool) {
 		return SMTPFromPolicy{}, false
 	}
 	return out, true
+}
+
+// SMTPPolicyDomains lists the sender domains a policy relies on, each once: the
+// target domain (mode domain) and the domain of the configured or fallback
+// address.
+func SMTPPolicyDomains(p SMTPFromPolicy) []string {
+	var out []string
+	if p.Domain != nil {
+		out = append(out, *p.Domain)
+	}
+	if p.Address != nil {
+		if d := SMTPAddressDomain(*p.Address); len(out) == 0 || out[0] != d {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // SMTPAddressDomain is the domain part of a normalized configured address.
@@ -301,14 +325,7 @@ func (h *Handler) smtpSettings(ctx context.Context, appID string, policy SMTPFro
 		return settings
 	}
 	settings.SigningReady = []SMTPSigningReady{}
-	target := ""
-	switch {
-	case policy.Domain != nil:
-		target = *policy.Domain
-	case policy.Address != nil:
-		target = SMTPAddressDomain(*policy.Address)
-	}
-	if target != "" {
+	for _, target := range SMTPPolicyDomains(policy) {
 		settings.SigningReady = append(settings.SigningReady, SMTPSigningReady{Domain: target, Ready: h.SigningReadiness.Ready(ctx, appID, target) == nil})
 	}
 	return settings

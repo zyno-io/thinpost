@@ -155,7 +155,10 @@
                             </p>
                             <ul>
                                 <li><strong>Only accept verified addresses.</strong> Mail from any other address is refused, so the sender sees an error.</li>
-                                <li><strong>Send from one of my domains.</strong> The address is moved onto a domain you pick, so <code>printer@office.example.net</code> becomes <code>printer@example.com</code>.</li>
+                                <li>
+                                    <strong>Send from one of my domains.</strong> The address is moved onto a domain you pick, so <code>printer@office.example.net</code> becomes <code>printer@example.com</code>.
+                                    If the original name can't be kept (it has spaces or quotes, say), the optional fallback address is used instead; without one, that mail is refused.
+                                </li>
                                 <li><strong>Always send from one address.</strong> Every message goes out from the address you enter.</li>
                                 <li>The address the sender used is kept and shown as “Original From” on the message.</li>
                             </ul>
@@ -198,6 +201,29 @@
                             <input v-model="form.keepOrigin" type="checkbox" :disabled="isSaving" data-testid="smtp-keep-origin" />
                             <span>Keep the original address inside the new one <span class="hint">(printer@office.example.net becomes printer+office.example.net@example.com)</span></span>
                         </label>
+                        <label for="smtp-from-fallback">Fallback address (optional)</label>
+                        <input
+                            id="smtp-from-fallback"
+                            v-model="form.address"
+                            class="input"
+                            type="text"
+                            autocomplete="off"
+                            autocapitalize="off"
+                            spellcheck="false"
+                            placeholder="no-reply@example.com"
+                            :disabled="isSaving"
+                            :aria-invalid="!!validation.addressError && touched"
+                            aria-describedby="smtp-from-fallback-hint"
+                            data-testid="smtp-from-fallback"
+                            @blur="touched = true"
+                        />
+                        <p id="smtp-from-fallback-hint" class="hint" :class="{ invalid: validation.addressError && touched }">
+                            {{
+                                validation.addressError && touched
+                                    ? validation.addressError
+                                    : 'Used when the original name can\'t be kept, for example when it has spaces or quotes. Leave it empty to refuse that mail. It must be on one of this app\'s verified sending domains.'
+                            }}
+                        </p>
                     </div>
 
                     <div v-if="form.mode === 'address'" class="field-group">
@@ -378,7 +404,7 @@ function normalized(f: FromForm) {
         mode: f.mode,
         domain: f.mode === 'domain' ? f.domain : '',
         keepOrigin: f.mode === 'domain' ? f.keepOrigin : false,
-        address: f.mode === 'address' ? f.address.trim() : '',
+        address: f.mode === 'address' || f.mode === 'domain' ? f.address.trim() : '',
         onlyUnauthorized: f.mode === 'off' ? true : f.onlyUnauthorized
     };
 }

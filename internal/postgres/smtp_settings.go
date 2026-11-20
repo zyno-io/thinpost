@@ -72,14 +72,7 @@ func (r *Repository) SetSMTPSettings(ctx context.Context, actor, appID string, p
 	if samePolicy(previous, policy) {
 		return policy, tx.Commit()
 	}
-	target := ""
-	switch {
-	case policy.Domain != nil:
-		target = *policy.Domain
-	case policy.Address != nil:
-		target = admin.SMTPAddressDomain(*policy.Address)
-	}
-	if target != "" {
+	for _, target := range admin.SMTPPolicyDomains(policy) {
 		var verified bool
 		err = tx.QueryRowContext(ctx, `SELECT true FROM sender_domains WHERE app_id=$1 AND domain=$2 AND active FOR SHARE`, appID, target).Scan(&verified)
 		if errors.Is(err, sql.ErrNoRows) {

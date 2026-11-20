@@ -2419,7 +2419,9 @@ components:
       description: >-
         How the From address of submitted mail is decided. Only the fields of the
         chosen mode may be set: domain for mode domain, address for mode address;
-        keep_origin applies to mode domain only.
+        keep_origin applies to mode domain only. Mode domain may also carry an
+        address, the fallback sender used when the original name cannot be kept
+        (for example it has spaces or quotes); without one, such mail is refused.
       properties:
         mode:
           type: string
@@ -2430,7 +2432,7 @@ components:
         address:
           type: string
           maxLength: 254
-          description: A single ASCII address on a verified sender domain, with a dot-atom local part of at most 64 bytes (mode address).
+          description: A single ASCII address on a verified sender domain, with a dot-atom local part of at most 64 bytes. Required for mode address; optional in mode domain, where it is the fallback sender and its domain must be a verified sender domain too.
         only_unauthorized: { type: boolean, description: Leave From alone when its domain is already an authorized sender domain. }
     SmtpSettings:
       type: object
@@ -2440,8 +2442,9 @@ components:
         signing_ready:
           type: [array, 'null']
           description: >-
-            Whether mail from the domain the policy targets would be DKIM-signed right now. Null when
-            this deployment has no signing catalog; empty when the policy targets no domain.
+            Whether mail from each domain the policy targets (the target domain, and the domain of the
+            address when it differs) would be DKIM-signed right now. Null when this deployment has no
+            signing catalog; empty when the policy targets no domain.
           items:
             type: object
             required: [domain, ready]

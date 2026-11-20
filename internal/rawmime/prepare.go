@@ -165,10 +165,16 @@ func writeHeaders(k *sink, raw []byte, in *PrepareInput, g generated) error {
 	head := raw[:in.Scan.HeaderEnd]
 	rewrite := in.From.Field != ""
 	firstFrom, firstID := -1, -1
+	// Dropping any client DKIM-Signature changes the DKIM-Signature field set,
+	// so every signature whose h= names dkim-signature is invalidated with it.
+	dropsSignature := false
 	for pos := 0; pos < len(head); {
 		f, _, err := nextField(head, pos)
 		if err != nil {
 			return err
+		}
+		if !dropsSignature && nameIs(head, f, "DKIM-Signature") && dropSignature(head, f, in, false) {
+			dropsSignature = true
 		}
 		if firstFrom < 0 && nameIs(head, f, "From") {
 			firstFrom = f.start
@@ -208,7 +214,7 @@ func writeHeaders(k *sink, raw []byte, in *PrepareInput, g generated) error {
 			if f.start == firstID {
 				inserted()
 			}
-		case dropped(head, f, in):
+		case dropped(head, f, in, dropsSignature):
 		default:
 			k.writeField(head, f)
 		}
@@ -218,7 +224,7 @@ func writeHeaders(k *sink, raw []byte, in *PrepareInput, g generated) error {
 
 // dropped reports the fields preparation always removes, besides From and
 // Message-ID, which have their own handling.
-func dropped(head []byte, f field, in *PrepareInput) bool {
+func dropped(head []byte, f field, in *PrepareInput, dropsSignature bool) bool {
 	name := head[f.start:f.name]
 	for _, n := range alwaysDropped {
 		if equalFoldASCII(name, n) {
@@ -231,7 +237,7 @@ func dropped(head []byte, f field, in *PrepareInput) bool {
 	case equalFoldASCII(name, "Sender"):
 		return in.From.StripSender
 	case equalFoldASCII(name, "DKIM-Signature"):
-		return dropSignature(head, f, in)
+		return dropSignature(head, f, in, dropsSignature)
 	}
 	return false
 }
@@ -243,8 +249,10 @@ var alwaysDropped = [...]string{
 
 // dropSignature reports a DKIM-Signature that cannot survive the surgery: the
 // From was rewritten, its h= names a field preparation removes, replaces or
-// inserts, or its h= cannot be read.
-func dropSignature(head []byte, f field, in *PrepareInput) bool {
+// inserts, or its h= cannot be read. With dropsSignature set (some client
+// signature is dropped), a signature whose h= names DKIM-Signature goes too,
+// because the set of DKIM-Signature fields it covered has changed.
+func dropSignature(head []byte, f field, in *PrepareInput, dropsSignature bool) bool {
 	if in.From.Rewritten {
 		return true
 	}
@@ -281,7 +289,7 @@ func dropSignature(head []byte, f field, in *PrepareInput) bool {
 				return true
 			}
 			names++
-			if namesChangedField(name, in) {
+			if namesChangedField(name, in) || dropsSignature && equalFoldASCII(name, "DKIM-Signature") {
 				return true
 			}
 		}
