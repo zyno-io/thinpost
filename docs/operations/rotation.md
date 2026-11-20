@@ -15,7 +15,8 @@ Thinpost is not a key manager. Create and store keys in your secret system, moun
 | [Bounce keyring](#bounce-keyring) | Startup | Add version, switch active | A delivery bearing it can still retry or bounce |
 | [Idempotency fingerprint key](#idempotency-fingerprint-key) | Startup | Prepend to the key list | The 24-hour idempotency window |
 | [Tracking link keys](#tracking-link-keys) | Startup | Two-phase seeds | Indefinitely, for links already sent |
-| [Object keyring](#object-keyring) | Startup | Add version, switch active | Any object, sealed secret or backup that uses it |
+| [Object keyring](#object-keyring) | Startup | Add version, switch active | Any object, sealed secret or backup that uses it, including the SMTP retry secret |
+| [SMTP credentials](#smtp-credentials-and-an-edge-compromise) | Database | Create a new credential, revoke the old one | Not applicable |
 | [Control mTLS](#control-mtls-certificates) | Edge: each handshake. Control client: startup | Renew leaves, restart control | Not applicable |
 | [Control HTTPS listener](#control-https-listener-and-database-ca) | Each handshake | Renew the Secret | Not applicable |
 
@@ -101,7 +102,23 @@ The object keyring encrypts stored messages and seals small secrets such as webh
 
 Rotation does not re-encrypt existing objects. Back up the keyring together with the bucket. After a restore, the keyring that the database and objects reference must be restored with them, and you can authenticate all of it with the [object inventory](/operations/recovery#the-object-inventory).
 
+The SMTP retry-protection secret is sealed with this keyring too. Thinpost generates it once, the first time it handles an SMTP submission that carries a `Message-ID` or `Date`, seals it under the keyring version that is active at that moment, and **never re-seals it**. Treat it like a webhook signing secret: keep that keyring version for as long as you run SMTP submission, even after you switch `active`. If the version is missing, a control replica cannot open the secret and answers SMTP submissions with a temporary failure, instead of inventing a new secret that would make retries look like new messages. A maintenance command to re-seal it under a newer version is not available yet.
+
 Rotating one webhook signing secret is separate: do it from the app's Webhooks tab or the API, and the new secret is sealed with the active key.
+
+## SMTP credentials and an edge compromise
+
+Clients send an SMTP credential's password through the edge, so a compromised edge may have seen every credential used while it was compromised (see the [threat model](/security/threat-model#smtp-submission-credentials)). It cannot see credentials that were not used.
+
+To rotate one credential, create a new one on the app's SMTP tab, switch the device or software to it, then revoke the old one. Revoking takes effect for new sign-ins and for any message the credential submits afterwards, including from connections that are already open.
+
+If you suspect the edge was compromised:
+
+1. Rebuild or replace the edge and replace its certificates, as for any edge compromise ([Control PKI](/deploy/control-pki)).
+2. For every app with SMTP credentials, **revoke every credential and create new ones**. An app can hold ten, so you can create the replacements first. Each credential must be replaced on the device that uses it.
+3. Review recent SMTP messages in the console for mail you do not recognize.
+
+The SMTP retry secret and the credential digests never reached the edge, so they do not need rotating.
 
 ## Control mTLS certificates
 

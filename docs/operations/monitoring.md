@@ -97,7 +97,15 @@ message app=<id> message=<id> status=hold_expired
 delivery app=<id> message=<id> delivery=<id> status=<outcome> smtp=<code> ip=<name>
 ```
 
-With SMTP submission enabled, the edge also logs a line every minute once there is activity, with fixed counter names and no addresses or credentials:
+With SMTP submission enabled, the control plane logs one line for every message it decides on, with the outcome, the app and a transfer ID, and no addresses or credentials:
+
+```text
+submission result=<enum> app=<id> transfer=<id>
+```
+
+`result` is a fixed name such as `accepted`, `credential_invalid`, `from_not_permitted`, `recipient_not_permitted`, `rate_limited`, `quota_exceeded`, `app_paused`, `misconfigured` or `tempfail`. An app that is not known at the point of refusal is logged as `invalid`. A run of `misconfigured` for one app means its From policy points at a domain that is not verified or cannot be DKIM-signed.
+
+The edge also logs a line every minute once there is activity, with fixed counter names and no addresses or credentials:
 
 ```text
 smtp_submission auth_ok=<n> auth_invalid=<n> data_accept=<n> data_too_large=<n> ...

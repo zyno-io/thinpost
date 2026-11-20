@@ -16,10 +16,12 @@ This is a statement of direction, not a commitment or a schedule. Items are grou
 - Per-sending-IP concurrency and rate controls, so address warm-up does not depend on manual app assignment.
 - Further hardening and testing of outbound destination restrictions, including DNS rebinding and mixed address families.
 - Readiness checks and alerts for the edge journal and worker.
+- SMTP submission follow-ups: SMTPUTF8 (non-ASCII addresses and headers), downconverting 8-bit bodies for destinations without 8BITMIME, and an optional per-credential allowlist of client networks.
 
 ## Credentials, keys and certificates
 
 - Coordinated rollover and revocation for the private CA that secures the control channel, and verified certificate renewal.
+- A maintenance command to re-seal the SMTP retry-protection secret under a newer object keyring version, so old versions can be retired.
 - Lifecycle management for shared key rings: the idempotency fingerprint key, the bounce key ring and the object-encryption key ring, including inventory of old key versions.
 - Automated DKIM key provisioning and rotation, with sender-domain readiness checks for DKIM, SPF and DMARC and DNSSEC policy.
 - Sender-domain removal.

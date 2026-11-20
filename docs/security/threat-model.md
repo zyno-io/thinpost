@@ -24,7 +24,7 @@ flowchart LR
   end
   idp["OIDC provider"]
   app["Apps and operators"]
-  internet -- "SMTP :25" --> edge
+  internet -- "SMTP :25, and :465/:587 for submission" --> edge
   edge -- "SMTP :25 (validated public IPs only)" --> internet
   ctl == "mTLS gRPC<br/>control dials edge" ==> edge
   ctl --> pg
@@ -36,7 +36,7 @@ flowchart LR
 | Zone | Holds | Exposed to |
 | --- | --- | --- |
 | Trusted | PostgreSQL, the object store, encryption keys, DKIM keys, API-key digests, webhook secrets, the operator console | Apps and operators over HTTPS, and nothing else from the internet |
-| Edge | The SMTP listener, one sending identity per public IP, and a metadata-only journal | The public internet on port 25, and a private control connection from the trusted zone |
+| Edge | The SMTP listeners, one sending identity per public IP, and a metadata-only journal | The public internet on port 25 (and on ports 465 and 587 when [SMTP submission](/guide/smtp) is enabled), and a private control connection from the trusted zone |
 
 ### What the edge cannot do
 
@@ -45,9 +45,29 @@ flowchart LR
 - **It never connects into the trusted zone.** The control plane dials the edge, and the edge never opens a connection into the trusted zone. It holds no address or credential for the database or object store.
 - **It cannot decide to send.** Before any SMTP connection it must ask for a start permit, and the control plane commits the authorization in the database first.
 - **It cannot accept inbound mail or bounces on its own.** The edge answers `250` to a bounce or inbound message only after the control plane has stored and committed it, and answers `451` otherwise.
+- **It cannot accept submitted mail on its own.** With SMTP submission on, the edge answers `250` only after the control plane has verified the credential, applied the app's policy and limits and committed the message. It never holds a credential digest, so it cannot tell a valid credential from an invalid one.
 - **It runs as non-root.** The process refuses to start as root.
 
-The edge can see the mail it is delivering and the mail it receives. Compromise of the edge exposes those, so treat the edge zone as sensitive and keep its network policy tight. [Enhanced Protection](/guide/concepts) requires TLS for the SMTP hop but cannot protect content from the process that delivers it.
+The edge can see the mail it is delivering and the mail it receives, and with SMTP submission on, the credentials and message content of every client that connects, while they are in transit. Compromise of the edge exposes those, so treat the edge zone as sensitive and keep its network policy tight. [Enhanced Protection](/guide/concepts) requires TLS for the SMTP hop but cannot protect content from the process that delivers it.
+
+### SMTP submission credentials
+
+Clients send an SMTP credential's username and password to the edge, inside TLS, and the edge hands them to the control plane to check. This is the one place where a secret that grants sending rights passes through the edge zone, so the edge's compromise has a defined and limited effect.
+
+An attacker who controls the edge **can**:
+
+- read the credentials and message content of every client that connects while they are in control, because TLS ends at the edge;
+- submit mail as any credential they have seen, within that app's policy: its From policy and verified domains, the recipient allowlist, suppressions, rate and quota limits, and its pause state;
+- deny or delay submission.
+
+They **cannot**:
+
+- learn credential digests, app IDs or the replay secret, which stay in the trusted zone;
+- mint a credential or guess one: the control plane checks every attempt against its digest, and the secrets are 256-bit random values;
+- use a stolen SMTP credential on the HTTP APIs, or an API key for SMTP;
+- steer clients to another server or make them skip TLS. A client trusts the server name and certificate it was configured with.
+
+If you suspect the edge was compromised, revoke and reissue every SMTP credential. See [the runbook](/operations/rotation#edge-compromise).
 
 ## The control protocol
 
@@ -135,6 +155,8 @@ The issuer's origin is the only external connection allowed. Extra origins for a
 - Objects (original submissions, signed MIME, bounces and inbound messages) are encrypted by the control plane with AES-256-GCM before upload. The object key is bound into the ciphertext, so an object copied to another key fails to decrypt.
 - The database holds plaintext metadata that the console needs: recipients, sender domains and addresses, and subjects, including Enhanced Protection subjects. Treat the database, its backups and its WAL as sensitive. See [Data handling](/security/data-handling).
 - Webhook signing secrets are sealed with the object keyring and never returned.
+- SMTP credentials are stored as SHA-256 digests, with the password shown once at creation. Mail sent over SMTP is stored as the client's original message in the object store, encrypted like any other submission.
+- Retry protection for SMTP mail stores keyed digests only (an HMAC of the app, sender, recipients, `Message-ID` and message bytes), so database content cannot confirm a guess about what was sent. The key is sealed under the object keyring and kept for 24 hours or 10 minutes, depending on what the message carries. See [Data handling](/security/data-handling#smtp-submission).
 
 ## Out of scope
 

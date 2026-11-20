@@ -80,6 +80,7 @@ export default withMermaid(
               { text: "Sending with SDKs", link: "/guide/sending-with-sdks" },
               { text: "Sending with the native API", link: "/guide/native-api" },
               { text: "Holding messages", link: "/guide/holding-messages" },
+              { text: "SMTP submission", link: "/guide/smtp" },
             ],
           },
           {
