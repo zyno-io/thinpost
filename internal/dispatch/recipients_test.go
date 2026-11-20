@@ -35,3 +35,28 @@ func TestDispatchSendsToTheEnvelopeRecipientAtTheDeliveryIndex(t *testing.T) {
 		t.Fatal("an index beyond To, Cc and Bcc must be rejected")
 	}
 }
+
+func TestDispatchSendsToTheRawSourceRecipientAtTheDeliveryIndex(t *testing.T) {
+	source, err := submission.EncodeRawSource(submission.RawHeader{
+		Recipients: []string{"b@example.net", "Copy <cc@example.net>", "bcc@example.net"}, Kinds: []string{"to", "cc", "bcc"},
+		SenderDomain: "example.com", EnhancedProtection: true,
+	}, []byte("From: a@example.com\r\nTo: b@example.net\r\nSubject: hi\r\n\r\nbody\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, want := range []string{"b@example.net", "cc@example.net", "bcc@example.net"} {
+		p, r, o, lease := setup(t)
+		o.source = source
+		r.claim.RecipientIndex = index
+		start, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{})
+		if err != nil || start.Recipient != want {
+			t.Fatalf("index %d: recipient %q, %v", index, start.GetRecipient(), err)
+		}
+	}
+	p, r, o, lease := setup(t)
+	o.source = source
+	r.claim.RecipientIndex = 3
+	if _, _, err = p.Next(context.Background(), lease, delivery.EdgeCapabilities{}); err == nil {
+		t.Fatal("an index beyond the raw envelope must be rejected")
+	}
+}

@@ -116,10 +116,10 @@ func (p *Provider) prepare(ctx context.Context, claim delivery.Claim, caps deliv
 		return nil, nil, err
 	}
 	object, err := submission.DecodeSource(source, claim.EnhancedProtection)
-	if err != nil || claim.RecipientIndex >= len(object.Message.Envelope()) {
+	if err != nil || claim.RecipientIndex >= len(object.Envelope()) {
 		return nil, nil, errors.New("invalid source message")
 	}
-	recipient, err := mail.ParseAddress(object.Message.Envelope()[claim.RecipientIndex])
+	recipient, err := mail.ParseAddress(object.Envelope()[claim.RecipientIndex])
 	if err != nil {
 		return nil, nil, err
 	}
