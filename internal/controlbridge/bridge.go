@@ -46,7 +46,10 @@ type Config struct {
 	BounceDomain, ActiveBounceKey              string
 	BounceKeys                                 map[string][]byte
 	Recipients                                 dispatch.RecipientPolicy
-	LeaseTTL, ClockMargin, PollInterval        time.Duration
+	// Submission is optional: when set, the session advertises submission/1
+	// and serves SMTP submissions from an edge that enables it.
+	Submission                          controlsession.Submission
+	LeaseTTL, ClockMargin, PollInterval time.Duration
 }
 type Bridge struct {
 	runner     *controlsession.Runner
@@ -122,7 +125,7 @@ func New(c Config, repository *postgres.Repository, objects Objects) (*Bridge, e
 	work := &dispatch.Provider{Repository: repository, Objects: objects, Routes: &mailroute.Resolver{DNS: &mailroute.SystemDNS{}, Filter: policy}, Envelopes: envelopes, Recipients: c.Recipients}
 	issuer := &controllease.Issuer{Repository: repository, Signer: signer, Identity: c.ControllerIdentity, JournalID: c.JournalID}
 	runner := &controlsession.Runner{WorkerID: c.WorkerID, ControllerID: c.ControllerID, JournalID: c.JournalID, Issuer: issuer, Results: repository, Starts: repository, Reconciler: repository, Work: work, Bounces: &bounceingest.Service{Repository: repository, Objects: objects, Feedback: &feedback.Service{Repository: repository}},
-		Inbound: &inbound.Service{Repository: repository, Objects: objects, Keys: inbound.FingerprintKeys(c.ActiveBounceKey, keys)}, LeaseTTL: c.LeaseTTL, ClockMargin: c.ClockMargin, PollInterval: c.PollInterval, Reports: repository, Sources: policy,
+		Inbound: &inbound.Service{Repository: repository, Objects: objects, Keys: inbound.FingerprintKeys(c.ActiveBounceKey, keys)}, LeaseTTL: c.LeaseTTL, ClockMargin: c.ClockMargin, PollInterval: c.PollInterval, Reports: repository, Sources: policy, Submission: c.Submission,
 		// A worker that reports no sources sends only from its primary address and
 		// accepts only the global bounce domain; control must not claim more.
 		Legacy: delivery.EdgeCapabilities{Addresses: []netip.Addr{c.Source}, BounceDomains: []string{c.BounceDomain}},

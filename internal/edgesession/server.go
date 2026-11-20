@@ -56,6 +56,7 @@ type Server struct {
 	slots      chan struct{}
 	bounces    bounceBridge
 	inbound    inboundBridge
+	submission submissionBridge
 	takeover   sync.Mutex
 	owner      *sessionOwner
 	// sources and bounceDomains are reported in Ready. Advertise sets them once
@@ -104,6 +105,9 @@ func (s *Server) enter(ctx context.Context, fence journal.Fence, grant Grant) (*
 		return nil, err
 	}
 	if err := s.inbound.activate(fence); err != nil {
+		return nil, err
+	}
+	if err := s.submission.activate(fence); err != nil {
 		return nil, err
 	}
 	ownerCtx, cancel := context.WithCancel(ctx)
@@ -262,6 +266,29 @@ func (s *Server) EnableInbound() {
 	s.inbound.mu.Unlock()
 }
 
+// EnableSubmission makes the worker advertise the submission capability (and
+// the given public AUTH ports in Ready) and route submissions through
+// Submission. Call it once, before serving. Without it the worker never
+// advertises the capability, never sends a submission frame and refuses any it
+// receives.
+//
+// The ports must be valid (at most 8, distinct, 1 to 65535); a bad list is an
+// error so a misconfigured worker fails at startup instead of being refused by
+// every control plane.
+func (s *Server) EnableSubmission(ports ...uint32) error {
+	if !edgeprotocol.ValidSubmissionPorts(ports) {
+		return errors.New("invalid submission ports")
+	}
+	s.submission.mu.Lock()
+	s.submission.enabled = true
+	s.submission.ports = append([]uint32(nil), ports...)
+	s.submission.mu.Unlock()
+	return nil
+}
+
+// Submission is the SMTP submission listeners' view of the submission path.
+func (s *Server) Submission() SubmissionClient { return &s.submission }
+
 // Inbound is the SMTP receiver's view of the inbound path.
 func (s *Server) Inbound() bounce.Inbound { return &s.inbound }
 
@@ -303,6 +330,12 @@ func (s *Server) Connect(stream grpc.BidiStreamingServer[controlv1.ControlFrame,
 	if s.inbound.isEnabled() {
 		capabilities = []string{edgeprotocol.CapInbound}
 	}
+	submissionNegotiated := s.submission.isEnabled() && edgeprotocol.HasCapability(open.Capabilities, edgeprotocol.CapSubmission)
+	var submissionPorts []uint32
+	if s.submission.isEnabled() {
+		capabilities = append(capabilities, edgeprotocol.CapSubmission)
+		submissionPorts = s.submission.reportedPorts()
+	}
 	journalID, err := s.journal.Identity()
 	if err != nil || !journal.ValidIdentity(journalID) || open.JournalId != journalID {
 		return status.Error(codes.FailedPrecondition, "journal identity mismatch")
@@ -330,7 +363,7 @@ func (s *Server) Connect(stream grpc.BidiStreamingServer[controlv1.ControlFrame,
 	if !authorized() {
 		return status.Error(codes.PermissionDenied, "controller lease expired")
 	}
-	if err = stream.Send(&controlv1.EdgeFrame{Body: &controlv1.EdgeFrame_Ready{Ready: &controlv1.Ready{WorkerId: s.workerID, JournalId: journalID, Epoch: open.Epoch, SessionId: open.SessionId, ProtocolVersion: edgeprotocol.Version, SourceAddresses: s.sources, SourceHostnames: s.sourceHostnames, BounceDomains: s.bounceDomains, Capabilities: capabilities}}}); err != nil {
+	if err = stream.Send(&controlv1.EdgeFrame{Body: &controlv1.EdgeFrame_Ready{Ready: &controlv1.Ready{WorkerId: s.workerID, JournalId: journalID, Epoch: open.Epoch, SessionId: open.SessionId, ProtocolVersion: edgeprotocol.Version, SourceAddresses: s.sources, SourceHostnames: s.sourceHostnames, BounceDomains: s.bounceDomains, Capabilities: capabilities, SubmissionPorts: submissionPorts}}}); err != nil {
 		return err
 	}
 	// Replay one result at a time and wait for its exact acknowledgement. This
@@ -359,6 +392,7 @@ func (s *Server) Connect(stream grpc.BidiStreamingServer[controlv1.ControlFrame,
 	}
 	var connection *bounceConnection
 	var inboundConn *inboundConnection
+	var submissionConn *submissionConnection
 	var routes edgeprotocol.RoutesAssembler
 	defer func() {
 		if connection != nil {
@@ -366,6 +400,9 @@ func (s *Server) Connect(stream grpc.BidiStreamingServer[controlv1.ControlFrame,
 		}
 		if inboundConn != nil {
 			s.inbound.detach(inboundConn)
+		}
+		if submissionConn != nil {
+			s.submission.detach(submissionConn)
 		}
 	}()
 	reconciled := false
@@ -509,6 +546,12 @@ func (s *Server) Connect(stream grpc.BidiStreamingServer[controlv1.ControlFrame,
 			} else {
 				s.inbound.withoutCapability()
 			}
+			if submissionNegotiated {
+				submissionConn, err = s.submission.attach(fence, stream.Send, authorized)
+				if err != nil {
+					return status.Error(codes.FailedPrecondition, "controller fence rejected")
+				}
+			}
 			reconciled = true
 		case *controlv1.ControlFrame_Routes:
 			if inboundConn == nil || !authorized() {
@@ -526,6 +569,22 @@ func (s *Server) Connect(stream grpc.BidiStreamingServer[controlv1.ControlFrame,
 				return status.Error(codes.FailedPrecondition, "inbound acknowledgement not negotiated")
 			}
 			s.inbound.acknowledge(inboundConn, body.InboundAck)
+		case *controlv1.ControlFrame_AuthResult:
+			if submissionConn == nil || !authorized() {
+				return status.Error(codes.FailedPrecondition, "submission not negotiated")
+			}
+			if body.AuthResult == nil {
+				return status.Error(codes.InvalidArgument, "invalid submission frame")
+			}
+			s.submission.acknowledgeAuth(submissionConn, body.AuthResult)
+		case *controlv1.ControlFrame_SubmissionAck:
+			if submissionConn == nil || !authorized() {
+				return status.Error(codes.FailedPrecondition, "submission not negotiated")
+			}
+			if body.SubmissionAck == nil {
+				return status.Error(codes.InvalidArgument, "invalid submission frame")
+			}
+			s.submission.acknowledge(submissionConn, body.SubmissionAck)
 		case *controlv1.ControlFrame_Wake:
 			if !reconciled {
 				return status.Error(codes.FailedPrecondition, "reconciliation not acknowledged")

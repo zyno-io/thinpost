@@ -26,6 +26,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/journal"
 	"github.com/zyno-io/thinpost/internal/oplog"
 	"github.com/zyno-io/thinpost/internal/postgres"
+	"github.com/zyno-io/thinpost/internal/submission"
 )
 
 var ErrLeaseExpired = errors.New("controller lease expired")
@@ -104,6 +105,23 @@ type Runner struct {
 	RoutesInterval time.Duration
 	// InboundPartialTTL overrides DefaultInboundPartialTTL (tests).
 	InboundPartialTTL time.Duration
+	// Submission is optional. When set, the session advertises the submission
+	// capability and, if the worker does too, serves credential checks and
+	// SMTP submissions.
+	Submission Submission
+	// SubmissionBudget overrides edgeprotocol.ControlSubmissionBudget (tests).
+	// The budget is owned by the Runner, not the session, because the bridge
+	// reuses one Runner across reconnects and a worker still unwinding from an
+	// earlier stream keeps its bytes reserved.
+	SubmissionBudget int64
+	// SubmissionPartialTTL overrides DefaultSubmissionPartialTTL (tests).
+	SubmissionPartialTTL time.Duration
+
+	// budget is created on first use (see submissionBudget). It is a plain
+	// pointer so a Runner stays copyable.
+	budget *byteBudget
+	// clock replaces time.Now in validLease (tests).
+	clock func() time.Time
 }
 type receive struct {
 	frame *controlv1.EdgeFrame
@@ -268,6 +286,15 @@ func (r *Runner) RunDraining(parent context.Context, drain <-chan struct{}) erro
 		id      string
 		verdict controlv1.InboundVerdict
 	}, edgeprotocol.MaxInboundItems)
+	// SMTP submission: its own lane, with the same shape as inbound but a
+	// process-wide byte budget. subOn is set only when both sides advertised.
+	subOn := false
+	lane := newSubmissionLane(r)
+	defer lane.releaseAll()
+	subExpiry := time.NewTicker(lane.ttl / 4)
+	defer subExpiry.Stop()
+	subDone := make(chan submissionDone, edgeprotocol.MaxSubmissionItems)
+	authFinished := make(chan authDone, edgeprotocol.MaxAuthPending)
 	routesInterval := r.RoutesInterval
 	if routesInterval <= 0 {
 		routesInterval = DefaultRoutesInterval
@@ -350,7 +377,7 @@ func (r *Runner) RunDraining(parent context.Context, drain <-chan struct{}) erro
 			// is marked sent only once its own push has started.
 			routesDrainSent = pushRoutes()
 		}
-		if draining && !workActive && activeStart == nil && !resultActive && !permitActive && bounce == nil && !bounceActive && len(items) == 0 && inboundProcessing == 0 && !routesActive && (!inboundOn || !reconciled || routesDrainSent) {
+		if draining && !workActive && activeStart == nil && !resultActive && !permitActive && bounce == nil && !bounceActive && len(items) == 0 && inboundProcessing == 0 && lane.idle() && !routesActive && (!inboundOn || !reconciled || routesDrainSent) {
 			return ErrDraining
 		}
 		select {
@@ -411,6 +438,21 @@ func (r *Runner) RunDraining(parent context.Context, drain <-chan struct{}) erro
 					return errors.New("invalid edge readiness")
 				}
 				inboundOn = r.Inbound != nil && edgeprotocol.HasCapability(body.Ready.GetCapabilities(), edgeprotocol.CapInbound)
+				subOn = r.Submission != nil && edgeprotocol.HasCapability(body.Ready.GetCapabilities(), edgeprotocol.CapSubmission)
+				if subOn {
+					// The ports are a console-only field: they are checked (strictly)
+					// only when the worker reported submission/1 and this controller
+					// serves it, so they can never end a session that does not use it.
+					if !edgeprotocol.ValidSubmissionPorts(body.Ready.GetSubmissionPorts()) {
+						return errors.New("invalid edge readiness")
+					}
+					// What the worker observes on its AUTH ports is shown only when
+					// this controller can serve it too.
+					reported.SubmissionPorts = make([]int, 0, len(body.Ready.GetSubmissionPorts()))
+					for _, port := range body.Ready.GetSubmissionPorts() {
+						reported.SubmissionPorts = append(reported.SubmissionPorts, int(port))
+					}
+				}
 				ready, caps = true, reported
 				if r.Reports != nil {
 					// Display only, off the session's path: a slow or failed
@@ -623,9 +665,66 @@ func (r *Runner) RunDraining(parent context.Context, drain <-chan struct{}) erro
 					case <-ctx.Done():
 					}
 				}()
+			case *controlv1.EdgeFrame_Auth:
+				if !reconciled || !subOn || !edgeprotocol.ValidSubmissionID(body.Auth.GetRequestId()) {
+					return errors.New("submission not available")
+				}
+				if verdict := lane.verify(ctx, body.Auth, draining, authFinished); verdict != controlv1.SubmissionAuthVerdict_SUBMISSION_AUTH_VERDICT_UNSPECIFIED {
+					if err = send(authResultFrame(body.Auth.RequestId, verdict)); err != nil {
+						return err
+					}
+				}
+			case *controlv1.EdgeFrame_Submission:
+				start := body.Submission
+				if !reconciled || !subOn || !edgeprotocol.ValidSubmissionFraming(start) {
+					return errors.New("submission not available")
+				}
+				if err = lane.begin(start, draining); err != nil {
+					return err
+				}
+			case *controlv1.EdgeFrame_SubmissionChunk:
+				if !subOn {
+					return errors.New("unexpected submission chunk")
+				}
+				finished, chunkErr := lane.add(body.SubmissionChunk)
+				if chunkErr != nil {
+					return chunkErr
+				}
+				if finished.item == nil {
+					continue
+				}
+				if finished.data == nil {
+					// Refused without committing anything; neither ends the session.
+					if err = send(refusalAck(finished.item.start.SubmissionId, finished.item.verdict)); err != nil {
+						return err
+					}
+					continue
+				}
+				lane.process(ctx, finished.item, finished.data, submission.Fence{WorkerID: r.WorkerID, ControllerID: r.ControllerID, Epoch: lease.Epoch}, subDone)
 			default:
 				return errors.New("edge frame is not implemented")
 			}
+		case done := <-authFinished:
+			lane.authPending--
+			// Replied only while this controller still holds a valid lease.
+			if !r.validLease(lease) {
+				return ErrLeaseExpired
+			}
+			if err = send(authResultFrame(done.id, done.verdict)); err != nil {
+				return err
+			}
+		case done := <-subDone:
+			lane.processing--
+			// The verdict was decided after the durable commit. It may be sent
+			// only while this controller still holds a valid lease.
+			if !r.validLease(lease) {
+				return ErrLeaseExpired
+			}
+			if err = send(submissionAck(done.id, done.result)); err != nil {
+				return err
+			}
+		case <-subExpiry.C:
+			lane.expire()
 		case done := <-inboundDone:
 			inboundProcessing--
 			// The verdict was decided after the durable commit. It may be sent
@@ -767,7 +866,11 @@ func (r *Runner) RunDraining(parent context.Context, drain <-chan struct{}) erro
 	}
 }
 func (r *Runner) validLease(lease postgres.ControllerLease) bool {
-	return lease.WorkerID == r.WorkerID && lease.ControllerID == r.ControllerID && lease.Epoch > 0 && time.Now().Add(r.ClockMargin).Before(lease.ExpiresAt)
+	now := time.Now
+	if r.clock != nil {
+		now = r.clock
+	}
+	return lease.WorkerID == r.WorkerID && lease.ControllerID == r.ControllerID && lease.Epoch > 0 && now().Add(r.ClockMargin).Before(lease.ExpiresAt)
 }
 func guard(ctx context.Context, cancel context.CancelFunc, deadline time.Time, updates <-chan time.Time, expired chan<- struct{}) {
 	timer := time.NewTimer(time.Until(deadline))
@@ -947,8 +1050,12 @@ type routesPush struct {
 }
 
 func (r *Runner) capabilities() []string {
+	var caps []string
 	if r.Inbound != nil {
-		return []string{edgeprotocol.CapInbound}
+		caps = append(caps, edgeprotocol.CapInbound)
 	}
-	return nil
+	if r.Submission != nil {
+		caps = append(caps, edgeprotocol.CapSubmission)
+	}
+	return caps
 }

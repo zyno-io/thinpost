@@ -32,6 +32,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/preparation"
 	"github.com/zyno-io/thinpost/internal/recipientpolicy"
 	"github.com/zyno-io/thinpost/internal/signing"
+	"github.com/zyno-io/thinpost/internal/smtpintake"
 	"github.com/zyno-io/thinpost/internal/submission"
 	"github.com/zyno-io/thinpost/internal/tracking"
 	"github.com/zyno-io/thinpost/internal/webhook"
@@ -159,6 +160,7 @@ func run() error {
 	stopHoldExpiry := startHoldExpiry(ctx, repository)
 	defer stopHoldExpiry()
 	var objects *objectstore.EncryptedStore
+	var objectKeyring *objectstore.Keyring
 	var webhookKeys webhook.Keys
 	if config.S3 != nil {
 		client, clientErr := minio.New(config.S3.Endpoint, &minio.Options{Creds: credentials.NewStaticV4(config.S3.AccessKey, config.S3.SecretKey, ""), Secure: config.S3.Secure, Region: config.S3.Region})
@@ -173,7 +175,7 @@ func run() error {
 		if err != nil {
 			return errors.New("object encryption initialization failed")
 		}
-		webhookKeys = keyring
+		webhookKeys, objectKeyring = keyring, keyring
 		operator.Webhooks = &webhook.Service{Store: repository, Keys: keyring, Sender: &webhook.Sender{Destinations: config.WebhookDestinations}}
 		repository.Objects = objects
 		operator.ContentReader = &messagebody.Service{Repository: repository, Objects: objects}
@@ -197,6 +199,31 @@ func run() error {
 		bridgeConfig.Recipients = recipients
 		operator.BounceDomain = bridgeConfig.BounceDomain
 		operator.PrimarySource = bridgeConfig.Source
+	}
+	// Acceptance and SMTP intake are built before the bridge, which hands the
+	// intake to its control session (the submission/1 capability). An edge that
+	// does not enable submission never negotiates it, so this is inert until the
+	// edge's SMTP listeners are switched on.
+	fingerprintKeys, err := controlapp.SubmissionFingerprintKeys(os.Getenv)
+	if err != nil {
+		return err
+	}
+	var acceptanceService *acceptance.Service
+	if fingerprintKeys != nil {
+		if objects == nil || bridgeConfig == nil || catalogPath == "" {
+			return errors.New("submission requires storage, signing and edge bridge")
+		}
+		acceptanceService, err = acceptance.NewWithFingerprintKeys(repository, objects, fingerprintKeys, recipients)
+		if err != nil {
+			return errors.New("invalid submission configuration")
+		}
+		// Same source as the HTTP tracking option and trackingPreparation.
+		acceptanceService.ApplyTrackingDefaults = config.Tracking != nil
+	}
+	if bridgeConfig != nil {
+		if acceptanceService != nil && keys != nil && objectKeyring != nil {
+			bridgeConfig.Submission = &smtpintake.Service{Repository: repository, Acceptance: acceptanceService, Signing: keys, Replay: &smtpintake.ReplaySecret{Store: repository, Keys: objectKeyring}}
+		}
 		bridge, err := controlbridge.New(*bridgeConfig, repository, objects)
 		if err != nil {
 			return err
@@ -253,21 +280,9 @@ func run() error {
 		}()
 		defer func() { prepareCancel(); <-prepareDone }()
 	}
-	fingerprintKeys, err := controlapp.SubmissionFingerprintKeys(os.Getenv)
-	if err != nil {
-		return err
-	}
 	var handler, appReads http.Handler
-	if fingerprintKeys != nil {
-		if objects == nil || bridgeConfig == nil || catalogPath == "" {
-			return errors.New("submission requires storage, signing and edge bridge")
-		}
-		service, err := acceptance.NewWithFingerprintKeys(repository, objects, fingerprintKeys, recipients)
-		if err != nil {
-			return errors.New("invalid submission configuration")
-		}
-		// Same source as the HTTP tracking option and trackingPreparation.
-		service.ApplyTrackingDefaults = config.Tracking != nil
+	if acceptanceService != nil {
+		service := acceptanceService
 		server := submissionHandler(service, config, repository)
 		handler = server
 		// Operator test sends use the same acceptance service as the app API.
@@ -276,6 +291,9 @@ func run() error {
 		// operator API's store and content reader (nil without object storage).
 		appReads = &admin.AppReadHandler{Service: service, Store: repository, ContentReader: operator.ContentReader, Holds: repository}
 	}
+	// SMTPSubmission stays false: control cannot accept SMTP until an edge enables
+	// the submission listeners and negotiates submission/1, and none does yet.
+	// The edge-side change that enables them also decides when to report it.
 	runtimeInfo := &admin.RuntimeInfo{Features: admin.RuntimeFeatures{Submission: handler != nil, Tracking: config.Tracking != nil}}
 	if config.Tracking != nil {
 		runtimeInfo.Tracking = &admin.RuntimeTracking{Origin: config.Tracking.Origin, LinkEventLimit: config.Tracking.EventLimit}
