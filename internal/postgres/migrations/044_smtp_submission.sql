@@ -63,9 +63,12 @@ ALTER TABLE apps
       AND octet_length(smtp_from_address) BETWEEN 3 AND 254
       AND octet_length(split_part(smtp_from_address, '@', 1)) <= 64)),
   ADD COLUMN smtp_from_only_unauthorized boolean NOT NULL DEFAULT true,
+  -- Each mode carries exactly its own setting, so a policy read back is always
+  -- one the settings API would accept.
   ADD CONSTRAINT apps_smtp_from_policy CHECK (
-    (smtp_from_mode <> 'domain'  OR smtp_from_domain  IS NOT NULL) AND
-    (smtp_from_mode <> 'address' OR smtp_from_address IS NOT NULL));
+    (smtp_from_mode = 'off'     AND smtp_from_domain IS NULL     AND smtp_from_address IS NULL) OR
+    (smtp_from_mode = 'domain'  AND smtp_from_domain IS NOT NULL AND smtp_from_address IS NULL) OR
+    (smtp_from_mode = 'address' AND smtp_from_address IS NOT NULL AND smtp_from_domain IS NULL));
 ALTER TABLE messages
   ADD COLUMN smtp_credential_id text,
   ADD COLUMN original_from_address text,
