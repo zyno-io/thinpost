@@ -275,7 +275,7 @@ export async function installMocks(page: Page, options: MockOptions = {}) {
         if (rest === '/keys') return json(route, { keys: [{ id: 'f6'.repeat(16), name: 'Production sender', active: true, created_at: '2026-10-03T12:00:00Z' }] });
         if (rest === '/smtp') {
             return json(route, {
-                settings: { from: { mode: 'off', keep_origin: false, only_unauthorized: true }, signing_ready: [] },
+                settings: { from: { mode: 'off', only_unauthorized: true }, signing_ready: [] },
                 credentials: [{ id: SMTP_CREDENTIAL_ID, name: 'Office printer', username: SMTP_CREDENTIAL_ID, active: true, created_at: '2026-10-03T12:00:00Z' }],
                 connection: {
                     host: 'smtp.example.test',

@@ -45,7 +45,7 @@ func TestSMTPSubmissionSchemaConstraints(t *testing.T) {
 		"domain mode without domain":       `UPDATE apps SET smtp_from_mode='domain' WHERE id='a'`,
 		"address mode without address":     `UPDATE apps SET smtp_from_mode='address' WHERE id='a'`,
 		"unknown mode":                     `UPDATE apps SET smtp_from_mode='rewrite' WHERE id='a'`,
-		"keep origin outside domain mode":  `UPDATE apps SET smtp_from_keep_origin=true WHERE id='a'`,
+		"keep origin column is gone":       `UPDATE apps SET smtp_from_keep_origin=true WHERE id='a'`,
 		"address without domain part":      `UPDATE apps SET smtp_from_mode='address', smtp_from_address='nobody' WHERE id='a'`,
 		"address with quoted local part":   `UPDATE apps SET smtp_from_mode='address', smtp_from_address='"a b"@example.com' WHERE id='a'`,
 		"address with consecutive dots":    `UPDATE apps SET smtp_from_mode='address', smtp_from_address='a..b@example.com' WHERE id='a'`,
@@ -60,7 +60,7 @@ func TestSMTPSubmissionSchemaConstraints(t *testing.T) {
 	}
 	for _, statement := range []string{
 		`UPDATE apps SET smtp_from_mode='address', smtp_from_address='no-reply+x@example.com' WHERE id='a'`,
-		`UPDATE apps SET smtp_from_mode='domain', smtp_from_domain='example.com', smtp_from_keep_origin=true WHERE id='a'`,
+		`UPDATE apps SET smtp_from_mode='domain', smtp_from_domain='example.com' WHERE id='a'`,
 		`UPDATE smtp_credentials SET revoked_at=clock_timestamp(), last_used_at=clock_timestamp() WHERE id='` + cred + `'`,
 		`INSERT INTO smtp_replay_secret(sealed) VALUES (decode(repeat('ab',40),'hex'))`,
 		`INSERT INTO edge_source_reports(worker_id,epoch,reported_at,submission_ports) VALUES ('w',1,now(),ARRAY[465,587])`,

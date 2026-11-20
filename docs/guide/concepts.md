@@ -23,7 +23,7 @@ Each app has one or more **API keys**. A key is shown once, when it is issued; t
 
 An **SMTP credential** is a login for sending an app's mail over SMTP, for software that has no HTTP API, such as printers and scanners. Its username is the credential's ID and its password is shown once, when it is created. The database stores only a digest, and credentials are limited to 10 active per app. A credential can only send mail for its own app. It can't read messages, call the API or sign in to the console. Revoking a credential stops it signing in; messages it already sent keep its name.
 
-An app also has a **From address policy** for SMTP mail: accept only From addresses on the app's verified sender domains, move the From address onto one of those domains, or always send from one fixed address. When the policy replaces a From address, the message records the address the client sent as its **original From**.
+An app also has a **From address policy** for SMTP mail: accept only From addresses on the app's verified sender domains, move the From address onto one of those domains (the original address stays in the name part, so `scanner@office.example.net` becomes `scanner=office.example.net@example.com`), or always send from one fixed address. When the policy replaces a From address, the message records the address the client sent as its **original From**.
 
 ::: warning Not available yet
 The SMTP listener is not part of Thinpost yet. The admin API can already create and revoke credentials and set the From policy, but no mail can be sent over SMTP until the listener ships, and the console shows the SMTP tab only on a deployment that reports `smtp_submission` in its [runtime features](/guide/console#smtp). Nothing here changes how the HTTP APIs work.
