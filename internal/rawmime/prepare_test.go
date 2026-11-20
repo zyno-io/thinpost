@@ -177,6 +177,45 @@ func TestPrepareDKIMSignatureRefinedDrop(t *testing.T) {
 	}
 }
 
+func TestPrepareDroppedSignatureInvalidatesSignaturesCoveringSignatures(t *testing.T) {
+	sig := func(id, h string) string {
+		return "DKIM-Signature: v=1; a=rsa-sha256; d=example.com; s=k; h=" + h + "; bh=AA; b=" + id + "\r\n"
+	}
+	head := "From: al@example.com\r\nTo: b@example.net\r\nDate: Tue, 17 Nov 2026 10:00:00 +0000\r\n"
+	cases := []struct {
+		name string
+		sigs string
+		kept []string // b= markers that survive
+	}{
+		// The older signature covers Message-ID and goes; the later one covers
+		// DKIM-Signature, whose field set just changed, so it goes too.
+		{"later covers dkim-signature", sig("OLD", "from:message-id") + sig("NEW", "from:dkim-signature"), nil},
+		{"covered case-insensitively", sig("OLD", "from:message-id") + sig("NEW", "from:DKIM-Signature"), nil},
+		{"unrelated signatures stay", sig("OLD", "from:message-id") + sig("MID", "from:to") + sig("NEW", "from:subject"), []string{"MID", "NEW"}},
+		{"nothing dropped, covers dkim-signature stays", sig("A", "from:to") + sig("B", "from:dkim-signature"), []string{"A", "B"}},
+		{"only dropped signature goes", sig("OLD", "from:to:message-id"), nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			raw := head + c.sigs + "\r\nbody"
+			out, in := prepared(t, raw, "")
+			if size, err := PreparedSize([]byte(raw), in); err != nil || size.Total != len(out) {
+				t.Fatalf("PreparedSize %v %v, len(Prepare) %d", size, err, len(out))
+			}
+			_, rest, _ := splitPrepared(t, out)
+			for _, id := range []string{"OLD", "MID", "NEW", "A", "B"} {
+				want := false
+				for _, k := range c.kept {
+					want = want || k == id
+				}
+				if got := strings.Contains(rest, "b="+id+"\r\n"); got != want {
+					t.Errorf("%s: kept=%v want %v\n%s", id, got, want, rest)
+				}
+			}
+		})
+	}
+}
+
 func TestPrepareDropsSenderOnlyWhenStripped(t *testing.T) {
 	out, _ := prepared(t, "From: al@example.com\r\nSender: bot@example.com\r\nDate: Tue, 17 Nov 2026 10:00:00 +0000\r\n\r\nb", "")
 	if _, rest, _ := splitPrepared(t, out); count(fieldNames(rest), "sender") != 1 {
