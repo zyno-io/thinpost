@@ -271,11 +271,19 @@ func (s *Server) EnableInbound() {
 // Submission. Call it once, before serving. Without it the worker never
 // advertises the capability, never sends a submission frame and refuses any it
 // receives.
-func (s *Server) EnableSubmission(ports ...uint32) {
+//
+// The ports must be valid (at most 8, distinct, 1 to 65535); a bad list is an
+// error so a misconfigured worker fails at startup instead of being refused by
+// every control plane.
+func (s *Server) EnableSubmission(ports ...uint32) error {
+	if !edgeprotocol.ValidSubmissionPorts(ports) {
+		return errors.New("invalid submission ports")
+	}
 	s.submission.mu.Lock()
 	s.submission.enabled = true
 	s.submission.ports = append([]uint32(nil), ports...)
 	s.submission.mu.Unlock()
+	return nil
 }
 
 // Submission is the SMTP submission listeners' view of the submission path.

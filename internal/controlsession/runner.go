@@ -120,6 +120,8 @@ type Runner struct {
 	// budget is created on first use (see submissionBudget). It is a plain
 	// pointer so a Runner stays copyable.
 	budget *byteBudget
+	// clock replaces time.Now in validLease (tests).
+	clock func() time.Time
 }
 type receive struct {
 	frame *controlv1.EdgeFrame
@@ -432,15 +434,18 @@ func (r *Runner) RunDraining(parent context.Context, drain <-chan struct{}) erro
 				if !valid || !edgeprotocol.ValidCapabilities(body.Ready.GetCapabilities()) {
 					return errors.New("invalid edge readiness")
 				}
-				if !edgeprotocol.ValidSubmissionPorts(body.Ready.GetSubmissionPorts()) {
-					return errors.New("invalid edge readiness")
-				}
 				if r.Sources != nil && reported.Explicit && r.Sources.CheckSources(reported.Addresses) != nil {
 					return errors.New("invalid edge readiness")
 				}
 				inboundOn = r.Inbound != nil && edgeprotocol.HasCapability(body.Ready.GetCapabilities(), edgeprotocol.CapInbound)
 				subOn = r.Submission != nil && edgeprotocol.HasCapability(body.Ready.GetCapabilities(), edgeprotocol.CapSubmission)
 				if subOn {
+					// The ports are a console-only field: they are checked (strictly)
+					// only when the worker reported submission/1 and this controller
+					// serves it, so they can never end a session that does not use it.
+					if !edgeprotocol.ValidSubmissionPorts(body.Ready.GetSubmissionPorts()) {
+						return errors.New("invalid edge readiness")
+					}
 					// What the worker observes on its AUTH ports is shown only when
 					// this controller can serve it too.
 					reported.SubmissionPorts = make([]int, 0, len(body.Ready.GetSubmissionPorts()))
@@ -861,7 +866,11 @@ func (r *Runner) RunDraining(parent context.Context, drain <-chan struct{}) erro
 	}
 }
 func (r *Runner) validLease(lease postgres.ControllerLease) bool {
-	return lease.WorkerID == r.WorkerID && lease.ControllerID == r.ControllerID && lease.Epoch > 0 && time.Now().Add(r.ClockMargin).Before(lease.ExpiresAt)
+	now := time.Now
+	if r.clock != nil {
+		now = r.clock
+	}
+	return lease.WorkerID == r.WorkerID && lease.ControllerID == r.ControllerID && lease.Epoch > 0 && now().Add(r.ClockMargin).Before(lease.ExpiresAt)
 }
 func guard(ctx context.Context, cancel context.CancelFunc, deadline time.Time, updates <-chan time.Time, expired chan<- struct{}) {
 	timer := time.NewTimer(time.Until(deadline))
