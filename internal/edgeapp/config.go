@@ -33,8 +33,6 @@ type Config struct {
 	AdditionalHostnames                    []string
 	AdditionalCertRoot                     string
 	BounceDomains                          []string
-	Infrastructure                         []netip.Prefix
-	RouteExceptions                        []egress.Exception
 	ControllerIdentities                   []string
 	ControlCA, ControlCert, ControlKey     string
 	SMTPCert, SMTPKey, JournalPath         string
@@ -96,17 +94,10 @@ func Load(getenv func(string) string) (Config, error) {
 	if !c.Source.Is4() {
 		return Config{}, errors.New("SMTP listener must use an IPv4 address")
 	}
-	for _, value := range strings.Split(getenv("THINPOST_EDGE_INFRASTRUCTURE_CIDRS"), ",") {
-		prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
-		if err != nil {
-			return Config{}, errors.New("invalid infrastructure CIDR")
-		}
-		c.Infrastructure = append(c.Infrastructure, prefix)
-	}
-	c.RouteExceptions, err = egress.LoadExceptions(getenv("THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE"))
-	if err != nil {
-		return Config{}, err
-	}
+	// The Edge applies no destination policy: control is the sole authority for
+	// the egress deny ranges and route exceptions. THINPOST_EDGE_INFRASTRUCTURE_CIDRS
+	// and THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE from an earlier release are
+	// therefore never read, so an Edge that still has them set starts normally.
 	if c.AdditionalSources, err = parseAdditionalSources(getenv("THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES")); err != nil {
 		return Config{}, err
 	}
@@ -119,8 +110,8 @@ func Load(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("additional SMTP certificate root must be a clean absolute path")
 		}
 	}
-	if _, err = egress.NewPolicy(c.Infrastructure, c.Sources(), c.RouteExceptions...); err != nil {
-		return Config{}, errors.New("invalid SMTP source or infrastructure policy")
+	if _, err = egress.NewSourceDialer(c.Sources()); err != nil {
+		return Config{}, errors.New("invalid SMTP source address")
 	}
 	if c.SourceGateways, err = parseSourceGateways(getenv("THINPOST_EDGE_SOURCE_GATEWAYS"), len(c.Sources())); err != nil {
 		return Config{}, err
@@ -237,8 +228,8 @@ func (c Config) Sources() []netip.Addr {
 }
 
 // parseAdditionalSources reads a comma-separated list of literal public IPv4
-// addresses. Membership in the infrastructure ranges, and uniqueness including
-// the primary, are checked by egress.NewPolicy.
+// addresses. Uniqueness, including the primary, is checked by
+// egress.NewSourceDialer.
 func parseAdditionalSources(value string) ([]netip.Addr, error) {
 	if strings.TrimSpace(value) == "" {
 		return nil, nil

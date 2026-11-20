@@ -17,6 +17,13 @@ func TestMultipleSourcesPerFamily(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	d, err := NewSourceDialer([]netip.Addr{primary, second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = NewSourceDialer([]netip.Addr{primary, primary}); err == nil {
+		t.Fatal("dialer accepted a duplicate source")
+	}
 	var seenSource netip.Addr
 	dial := func(_ context.Context, source, _ netip.Addr) (net.Conn, error) {
 		seenSource = source
@@ -24,20 +31,20 @@ func TestMultipleSourcesPerFamily(t *testing.T) {
 	}
 	dest := netip.MustParseAddr("8.8.8.8")
 	// A zero source is the primary, never a later source.
-	if _, err = p.dial(context.Background(), netip.Addr{}, dest, "", "", dial); err != nil || seenSource != primary {
+	if _, err = d.dial(context.Background(), netip.Addr{}, dest, dial); err != nil || seenSource != primary {
 		t.Fatalf("zero source used %s, error %v", seenSource, err)
 	}
-	if _, err = p.dial(context.Background(), second, dest, "", "", dial); err != nil || seenSource != second {
+	if _, err = d.dial(context.Background(), second, dest, dial); err != nil || seenSource != second {
 		t.Fatalf("named source used %s, error %v", seenSource, err)
 	}
 	// An unknown source, or a wrong-family one, never dials.
 	seenSource = netip.Addr{}
 	for _, source := range []netip.Addr{netip.MustParseAddr("45.0.1.23"), netip.MustParseAddr("2607:f8b0:4000::5")} {
-		if _, err = p.dial(context.Background(), source, dest, "", "", dial); err == nil || seenSource.IsValid() {
+		if _, err = d.dial(context.Background(), source, dest, dial); err == nil || seenSource.IsValid() {
 			t.Fatalf("dialed from unknown source %s", source)
 		}
 	}
-	if _, err = p.dial(context.Background(), second, netip.MustParseAddr("2607:f8b0:4000::1"), "", "", dial); err == nil || seenSource.IsValid() {
+	if _, err = d.dial(context.Background(), second, netip.MustParseAddr("2607:f8b0:4000::1"), dial); err == nil || seenSource.IsValid() {
 		t.Fatal("dialed an IPv6 destination from an IPv4 source")
 	}
 	// Every source is excluded from route exceptions, not only the primary.
@@ -59,6 +66,9 @@ func TestMultipleSourcesPerFamily(t *testing.T) {
 	if _, err = NewPolicy(infra, tooMany); err == nil {
 		t.Fatal("accepted too many sources")
 	}
+	if _, err = NewSourceDialer(tooMany); err == nil {
+		t.Fatal("dialer accepted too many sources")
+	}
 }
 
 func TestPublicSource(t *testing.T) {
@@ -69,5 +79,36 @@ func TestPublicSource(t *testing.T) {
 	}
 	if PublicSource(netip.Addr{}) {
 		t.Fatal("zero address is not a public source")
+	}
+}
+
+// The dialer does not judge destinations: control authorized this address.
+// Only the source binding is enforced.
+func TestSourceDialerPinsSourceAndDoesNotFilterDestinations(t *testing.T) {
+	d, err := NewSourceDialer([]netip.Addr{netip.MustParseAddr("45.0.1.22")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seenSource, seenDestination netip.Addr
+	dial := func(_ context.Context, source, destination netip.Addr) (net.Conn, error) {
+		seenSource, seenDestination = source, destination
+		return nil, nil
+	}
+	for _, destination := range []string{"8.8.8.8", "127.0.0.1", "10.1.2.3", "45.0.1.40"} {
+		seenSource, seenDestination = netip.Addr{}, netip.Addr{}
+		if _, err = d.dial(context.Background(), netip.Addr{}, netip.MustParseAddr(destination), dial); err != nil || seenSource.String() != "45.0.1.22" || seenDestination.String() != destination {
+			t.Fatalf("destination %s: source %s destination %s error %v", destination, seenSource, seenDestination, err)
+		}
+	}
+	if _, err = d.dial(context.Background(), netip.Addr{}, netip.MustParseAddr("2607:f8b0:4000::1"), dial); err == nil {
+		t.Fatal("dialed without a configured IPv6 source")
+	}
+	if _, err = d.dial(context.Background(), netip.Addr{}, netip.Addr{}, dial); err == nil {
+		t.Fatal("dialed an invalid destination")
+	}
+	for _, sources := range [][]netip.Addr{nil, {netip.MustParseAddr("10.0.0.5")}, {netip.MustParseAddr("fe80::1%eth0")}} {
+		if _, err = NewSourceDialer(sources); err == nil {
+			t.Fatalf("accepted invalid sources %v", sources)
+		}
 	}
 }

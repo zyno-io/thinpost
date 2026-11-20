@@ -14,7 +14,7 @@ var testSources = []netip.Addr{netip.MustParseAddr("45.0.1.22"), netip.MustParse
 func TestExecuteUsesPrimaryAndOwnHostnameWhenSourceFieldsAreEmpty(t *testing.T) {
 	j, fence, start, mime := setup(t)
 	dialer := &fakeDialer{}
-	worker := &Worker{Journal: j, Dialer: dialer, Recipients: allowRecipients(true), HeloName: "smtp.sender.example", Sources: testSources}
+	worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: testSources}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result, err := worker.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)
@@ -33,7 +33,7 @@ func TestExecuteUsesRequestedSourceAndHelo(t *testing.T) {
 	j, fence, start, mime := setup(t)
 	start.SourceAddress, start.HeloName = "45.0.0.10", "smtp.hosting.example"
 	dialer := &fakeDialer{}
-	worker := &Worker{Journal: j, Dialer: dialer, Recipients: allowRecipients(true), HeloName: "smtp.sender.example", Sources: testSources}
+	worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: testSources}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result, err := worker.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)
@@ -72,7 +72,7 @@ func TestExecuteRefusesUnrequestableSourceBeforePermit(t *testing.T) {
 			j, fence, start, mime := setup(t)
 			start.SourceAddress, start.HeloName = fields[0], fields[1]
 			dialer := &fakeDialer{}
-			worker := &Worker{Journal: j, Dialer: dialer, Recipients: allowRecipients(true), HeloName: "smtp.sender.example", Sources: testSources}
+			worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: testSources}
 			permits := 0
 			result, err := worker.Execute(context.Background(), fence, start, mime, func() bool { return true }, func(context.Context, *controlv1.DeliveryStart) error { permits++; return nil })
 			if err != nil || result.Outcome != controlv1.DeliveryOutcome_DELIVERY_OUTCOME_REJECTED || result.SmtpCode != 0 || permits != 0 || dialer.dials != 0 {
@@ -86,7 +86,7 @@ func TestExecuteRefusesExplicitSourceFromAWorkerWithNoSources(t *testing.T) {
 	j, fence, start, mime := setup(t)
 	start.SourceAddress, start.HeloName = "45.0.1.22", "smtp.sender.example"
 	dialer := &fakeDialer{}
-	worker := &Worker{Journal: j, Dialer: dialer, Recipients: allowRecipients(true), HeloName: "smtp.sender.example"}
+	worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example"}
 	permits := 0
 	result, err := worker.Execute(context.Background(), fence, start, mime, func() bool { return true }, func(context.Context, *controlv1.DeliveryStart) error { permits++; return nil })
 	if err != nil || result.Outcome != controlv1.DeliveryOutcome_DELIVERY_OUTCOME_REJECTED || permits != 0 || dialer.dials != 0 {

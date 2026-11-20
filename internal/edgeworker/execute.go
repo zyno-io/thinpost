@@ -31,12 +31,10 @@ type Dialer interface {
 	// numeric destination; it must never use any other local address.
 	Dial(ctx context.Context, source, destination netip.Addr, recipient, mx string) (net.Conn, error)
 }
-type RecipientPolicy interface{ Allows(string) bool }
 type Worker struct {
-	Journal    Journal
-	Dialer     Dialer
-	Recipients RecipientPolicy
-	HeloName   string
+	Journal  Journal
+	Dialer   Dialer
+	HeloName string
 	// Sources are the outbound addresses this worker owns, the primary first.
 	// A delivery may name one of them; anything else is refused before a permit
 	// is requested.
@@ -54,7 +52,7 @@ type Worker struct {
 // A journal error is fatal to claiming more work until recovery. The worker
 // never stores recipients, message contents, or SMTP error text in its journal.
 func (w *Worker) Execute(ctx context.Context, fence journal.Fence, start *controlv1.DeliveryStart, mime []byte, authorized func() bool, permit func(context.Context, *controlv1.DeliveryStart) error) (*controlv1.DeliveryResult, error) {
-	if ctx.Err() != nil || w.Journal == nil || w.Dialer == nil || w.Recipients == nil || w.HeloName == "" || authorized == nil || permit == nil || !authorized() || !edgeprotocol.VerifyMessage(start, mime) || start.Epoch != fence.Epoch {
+	if ctx.Err() != nil || w.Journal == nil || w.Dialer == nil || w.HeloName == "" || authorized == nil || permit == nil || !authorized() || !edgeprotocol.VerifyMessage(start, mime) || start.Epoch != fence.Epoch {
 		return nil, errors.New("invalid delivery execution request")
 	}
 	address, err := netip.ParseAddr(start.DestinationIp)
@@ -75,11 +73,7 @@ func (w *Worker) Execute(ctx context.Context, fence journal.Fence, start *contro
 	outcome := smtptransport.NotAccepted
 	var attemptErr error
 	var dialErr error
-	policyDenied := false
-	if !w.Recipients.Allows(start.Recipient) {
-		policyDenied = true
-		dialErr = errors.New("recipient policy denied delivery")
-	} else if ctx.Err() != nil || !authorized() {
+	if ctx.Err() != nil || !authorized() {
 		dialErr = errors.New("controller lease expired")
 	} else if start.TrackingSendCutoffUnixMs != 0 && time.Until(time.UnixMilli(start.TrackingSendCutoffUnixMs)) <= delivery.TrackingClockMargin {
 		dialErr = errors.New("tracking lifetime is insufficient")
@@ -148,11 +142,6 @@ func (w *Worker) Execute(ctx context.Context, fence journal.Fence, start *contro
 		kind = journal.Uncertain
 		result = controlv1.DeliveryOutcome_DELIVERY_OUTCOME_UNCERTAIN
 	case smtptransport.NotAccepted:
-		if policyDenied {
-			kind = journal.RecipientPolicyDenied
-			result = controlv1.DeliveryOutcome_DELIVERY_OUTCOME_RECIPIENT_POLICY_DENIED
-			break
-		}
 		var smtpErr *smtptransport.ReplyError
 		if errors.As(attemptErr, &smtpErr) && smtpErr.Code >= 400 && smtpErr.Code <= 599 {
 			code = smtpErr.Code

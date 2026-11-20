@@ -16,7 +16,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 # The source and network are deliberately not RFC 5737/3849 documentation addresses:
-# the Edge egress policy rejects documentation ranges as sources, so this
+# the Edge rejects documentation ranges as sources, so this
 # --internal Docker network uses an ordinary public-looking /30 that is never routed.
 SOURCE = "11.42.51.2"
 NETWORK = "11.42.51.0/30"
@@ -86,7 +86,6 @@ def main():
                 "THINPOST_EDGE_BOUNCE_DOMAIN": "bounce.fixture.invalid",
                 "THINPOST_EDGE_CONTROL_LISTEN": "127.0.0.1:7443",
                 "THINPOST_EDGE_SMTP_LISTEN": SOURCE + ":25",
-                "THINPOST_EDGE_INFRASTRUCTURE_CIDRS": "0.0.0.0/0,::/0",
                 "THINPOST_EDGE_CONTROLLER_IDENTITIES": "spiffe://thinpost.fixture/control",
                 "THINPOST_EDGE_CONTROL_CA": "/fixture/ca.crt",
                 "THINPOST_EDGE_CONTROL_CERT": "/fixture/edge.crt",
@@ -97,8 +96,6 @@ def main():
                 "THINPOST_EDGE_JOURNAL_CAPACITY": "20",
                 "THINPOST_EDGE_JOURNAL_RESERVE_BYTES": "1048576",
                 "THINPOST_EDGE_CLOCK_MARGIN": "1s",
-                "THINPOST_RECIPIENT_POLICY": "allowlist",
-                "THINPOST_RECIPIENT_ALLOWLIST_FILE": "/fixture/recipients.txt",
             }
             flags = []
             for key, value in settings.items():

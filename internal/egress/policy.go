@@ -1,11 +1,14 @@
-// Package egress constrains edge SMTP connections to validated numeric IPs.
-// DNS resolution and MX authentication are separate responsibilities.
+// Package egress holds the destination policy and the SMTP source dialer.
+// Policy is the control plane's destination filter: it is applied when a
+// recipient's route is resolved, and it is the only place destinations are
+// checked. SourceDialer is the Edge's dialer: it connects to the numeric
+// address control authorized, from a source address the worker owns, and does
+// not judge the destination. DNS resolution and MX authentication are separate
+// responsibilities.
 package egress
 
 import (
-	"context"
 	"errors"
-	"net"
 	"net/netip"
 )
 
@@ -181,44 +184,4 @@ func publicAddress(address netip.Addr) bool {
 		}
 	}
 	return true
-}
-
-type dialFunc func(context.Context, netip.Addr, netip.Addr) (net.Conn, error)
-
-// Dial connects only to the supplied numeric address on SMTP port 25. The MX
-// name must be retained separately for TLS validation. A zero source means the
-// primary address of the destination's family; otherwise source must be one of
-// the policy's sources, of the destination's family, and is never replaced by
-// another address. Network firewall and routing controls remain mandatory
-// defense in depth.
-func (p *Policy) Dial(ctx context.Context, source, address netip.Addr, recipient, mx string) (net.Conn, error) {
-	return p.dial(ctx, source, address, recipient, mx, func(ctx context.Context, source, destination netip.Addr) (net.Conn, error) {
-		return dialTCP(ctx, source, destination, "25")
-	})
-}
-
-// dialTCP binds the local end to source before connecting. A bind failure
-// (for example an address the host does not own) fails the dial; the kernel
-// never picks a different source.
-func dialTCP(ctx context.Context, source, destination netip.Addr, port string) (net.Conn, error) {
-	dialer := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IP(source.AsSlice())}}
-	return dialer.DialContext(ctx, "tcp", net.JoinHostPort(destination.String(), port))
-}
-func (p *Policy) dial(ctx context.Context, source, address netip.Addr, recipient, mx string, dial dialFunc) (net.Conn, error) {
-	if !p.AllowedFor(address, recipient, mx) {
-		return nil, errors.New("SMTP destination is not allowed")
-	}
-	address = address.Unmap()
-	if !source.IsValid() {
-		source = p.source6
-		if address.Is4() {
-			source = p.source4
-		}
-		if !source.IsValid() {
-			return nil, errors.New("no SMTP source for destination address family")
-		}
-	} else if !p.isSource(source) || source.Is4() != address.Is4() {
-		return nil, errors.New("SMTP source is not allowed for destination")
-	}
-	return dial(ctx, source, address)
 }

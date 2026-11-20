@@ -516,9 +516,9 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 	}
 	started := make(chan *controlv1.DeliveryStart, 2)
 	smtpDialer := &integrationSMTPDialer{certificate: serverCert, completed: make(chan error, 3), received: make(chan []byte, 2), dkimRecord: dkimRecord}
-	edgePolicy := &integrationSwitchPolicy{}
-	edgePolicy.allowed.Store(true)
-	smtpWorker := &edgeworker.Worker{Journal: j, Dialer: smtpDialer, Recipients: edgePolicy, HeloName: "smtp.sender.example", Roots: roots}
+	controlPolicy := &integrationSwitchPolicy{}
+	controlPolicy.allowed.Store(true)
+	smtpWorker := &edgeworker.Worker{Journal: j, Dialer: smtpDialer, HeloName: "smtp.sender.example", Roots: roots}
 	edge, err := edgesession.New("worker", []string{controllerIdentity}, j, integrationExecutor{worker: smtpWorker, started: started}, authority, 2)
 	if err != nil {
 		t.Fatal(err)
@@ -539,7 +539,7 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 	}
 	envelopes := &bounceaddress.Service{Repository: repo, Domain: "bounce.example.com", ActiveVersion: "v1", Keys: map[string][]byte{"v1": []byte("0123456789abcdef0123456789abcdef")}}
 	mxDNS := &integrationMXDNS{}
-	work := &dispatch.Provider{Repository: repo, Objects: objects, Routes: &mailroute.Resolver{DNS: mxDNS, Filter: integrationMXFilter{}}, Envelopes: envelopes, Recipients: policy}
+	work := &dispatch.Provider{Repository: repo, Objects: objects, Routes: &mailroute.Resolver{DNS: mxDNS, Filter: integrationMXFilter{}}, Envelopes: envelopes, Recipients: controlPolicy}
 	bounceGate := &integrationBounceGate{repository: repo, entered: make(chan struct{}, 1), release: make(chan struct{})}
 	runner := &Runner{WorkerID: "worker", ControllerID: "controller", JournalID: journalID, Issuer: &controllease.Issuer{Repository: repo, Signer: signer, Identity: controllerIdentity, JournalID: journalID}, Results: repo, Starts: repo, Reconciler: repo, Work: work, Bounces: &bounceingest.Service{Repository: bounceGate, Objects: objects}, LeaseTTL: 30 * time.Second, ClockMargin: 6 * time.Second, PollInterval: 100 * time.Millisecond, Connect: func(ctx context.Context) (Stream, error) { return controlv1.NewEdgeControlClient(conn).Connect(ctx) }}
 	done := make(chan error, 1)
@@ -809,10 +809,11 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 			t.Fatal("SMTP test server failed", err)
 		}
 	}
-	// Trusted still allows this recipient, but Edge's independently loaded
-	// policy changed. Both the first delivery and an explicit release must
-	// remain held without an SMTP permit or dial while Edge denies it.
-	edgePolicy.allowed.Store(false)
+	// Control is authoritative for the recipient allowlist: the Edge no longer
+	// checks it. Acceptance still allows this recipient, but control's dispatch
+	// recheck now denies it. Both the first delivery and an explicit release must
+	// stay held at claim time, without an SMTP permit or an Edge start.
+	controlPolicy.allowed.Store(false)
 	heldRequest := httptest.NewRequest("POST", "/emails", strings.NewReader(`{"from":"sender@example.com","to":["recipient@example.net"],"subject":"Policy hold","text":"Body"}`))
 	heldRequest.Header.Set("Authorization", "Bearer "+apiKey)
 	heldRequest.Header.Set("X-Thinpost-Enhanced-Protection", "true")
@@ -835,18 +836,16 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 		t.Fatal("held message preparation", err)
 	}
 	var heldDelivery string
+	if err = db.QueryRowContext(ctx, `SELECT id FROM deliveries WHERE message_id=$1`, heldReceipt.ID).Scan(&heldDelivery); err != nil {
+		t.Fatal(err)
+	}
 	for cycle := 0; cycle < 2; cycle++ {
-		var denied *controlv1.DeliveryStart
-		select {
-		case denied = <-started:
-		case <-ctx.Done():
-			t.Fatal("edge policy check not reached")
-		}
-		heldDelivery = denied.DeliveryId
 		for {
 			var state string
+			var denied int
 			var authorized bool
-			err = db.QueryRowContext(ctx, `SELECT d.state,a.start_authorized FROM deliveries d JOIN delivery_attempts a ON a.id=$2 WHERE d.id=$1`, heldDelivery, denied.AttemptId).Scan(&state, &authorized)
+			err = db.QueryRowContext(ctx, `SELECT d.state,(SELECT count(*) FROM delivery_attempts a WHERE a.delivery_id=d.id AND a.outcome='recipient_policy_denied'),
+				COALESCE((SELECT bool_or(a.start_authorized) FROM delivery_attempts a WHERE a.delivery_id=d.id),false) FROM deliveries d WHERE d.id=$1`, heldDelivery).Scan(&state, &denied, &authorized)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -854,17 +853,22 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 			if listErr != nil {
 				t.Fatal(listErr)
 			}
-			if state == "recipient_policy_held" && len(items) == 0 {
-				if authorized || smtpDialer.dials.Load() != 3 {
-					t.Fatal("denied recipient received permit or SMTP dial")
+			if state == "recipient_policy_held" && denied == cycle+1 {
+				if authorized || len(items) != 0 || smtpDialer.dials.Load() != 3 {
+					t.Fatal("denied recipient received permit, Edge start or SMTP dial")
 				}
 				break
 			}
 			select {
 			case <-ctx.Done():
-				t.Fatal("policy hold not committed and acknowledged")
+				t.Fatal("policy hold not committed")
 			case <-time.After(10 * time.Millisecond):
 			}
+		}
+		select {
+		case <-started:
+			t.Fatal("control-denied recipient reached the Edge")
+		default:
 		}
 		if cycle == 0 {
 			if err = repo.RetryPolicyHold(ctx, "operator", app, heldReceipt.ID, heldDelivery); err != nil {
@@ -1024,7 +1028,7 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 	if _, err = db.ExecContext(ctx, `UPDATE deliveries SET route_attempts=1 WHERE message_id=$1`, trackedReceipt.MessageID); err != nil {
 		t.Fatal(err)
 	}
-	edgePolicy.allowed.Store(true)
+	controlPolicy.allowed.Store(true)
 	third := *runner
 	third.ControllerID = "controller-three"
 	thirdCtx, cancelThird := context.WithCancel(ctx)

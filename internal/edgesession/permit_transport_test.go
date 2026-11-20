@@ -68,7 +68,7 @@ func TestPermitTimeoutOverMutualTLS(t *testing.T) {
 	s, j, _, _ := setup(t, true)
 	s.permitTimeout = 150 * time.Millisecond
 	dialer := &timeoutTestDialer{}
-	s.executor = &edgeworker.Worker{Journal: j, Dialer: dialer, Recipients: timeoutTestPolicy{}, HeloName: "smtp.sender.example"}
+	s.executor = &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example"}
 	roots, clientCert, serverCert := permitTestCertificates(t)
 	serverTLS, err := controltls.Server(roots, serverCert, []string{"spiffe://thinpost.test/staging/controller/one"})
 	if err != nil {

@@ -87,16 +87,6 @@ spec:
             - name: THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS
               value: {{ join "," .Values.additionalBounceDomains | quote }}
 {{- end }}
-            - name: THINPOST_EDGE_INFRASTRUCTURE_CIDRS
-              valueFrom:
-                configMapKeyRef:
-                  name: thinpost-recipient-allowlist
-                  key: infrastructure-cidrs
-            - name: THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE
-              valueFrom:
-                configMapKeyRef:
-                  name: thinpost-recipient-allowlist
-                  key: route-exceptions-file
             - name: THINPOST_EDGE_CONTROLLER_IDENTITIES
               value: {{ .Values.controllerIdentity | quote }}
             - name: THINPOST_EDGE_CONTROL_CA
@@ -125,16 +115,6 @@ spec:
               value: {{ .Values.smtpRate.sourceInterval | quote }}
             - name: THINPOST_EDGE_SMTP_SOURCE_BURST
               value: {{ .Values.smtpRate.sourceBurst | quote }}
-            - name: THINPOST_RECIPIENT_POLICY
-              valueFrom:
-                configMapKeyRef:
-                  name: thinpost-recipient-allowlist
-                  key: policy
-            - name: THINPOST_RECIPIENT_ALLOWLIST_FILE
-              valueFrom:
-                configMapKeyRef:
-                  name: thinpost-recipient-allowlist
-                  key: allowlist-file
           volumeMounts:
             - name: control-tls
               mountPath: /run/thinpost/control
@@ -148,9 +128,6 @@ spec:
               mountPath: {{ printf "/run/thinpost/smtp-sources/%d" $i }}
               readOnly: true
 {{- end }}
-            - name: recipients
-              mountPath: /run/thinpost/recipients
-              readOnly: true
             - name: journal
               mountPath: /journal
           startupProbe:
@@ -202,9 +179,6 @@ spec:
             secretName: {{ default "thinpost-smtp-public" $extra.certificateSecret | quote }}
             defaultMode: 0440
 {{- end }}
-        - name: recipients
-          configMap:
-            name: thinpost-recipient-allowlist
         - name: journal
           persistentVolumeClaim:
             claimName: thinpost-journal
