@@ -74,6 +74,12 @@ jobs:
         run: go test -p 1 ./...
       - name: Vet
         run: go vet ./...
+      # The production build is CGO-free, but the race detector needs cgo (gcc
+      # ships on the hosted image). Also runs the database-backed tests.
+      - name: Race tests (SMTP server, edge sessions, control sessions)
+        # Once per run: the packages don't depend on the PostgreSQL version.
+        if: ${{ matrix.pg == '18' }}
+        run: CGO_ENABLED=1 go test -race -p 1 -count=1 ./internal/thirdparty/gosmtp ./internal/bounce ./internal/edgesession ./internal/controlsession
       # This test is skipped unless the process is root (it changes file owners).
       - name: Privileged journal ownership test
         run: >-
