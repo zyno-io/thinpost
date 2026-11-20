@@ -40,9 +40,9 @@ The app area stays mounted as you move between tabs. The console remembers the l
 
 ### Send a test message
 
-**Send test message** on the Messages tab (and **Send test** on a verified domain's row) sends one real message as the app, to check that delivery works end to end. You choose a local part and one of the app's verified sending domains for From, an optional display name, one to five To recipients, a subject and a text body (both prefilled with neutral text), an optional HTML body, and optionally Enhanced Protection. There is no Cc, Bcc, reply address, custom header, attachment, tracking choice or hold in a test send.
+**Send test message** on the Messages tab (and **Send test** on a verified domain's row) sends one real message as the app, to check that delivery works end to end. You choose a local part and one of the app's verified sending domains for From, an optional display name, one to five To recipients, a subject and a text body (both prefilled with neutral text), an optional HTML body, and optionally Enhanced Protection and the two options under [Test send options](#test-send-options). There is no Cc, Bcc, reply address, custom header, attachment, tracking choice or hold in a test send.
 
-A test send is a normal submission as far as Thinpost is concerned:
+By default, a test send is a normal submission as far as Thinpost is concerned:
 
 - It goes through the same acceptance path as the app API, so sender-domain verification, the recipient rules, the [suppression list](/guide/suppressions), the submission rate, the daily recipient quota and the pending-message limit all apply, and it counts against them. A new app has a submission rate of zero and refuses test sends until one is set in the **Sending limit** panel on the **API keys** tab.
 - The app's [webhooks](/guide/webhooks) receive its events like those of any other message.
@@ -51,7 +51,14 @@ A test send is a normal submission as far as Thinpost is concerned:
 
 The console shows the message detail once Thinpost accepts the message. The form is held only in memory. The console never retries the request. If no answer arrives, or Thinpost answers with a server error, the console cannot tell whether the message was queued: it reloads the message list and blocks another test send until that reload succeeds, so check the list before trying again. A test send has no idempotency key, so a second send after a lost answer can deliver twice.
 
-Each test send is audited as `message.test.submitted` with the administrator as the actor and only the recipient count as detail. It carries no badge in the message list; recognize it by its subject.
+Each test send is audited as `message.test.submitted` with the administrator as the actor, and only the recipient count and the two option flags as detail. The message list and the message detail tag it **Console test**, and add **limits skipped** and **allowlist skipped** when those options were used.
+
+#### Test send options
+
+Both options are off by default, are sent only when ticked, and exist only in the console's test send: the app API and every provider route reject them with a `400`, even when false.
+
+- **Skip sending limits.** The send is not checked against, and is not counted in, the app's sending rate, daily recipient quota or pending-message limit. The rate bucket and the daily quota stay as they were, and the message does not count toward the app's pending-message limit (the Operations backlog still shows it). Everything else still applies: a verified sender domain, DKIM signing, the suppression list, a paused app, the deployment's admission gate, the size and profile limits, the egress policy and Enhanced Protection TLS.
+- **Skip recipient allowlist.** Shown only when this deployment restricts recipients to an allowlist. The message is not held by the allowlist, so it can reach people outside it. Submitting with it ticked asks you to confirm, naming the number of recipients. It skips only the allowlist: the egress policy still refuses special-use and infrastructure destinations, and the other checks above still apply.
 
 ### Webhook history and replay
 

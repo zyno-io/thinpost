@@ -61,7 +61,7 @@ A hold stops automatic progress on work whose state cannot be trusted. Nothing r
 | --- | --- | --- |
 | Uncertain delivery | An SMTP attempt has no recorded outcome, for example the connection dropped between permit and result | The console and API list it but do not release or resend it. Establish the outcome from your own records first; a resend can duplicate mail. |
 | Recovery hold | Work that was in flight when a restore was quarantined | Resolve each held item after reviewing the recovery report. |
-| Recipient policy hold | A recipient policy denied the address before SMTP | After correcting the allowlist on every control replica and the Edge, call `POST /api/v1/apps/{appId}/messages/{messageId}/deliveries/{deliveryId}/retry-policy-hold`. The release is audited and needs an active app and an open gate. |
+| Recipient policy hold | A recipient policy denied the address before SMTP | After correcting the allowlist on every control replica, call `POST /api/v1/apps/{appId}/messages/{messageId}/deliveries/{deliveryId}/retry-policy-hold`. The release is audited and needs an active app and an open gate. |
 | Preparation failed | A message failed 12 preparation claims | Fix the cause, then `POST /api/v1/apps/{appId}/messages/{messageId}/retry-preparation`. Audited, needs an open gate, resets the claim budget. |
 
 Preparation retries use jittered exponential backoff capped at six hours. A claim holds a two-minute lease that the worker renews every 30 seconds for up to 30 minutes. If it loses the lease it stops without writing a failure and logs `status=preparation_lease_lost`. Objects uploaded by unsuccessful claims can stay unreferenced in the bucket.

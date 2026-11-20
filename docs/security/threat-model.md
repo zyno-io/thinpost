@@ -63,15 +63,17 @@ The protocol gives no live revocation and does not reload the trust roots withou
 
 ## Outbound SMTP egress policy
 
-Both the control plane and the edge check every SMTP destination independently, so a bug on one side does not open a path.
+The control plane is the sole authority for the recipient allowlist and the egress policy. It applies both before it authorizes a delivery, and the edge executes what control authorizes: it does not re-check the recipient allowlist or the destination. A compromised control plane could therefore have the edge deliver to any recipient and connect to any numeric address on port 25 that its network allows. The boundary against that is the network around the edge, which must be a firewall or NetworkPolicy that allows only outbound TCP 25 to public destinations (see [Direct public networking](/deploy/direct-public-networking)). Treat those controls as required, not optional.
 
-- **Numeric public addresses only.** The edge dials a validated IP on port 25, keeps the MX name for TLS validation, and binds the connection to a source address that policy allows. A bind failure fails the dial. The kernel never substitutes another source.
+What control enforces when it resolves a recipient's route:
+
+- **Numeric public addresses only.** Control resolves the MX name and hands the edge a validated IP. The edge dials that IP on port 25, keeps the MX name for TLS validation, and binds the connection to a source address it owns. A bind failure fails the dial. The kernel never substitutes another source.
 - **Special-use ranges are denied.** Private, loopback, link-local, carrier-grade NAT, documentation, benchmarking, multicast, reserved, and the IPv6 translation and transition ranges are refused. IPv6 destinations must be global unicast.
 - **Your own infrastructure is denied.** You supply infrastructure ranges, including public addresses you own. Destinations inside them are refused, and a source address must lie inside them. This stops mail being relayed into your own network.
 - **Exceptions are exact.** An operator-supplied exception allows one recipient, one MX host name and one public IP together. Special-use and source addresses stay denied even when listed.
-- **A source must exist for the family.** An address family without a configured source is not dialed.
+- **A source must exist for the family.** An address family without a configured source is not routed.
 
-Network firewall and routing controls remain required defense in depth. DNS answers are not DNSSEC-validated, so the MX data is unauthenticated, and a recipient policy or allowlist is the control for restricting recipients.
+The edge itself only checks that a requested source is one of its own addresses of the destination's family. DNS answers are not DNSSEC-validated, so the MX data is unauthenticated, and a recipient policy or allowlist is the control for restricting recipients.
 
 ## Applications and keys
 
@@ -98,7 +100,14 @@ The operator API accepts only a verified administrator identity and fails closed
 
 In role-only mode, a client-credentials token from a provider that puts scopes on such tokens can carry the role. Do not assign the administrator role to a service account. Details are in [Operator authentication](/deploy/operator-auth).
 
-**Test sends.** An administrator can submit a message as an app from the console (`POST /api/v1/apps/{appId}/messages/test`). The request is policy-bound: it takes the app's acceptance path, so sender-domain verification, recipient rules, suppressions, the submission rate, the recipient quota and the pending-message limit all apply, and a paused app refuses it. The profile is narrow (verified From, one to five To recipients, no attachments, custom headers, tracking choices or hold) and the body is limited to 64 KiB. It uses no API key. It is audited as `message.test.submitted` in the same transaction as the message. It still delivers real mail, and its webhooks fire, so treat the administrator role as one that can send as any app within its limits.
+**Test sends.** An administrator can submit a message as an app from the console (`POST /api/v1/apps/{appId}/messages/test`). By default the request is policy-bound: it takes the app's acceptance path, so sender-domain verification, recipient rules, suppressions, the submission rate, the recipient quota and the pending-message limit all apply, and a paused app refuses it. The profile is narrow (verified From, one to five To recipients, no attachments, custom headers, tracking choices or hold) and the body is limited to 64 KiB. It uses no API key. It is audited as `message.test.submitted` in the same transaction as the message, and the message is tagged as a console test in every message read. It still delivers real mail, and its webhooks fire, so treat the administrator role as one that can send as any app.
+
+Two operator-only options relax part of that path, only on this route. The app API and every provider route reject them with 400, even when false, and the acceptance and commit layers refuse them for any principal that is not an administrator on the console adapter.
+
+- **Skip sending limits** skips, and does not count, the submission rate, the daily recipient quota and the pending-message limit. The rate bucket and the quota are untouched, and the message is left out of the app's pending count. An administrator can already change those limits, so this adds no new capability.
+- **Skip recipient allowlist** skips the deployment's recipient allowlist, at acceptance and at the control plane's dispatch recheck. It exists to check delivery to an address outside a staging allowlist. It requires a confirmation in the console, and the audit event and the message tag record it. It does not skip the egress policy.
+
+Neither option skips the verified sender domain, DKIM signing, suppressions, a paused app, the admission gate, any size or profile limit, the egress policy, or Enhanced Protection TLS. The audit event for a test send carries only the recipient count and the two flags.
 
 Reads of message history are not audited. Content reads of Enhanced Protection messages are audited before data is returned. See [Data handling](/security/data-handling).
 

@@ -62,7 +62,7 @@ It does not follow `include:` or `redirect=`, so an address listed only through 
 Do these in order. Each step is safe on its own, and none changes mail flow until the last.
 
 1. **Obtain the address** and record it in your infrastructure as code.
-2. **Allow it in the egress policy.** The control plane and edge both check source addresses against the infrastructure ranges you configure. Add the new range to both.
+2. **Allow it in the egress policy.** The control plane checks source addresses against the infrastructure ranges you configure. Add the new range there. The edge applies no destination policy and needs no range.
 3. **Route it.** Configure your network so the address reaches the edge interface and TCP 25 passes in both directions. Every address listens, so inbound 25 must be open. A new network also needs its gateway. See [Direct public networking](/deploy/direct-public-networking).
 4. **Issue a certificate** for the address's HELO name, in its own Secret in the edge namespace. Create it **before** you change the Helm values: a missing or wrong certificate stops the edge at its next start, and with it all mail.
 5. **Publish DNS** as above and set the PTR.

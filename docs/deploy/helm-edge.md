@@ -7,7 +7,7 @@ description: "Deploy the Thinpost edge worker with the Helm chart (workload=edge
 
 This page covers `workload=edge`, the release that runs the SMTP edge worker in the edge zone. The control plane is in [Helm: control](/deploy/helm-control). The edge image is `ghcr.io/zyno-io/thinpost-edge`.
 
-The edge release holds almost nothing. It has no database or object-storage credential, no hook Jobs and no Service account token. It needs a journal volume, two certificates, a shared recipient-policy ConfigMap and a direct public network interface.
+The edge release holds almost nothing. It has no database or object-storage credential, no hook Jobs and no Service account token. It needs a journal volume, two certificates and a direct public network interface. It does not read the recipient policy or the egress deny ranges: the control plane is the sole authority for both, so the network around the edge is the boundary against a compromised control plane (see the [threat model](/security/threat-model#outbound-smtp-egress-policy)).
 
 ## What the chart renders
 
@@ -68,7 +68,6 @@ All of these live in the edge namespace and must exist before the pod can start.
 | --- | --- | --- |
 | `thinpost-edge-control` | Secret | `ca.crt`, `tls.crt`, `tls.key`: the edge's control server certificate and the private CA. Mounted at `/run/thinpost/control`. |
 | `thinpost-smtp-public` | Secret | `tls.crt`, `tls.key`: the public certificate for `smtpHostname`. Mounted at `/run/thinpost/smtp`. |
-| `thinpost-recipient-allowlist` | ConfigMap | The same keys and content as in the control namespace: `policy`, `allowlist-file`, `infrastructure-cidrs`, `route-exceptions-file`, plus any file they name. See [Helm: control](/deploy/helm-control#thinpost-recipient-allowlist). |
 | `thinpost-journal` | PersistentVolumeClaim | The journal volume. |
 | `thinpost-edge-control` | Service | A ClusterIP Service for the control port, so the control plane has a stable address. |
 | Certificate Secrets for additional addresses | Secret | Optional, see below. |
@@ -184,7 +183,7 @@ Rules and consequences:
 - At most 15 additional addresses, and `publicNetwork.table` plus the number of entries may not exceed 252.
 - Each listener presents its own certificate, mounted at `/run/thinpost/smtp-sources/<index>` from its Secret, and greets with its own name. A **missing or wrong certificate stops the whole worker at its next start**, including the primary address. Create the Secret before you change the values.
 - The edge accepts every listener name, including the primary's, as a bounce domain. `additionalBounceDomains` (at most 7) is only for retired bounce domains that still receive late bounces.
-- Add each new address's network to `infrastructure-cidrs` in the recipient ConfigMap on **both** the edge and the control plane.
+- Add each new address's network to `infrastructure-cidrs` in the recipient ConfigMap on the control plane. The edge reads no such list.
 - Changing the list restarts the worker. The pod carries a `checksum/public-network` annotation, so any change to an address, gateway or table rolls it.
 - Add the address in the console only after the release is up. See [Sending IPs](/guide/sending-ips) for DNS, PTR and the rollout order.
 

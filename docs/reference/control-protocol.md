@@ -210,7 +210,7 @@ Sent after a `Pull`. The MIME bytes follow as `DataChunk` frames.
 | `delivery_id` | string | The delivery (one recipient). |
 | `epoch` | uint64 | Must equal the session epoch. |
 | `mx_name` | string | The mail exchanger name used for TLS server name checks. |
-| `destination_ip` | string | The numeric address to connect to. The control plane resolves the MX and applies destination policy. The Edge filters the numeric address independently. |
+| `destination_ip` | string | The numeric address to connect to. The control plane resolves the MX and applies destination policy. The Edge dials this address as given and does not filter it. |
 | `envelope_from` | string | The SMTP return path. |
 | `recipient` | string | The SMTP recipient. |
 | `enhanced_protection` | bool | When true, the Edge requires TLS for the SMTP connection. |
@@ -273,7 +273,7 @@ The control plane validates the request against the delivery it sent (identity f
 | `REJECTED` | The remote server did not accept the attempt. `smtp_code` is zero or a 4xx or 5xx code. It does not by itself mean a permanent failure. |
 | `UNCERTAIN` | The attempt may have reached the recipient, for example a lost final DATA response. `smtp_code` is zero. |
 | `ROUTE_REJECTED` | The endpoint rejected the connection during greeting, EHLO or STARTTLS, before an envelope was presented. 4xx or 5xx code. The control plane can try another route. |
-| `RECIPIENT_POLICY_DENIED` | The Edge's recipient policy denied the address before any start request. `smtp_code` is zero. |
+| `RECIPIENT_POLICY_DENIED` | A recipient policy denied the address before any start request. `smtp_code` is zero. The control plane applies the recipient allowlist itself and holds the delivery without involving the Edge. The value is kept so the control plane still handles it from an older Edge, which applied its own copy of the policy. The current Edge never sends it. |
 
 `smtp_stage` and `smtp_enhanced` apply only to a 4xx or 5xx reply. The control plane drops a stage or enhanced code it cannot validate (a stage on a non-error code, an enhanced code that is malformed or whose class digit disagrees with the reply code) rather than failing the result.
 
@@ -416,12 +416,11 @@ For each delivery the control plane commits the attempt in its database before i
 After assembly the Edge, in order:
 
 1. Journals the attempt (`Begin`). This fails if the journal is full or the attempt or delivery already exists.
-2. Checks its recipient policy. A denied recipient completes the attempt as `RECIPIENT_POLICY_DENIED` with no permit and no dial.
-3. Refuses a delivery whose tracking cutoff is within 5 minutes.
-4. Validates the source address and HELO name.
-5. Requests a start permit and waits up to 30 seconds.
-6. Dials the destination from the requested source and runs the SMTP transaction. The network time of an attempt is limited to 2 hours, or to the time remaining before the tracking cutoff less 5 minutes when that is shorter. Per-stage SMTP timeouts are configurable on the Edge.
-7. Journals the outcome durably, then reports it as a `DeliveryResult`.
+2. Refuses a delivery whose tracking cutoff is within 5 minutes.
+3. Validates the source address and HELO name.
+4. Requests a start permit and waits up to 30 seconds.
+5. Dials the destination from the requested source and runs the SMTP transaction. The network time of an attempt is limited to 2 hours, or to the time remaining before the tracking cutoff less 5 minutes when that is shorter. Per-stage SMTP timeouts are configurable on the Edge.
+6. Journals the outcome durably, then reports it as a `DeliveryResult`.
 
 If the permit wait expires or is cancelled, the Edge ends the control session before accepting more work: the authorization may already have committed in the control plane, or a permit may arrive late. The Edge records the unsent result in its journal, and the replacement session replays it. A lost final DATA response is reported as `UNCERTAIN`.
 

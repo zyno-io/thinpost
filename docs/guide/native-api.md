@@ -57,7 +57,7 @@ The body is JSON with these fields. At least one of `text` and `html` is require
 | `tracking` | object | `{"opens": true, "clicks": true}`. Either key is optional. Overrides the app default for that kind. Enabling a kind needs an HTML body and a tracking runtime on the deployment. Opting out is always accepted. See [Open and click tracking](/guide/tracking). |
 | `hold` | boolean | Accept on hold: stored and counted, not sent until released. See [Holding messages](/guide/holding-messages). |
 
-The parser is strict. A duplicate or unknown field, trailing data after the JSON value, a `null` where an object is expected, or a recipient field that is not an array is a `400`. `from` is a string, not an object.
+The parser is strict. A duplicate or unknown field, trailing data after the JSON value, a `null` where an object is expected, or a recipient field that is not an array is a `400`. `from` is a string, not an object. The console's test-send options (`bypass_limits` and `bypass_recipient_policy`) belong to the operator console alone: sending either field here, even as `false`, is a `400`.
 
 The options that provider routes take as `X-Thinpost-*` request headers (`X-Thinpost-Hold`, `X-Thinpost-Enhanced-Protection`, `X-Thinpost-Track-Opens` and `X-Thinpost-Track-Clicks`) are body fields here. Sending one of those headers on this route is a `400`, so a copied header cannot be silently ignored.
 

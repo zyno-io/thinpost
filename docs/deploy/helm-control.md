@@ -211,7 +211,7 @@ Mounted at `/run/thinpost/signing`. The `key_path` values point into the `thinpo
 
 ### `thinpost-recipient-allowlist`
 
-The recipient policy and the egress deny ranges, shared by control and the edge. **Create the same ConfigMap in both namespaces** and keep them identical:
+The recipient policy and the egress deny ranges. The control plane is the sole authority for both, so **this ConfigMap belongs in the control namespace only**: the edge does not read it, and an edge that still carries an older copy ignores it. The recipient allowlist and the egress policy are enforced by control before it authorizes a delivery; secure the edge with network controls (see the [threat model](/security/threat-model#outbound-smtp-egress-policy)).
 
 ```yaml
 apiVersion: v1
@@ -234,7 +234,7 @@ data:
 | `infrastructure-cidrs` | Comma-separated ranges that SMTP may never target. Include the network of every sending address. |
 | `route-exceptions-file` | Optional path to a file of exact recipient, MX host and public IP exceptions. Empty means none. |
 
-The ConfigMap is mounted at `/run/thinpost/recipients` in both workloads and read at start. Changes need a restart of every control replica and of the edge. An empty, missing or invalid allowlist prevents startup. Use `allowlist` for a staging environment that must only mail test addresses.
+The ConfigMap is mounted at `/run/thinpost/recipients` in the control workload and read at start. Changes need a restart of every control replica. An empty, missing or invalid allowlist prevents startup. Use `allowlist` for a staging environment that must only mail test addresses.
 
 ### `thinpost-edge-binding`
 

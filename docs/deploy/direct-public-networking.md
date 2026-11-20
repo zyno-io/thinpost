@@ -134,7 +134,7 @@ The edge zone's upstream router, or its firewall, is the only filter for public 
 | Requirement | Detail |
 | --- | --- |
 | **Inbound TCP/25** | Allow it to **every** sending address, not only the primary. Every address listens for SMTP, because bounces and inbound mail may arrive on any of them. |
-| **Outbound TCP/25 only** | Allow the edge addresses to open outbound connections on TCP/25 and nothing else. The edge needs no other egress on these addresses. |
+| **Outbound TCP/25 only** | Allow the edge addresses to open outbound connections on TCP/25 and nothing else. The edge needs no other egress on these addresses. The edge applies no destination policy of its own (the control plane filters every route), so this rule, restricted to public destinations, is the boundary against a compromised control plane. |
 | **Gateway and ARP** | The gateway for each attachment must be on that attachment's network and must answer ARP for the address. A new network needs its own gateway. |
 | **Routes** | The addresses must be routed to the edge zone's interface. |
 | **Reverse DNS** | Set the PTR for every address to its hostname at the address owner. |
