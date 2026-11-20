@@ -138,7 +138,7 @@ describe('SMTP helpers', () => {
 
         it('accepts the three modes with only their own fields', () => {
             expect(smtp.validateFromForm(form({ keepOrigin: true, domain: 'x' }), verified).policy).toEqual({ mode: 'off', keep_origin: false, only_unauthorized: true });
-            expect(smtp.validateFromForm(form({ mode: 'domain', domain: 'billing.example.com', keepOrigin: true, address: 'ignored@example.org' }), verified).policy).toEqual({
+            expect(smtp.validateFromForm(form({ mode: 'domain', domain: 'billing.example.com', keepOrigin: true }), verified).policy).toEqual({
                 mode: 'domain',
                 domain: 'billing.example.com',
                 keep_origin: true,
@@ -150,6 +150,32 @@ describe('SMTP helpers', () => {
                 keep_origin: false,
                 only_unauthorized: true
             });
+        });
+
+        it('keeps an optional fallback address in domain mode', () => {
+            expect(smtp.validateFromForm(form({ mode: 'domain', domain: 'billing.example.com', address: ' No-Reply@Billing.Example.com ' }), verified).policy).toEqual({
+                mode: 'domain',
+                domain: 'billing.example.com',
+                address: 'No-Reply@billing.example.com',
+                keep_origin: false,
+                only_unauthorized: true
+            });
+            expect(smtp.validateFromForm(form({ mode: 'domain', domain: 'billing.example.com', address: '   ' }), verified).policy).toEqual({
+                mode: 'domain',
+                domain: 'billing.example.com',
+                keep_origin: false,
+                only_unauthorized: true
+            });
+            for (const address of ['no-reply', 'a b@billing.example.com', '"a b"@billing.example.com', 'a@other.example.com']) {
+                const result = smtp.validateFromForm(form({ mode: 'domain', domain: 'billing.example.com', address }), verified);
+                expect(result.policy).toBeNull();
+                expect(result.addressError).toBeTruthy();
+            }
+            expect(smtp.formFromPolicy({ mode: 'domain', domain: 'billing.example.com', address: 'a@billing.example.com', keep_origin: false, only_unauthorized: true }).address).toBe('a@billing.example.com');
+            expect(smtp.fromExamples(form({ mode: 'domain', domain: 'billing.example.com', address: 'no-reply@billing.example.com', onlyUnauthorized: false }), verified)).toEqual([
+                { sent: 'printer@office.example.net', becomes: 'printer@billing.example.com' },
+                { sent: '"print room"@office.example.net', becomes: 'no-reply@billing.example.com' }
+            ]);
         });
 
         it('refuses a domain that is not verified and a missing domain', () => {
