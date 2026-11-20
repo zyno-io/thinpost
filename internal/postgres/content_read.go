@@ -52,6 +52,18 @@ func (r *Repository) AuthorizeBodyRead(ctx context.Context, actor, appID, messag
 		`SELECT object_key,enhanced_protection FROM messages WHERE app_id=$1 AND id=$2`, appID, messageID)
 }
 
+// AuthorizeRawRead returns the source object reference for a download of the
+// original message. For an Enhanced Protection message it first commits a
+// message.raw.read audit event. Only a version 3 source has an original; the
+// caller decides that after decoding the object.
+func (r *Repository) AuthorizeRawRead(ctx context.Context, actor, appID, messageID string) (string, bool, error) {
+	if !adminText(actor, 256) || !opaqueID(appID) || !opaqueID(messageID) {
+		return "", false, admin.ErrInvalidInput
+	}
+	return r.authorizeContent(ctx, actor, appID, "message.raw.read", messageID,
+		`SELECT object_key,enhanced_protection FROM messages WHERE app_id=$1 AND id=$2`, appID, messageID)
+}
+
 // AuthorizeAttachmentRead returns the source object reference for one
 // attachment. An index outside 0 through 19 is not found. For an Enhanced
 // Protection message it first commits message.attachment.read (resource

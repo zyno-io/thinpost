@@ -10,6 +10,7 @@ import (
 
 	"github.com/zyno-io/thinpost/internal/admin"
 	"github.com/zyno-io/thinpost/internal/submission"
+	"github.com/zyno-io/thinpost/internal/webhook/format"
 )
 
 const (
@@ -22,6 +23,9 @@ const (
 // Protection reads before returning.
 type Repository interface {
 	AuthorizeBodyRead(ctx context.Context, actor, appID, messageID string) (string, bool, error)
+	// AuthorizeRawRead authorizes a download of the original message of a
+	// version 3 source; Enhanced Protection reads are audited as message.raw.read.
+	AuthorizeRawRead(ctx context.Context, actor, appID, messageID string) (string, bool, error)
 	AuthorizeAttachmentRead(ctx context.Context, actor, appID, messageID string, index int) (string, bool, error)
 	AuthorizeDeliveryHeadersRead(ctx context.Context, actor, appID, messageID, deliveryID string) (string, bool, error)
 }
@@ -38,16 +42,16 @@ var errSource = errors.New("invalid message source")
 
 // readSource fetches and strictly decodes a stored source object, checking
 // that its recorded policy matches the database.
-func (s *Service) readSource(ctx context.Context, key string, protected bool) (submission.Message, error) {
+func (s *Service) readSource(ctx context.Context, key string, protected bool) (submission.Source, error) {
 	data, err := s.Objects.Get(ctx, key, maxSourceSize)
 	if err != nil {
-		return submission.Message{}, errStorage
+		return submission.Source{}, errStorage
 	}
 	source, err := submission.DecodeSource(data, protected)
 	if err != nil {
-		return submission.Message{}, errSource
+		return submission.Source{}, errSource
 	}
-	return source.Message, nil
+	return source, nil
 }
 
 func (s *Service) ready() bool { return s.Repository != nil && s.Objects != nil }
@@ -60,16 +64,63 @@ func (s *Service) ReadMessageBody(ctx context.Context, actor, appID, messageID s
 	if err != nil {
 		return admin.MessageBody{}, err
 	}
-	message, err := s.readSource(ctx, key, protected)
+	source, err := s.readSource(ctx, key, protected)
 	if err != nil {
 		return admin.MessageBody{}, err
 	}
+	if source.Version == submission.RawSourceVersion {
+		return rawBody(source), nil
+	}
+	message := source.Message
 	// Always a non-nil slice: legacy sources without attachments report [].
 	attachments := make([]admin.AttachmentMetadata, len(message.Attachments))
 	for i, attachment := range message.Attachments {
 		attachments[i] = admin.AttachmentMetadata{Index: i, Filename: attachment.Filename, ContentType: attachment.ContentType, Size: len(attachment.Content), Inline: attachment.Inline, ContentID: attachment.ContentID}
 	}
 	return admin.MessageBody{From: message.From, To: message.To, Cc: message.Cc, Bcc: message.Bcc, ReplyTo: message.ReplyTo, Subject: message.Subject, Text: message.Text, HTML: message.HTML, EnhancedProtection: message.EnhancedProtection, Attachments: attachments}, nil
+}
+
+// rawBody builds the view of a version 3 source. From is the effective From;
+// To, Cc and Reply-To come from the message's own headers through the shared
+// inbound parser, and Bcc from the envelope kinds. Attachments are never
+// listed: the original is downloaded whole.
+func rawBody(source submission.Source) admin.MessageBody {
+	view := format.ViewMessage(source.Raw)
+	from := source.RawHeader.From
+	if from == "" && len(view.From) > 0 {
+		from = view.From[0]
+	}
+	var bcc []string
+	for i, rcpt := range source.Envelope() {
+		if source.RecipientKind(i) == submission.RecipientBcc {
+			bcc = append(bcc, rcpt)
+		}
+	}
+	return admin.MessageBody{
+		From: from, To: view.To, Cc: view.Cc, Bcc: bcc, ReplyTo: view.ReplyTo, Subject: view.Subject, Text: view.Text, HTML: view.HTML,
+		EnhancedProtection: source.RawHeader.EnhancedProtection, Attachments: []admin.AttachmentMetadata{}, Raw: true, Omitted: view.Omitted,
+	}
+}
+
+// OpenMessageRaw returns the original message bytes of a version 3 source, as
+// received. Any other version is not found. The raw read is audited before the
+// object is fetched when the message uses Enhanced Protection.
+func (s *Service) OpenMessageRaw(ctx context.Context, actor, appID, messageID string) ([]byte, error) {
+	if !s.ready() {
+		return nil, errStorage
+	}
+	key, protected, err := s.Repository.AuthorizeRawRead(ctx, actor, appID, messageID)
+	if err != nil {
+		return nil, err
+	}
+	source, err := s.readSource(ctx, key, protected)
+	if err != nil {
+		return nil, err
+	}
+	if source.Version != submission.RawSourceVersion {
+		return nil, admin.ErrNotFound
+	}
+	return source.Raw, nil
 }
 
 // ReadAttachment returns one submitted attachment. The index is checked before
@@ -85,10 +136,15 @@ func (s *Service) ReadAttachment(ctx context.Context, actor, appID, messageID st
 	if err != nil {
 		return admin.AttachmentContent{}, err
 	}
-	message, err := s.readSource(ctx, key, protected)
+	source, err := s.readSource(ctx, key, protected)
 	if err != nil {
 		return admin.AttachmentContent{}, err
 	}
+	// A raw message has no stored attachments: they are parts of the original.
+	if source.Version == submission.RawSourceVersion {
+		return admin.AttachmentContent{}, admin.ErrNotFound
+	}
+	message := source.Message
 	if index >= len(message.Attachments) {
 		return admin.AttachmentContent{}, admin.ErrNotFound
 	}

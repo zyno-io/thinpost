@@ -10,7 +10,7 @@ import (
 
 const (
 	maxHeaderBlock  = 64 << 10
-	maxHeaderFields = 100
+	maxHeaderFields = 256
 )
 
 var errHeaders = errors.New("invalid MIME headers")
@@ -19,7 +19,7 @@ var errHeaders = errors.New("invalid MIME headers")
 // first empty line (CRLF CRLF), at most 64 KiB. Continuation lines are
 // unfolded by removing the line break, values are otherwise raw (RFC 2047
 // words are not decoded in Value), and DecodedValue is set only when RFC 2047
-// decoding changes the value. At most 100 fields are accepted and names must
+// decoding changes the value. At most 256 fields are accepted and names must
 // be printable ASCII without ":". Errors are constant and never quote input.
 func ParseHeaders(data []byte) ([]admin.HeaderField, error) {
 	limit := len(data)

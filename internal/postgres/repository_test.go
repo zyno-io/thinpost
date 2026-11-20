@@ -2031,6 +2031,15 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if err = db.QueryRowContext(ctx, `SELECT count(*) FROM audit_events WHERE app_id=$1 AND action IN ('message.attachment.read','message.delivery.headers.read')`, app.ID).Scan(&auditCount); err != nil || auditCount != 2 {
 			t.Fatal("EP attachment and header reads not audited", auditCount, err)
 		}
+		if key, required, err = repo.AuthorizeRawRead(ctx, "operator-1", app.ID, "00000000000000000000000000001001"); err != nil || key != "submissions/history-1" || !required {
+			t.Fatal("restricted runtime cannot authorize raw reads", err)
+		}
+		if _, _, err = repo.AuthorizeRawRead(ctx, "operator-1", other.ID, "00000000000000000000000000001001"); !errors.Is(err, admin.ErrNotFound) {
+			t.Fatal("cross-app raw reference visible")
+		}
+		if err = db.QueryRowContext(ctx, `SELECT count(*) FROM audit_events WHERE app_id=$1 AND action='message.raw.read' AND resource_id='00000000000000000000000000001001'`, app.ID).Scan(&auditCount); err != nil || auditCount != 1 {
+			t.Fatal("EP raw read not audited", auditCount, err)
+		}
 		challenge, err := repo.RequestDomain(ctx, "operator-1", app.ID, "mail.example")
 		if err != nil || challenge.Domain.Active {
 			t.Fatal("domain challenge failed")

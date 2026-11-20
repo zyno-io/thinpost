@@ -40,6 +40,10 @@ func (r *repo) AuthorizeBodyRead(_ context.Context, actor, app, message string) 
 	r.actor, r.app, r.message = actor, app, message
 	return r.authorize("message.body.read", message)
 }
+func (r *repo) AuthorizeRawRead(_ context.Context, actor, app, message string) (string, bool, error) {
+	r.actor, r.app, r.message = actor, app, message
+	return r.authorize("message.raw.read", message)
+}
 func (r *repo) AuthorizeAttachmentRead(_ context.Context, actor, app, message string, index int) (string, bool, error) {
 	r.actor, r.app, r.message = actor, app, message
 	return r.authorize("message.attachment.read", message+":"+string(rune('0'+index)))
@@ -219,13 +223,13 @@ func TestParseHeadersIsStrict(t *testing.T) {
 		t.Fatalf("good block misparsed: %+v %v", headers, err)
 	}
 	var many strings.Builder
-	for i := 0; i < 101; i++ {
+	for i := 0; i < 257; i++ {
 		many.WriteString("X-H: v\r\n")
 	}
 	many.WriteString("\r\n")
-	hundred := strings.Replace(many.String(), "X-H: v\r\n", "", 1)
-	if _, err = ParseHeaders([]byte(hundred)); err != nil {
-		t.Fatal("100 fields rejected", err)
+	atLimit := strings.Replace(many.String(), "X-H: v\r\n", "", 1)
+	if _, err = ParseHeaders([]byte(atLimit)); err != nil {
+		t.Fatal("256 fields rejected", err)
 	}
 	for name, input := range map[string]string{
 		"no terminator":        "From: a@example.com\r\nSubject: x\r\n",
@@ -264,5 +268,91 @@ func TestReadersUseAttachmentCeilingNotConfiguredLimit(t *testing.T) {
 	service = &Service{Repository: r, Objects: &objects{repo: r, data: source(t, m)}}
 	if _, err := service.ReadMessageBody(context.Background(), "operator", "app", "message"); err == nil {
 		t.Fatal("source above the ceiling accepted")
+	}
+}
+
+const rawMIME = "From: Alice <a@example.com>\r\nTo: Bob <b@example.net>\r\nCc: c@example.net\r\nReply-To: help@example.com\r\nSubject: Quarterly\r\nContent-Type: text/plain\r\n\r\nsecret raw body\r\n"
+
+func rawObject(t *testing.T, protected bool, mutate func(*submission.RawHeader)) []byte {
+	t.Helper()
+	h := submission.RawHeader{
+		MailFrom: "a@example.com", Recipients: []string{"b@example.net", "c@example.net", "hidden@example.org"}, Kinds: []string{"to", "cc", "bcc"},
+		SenderDomain: "example.com", EnhancedProtection: protected,
+	}
+	if mutate != nil {
+		mutate(&h)
+	}
+	data, err := submission.EncodeRawSource(h, []byte(rawMIME))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func TestRawSourceBodyViewAndAudit(t *testing.T) {
+	r := &repo{protected: true}
+	service := &Service{Repository: r, Objects: &objects{repo: r, data: rawObject(t, true, nil)}}
+	body, err := service.ReadMessageBody(context.Background(), "operator", "app", "message")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !body.Raw || body.From != "Alice <a@example.com>" || strings.TrimSpace(body.Text) != "secret raw body" || body.Subject != "Quarterly" || !body.EnhancedProtection ||
+		len(body.To) != 1 || body.To[0] != "Bob <b@example.net>" || len(body.Cc) != 1 || body.Cc[0] != "c@example.net" ||
+		len(body.Bcc) != 1 || body.Bcc[0] != "hidden@example.org" || len(body.ReplyTo) != 1 || body.ReplyTo[0] != "help@example.com" {
+		t.Fatalf("%+v", body)
+	}
+	if body.Attachments == nil || len(body.Attachments) != 0 {
+		t.Fatal("attachments must be []")
+	}
+	if len(r.audits) != 1 || r.audits[0] != "message.body.read message" {
+		t.Fatal(r.audits)
+	}
+	// A rewritten From is shown as stored.
+	r = &repo{}
+	service = &Service{Repository: r, Objects: &objects{repo: r, data: rawObject(t, false, func(h *submission.RawHeader) {
+		h.From, h.FromField, h.FromRewritten, h.StripSender, h.OriginalFrom = "Alice <noreply@example.com>", "From: Alice <noreply@example.com>\r\n", true, true, "a@example.com"
+	})}}
+	if body, err = service.ReadMessageBody(context.Background(), "operator", "app", "message"); err != nil || body.From != "Alice <noreply@example.com>" {
+		t.Fatalf("%v %q", err, body.From)
+	}
+}
+
+func TestRawSourceAttachmentEndpointIsNotFound(t *testing.T) {
+	r := &repo{}
+	service := &Service{Repository: r, Objects: &objects{repo: r, data: rawObject(t, false, nil)}}
+	if _, err := service.ReadAttachment(context.Background(), "operator", "app", "message", 0); !errors.Is(err, admin.ErrNotFound) {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenMessageRaw(t *testing.T) {
+	r := &repo{protected: true}
+	o := &objects{repo: r, data: rawObject(t, true, nil)}
+	service := &Service{Repository: r, Objects: o}
+	raw, err := service.OpenMessageRaw(context.Background(), "operator", "app", "message")
+	if err != nil || string(raw) != rawMIME {
+		t.Fatal("raw bytes differ", err)
+	}
+	if len(r.audits) != 1 || r.audits[0] != "message.raw.read message" {
+		t.Fatal("EP raw read not audited", r.audits)
+	}
+	// Not audited without Enhanced Protection.
+	r = &repo{}
+	service = &Service{Repository: r, Objects: &objects{repo: r, data: rawObject(t, false, nil)}}
+	if _, err = service.OpenMessageRaw(context.Background(), "operator", "app", "message"); err != nil || len(r.audits) != 0 {
+		t.Fatal(err, r.audits)
+	}
+	// v1/v2 sources have no original; the audit still committed first.
+	r = &repo{protected: true}
+	service = &Service{Repository: r, Objects: &objects{repo: r, data: source(t, submission.Message{From: "a@example.com", To: []string{"b@example.net"}, Subject: "s", Text: "t", EnhancedProtection: true})}}
+	if _, err = service.OpenMessageRaw(context.Background(), "operator", "app", "message"); !errors.Is(err, admin.ErrNotFound) || len(r.audits) != 1 {
+		t.Fatal(err, r.audits)
+	}
+	// Unauthorized: never fetched.
+	r = &repo{err: admin.ErrNotFound}
+	o = &objects{repo: r}
+	service = &Service{Repository: r, Objects: o}
+	if _, err = service.OpenMessageRaw(context.Background(), "operator", "other-app", "message"); !errors.Is(err, admin.ErrNotFound) || o.gets != 0 {
+		t.Fatal("unauthorized raw fetched")
 	}
 }

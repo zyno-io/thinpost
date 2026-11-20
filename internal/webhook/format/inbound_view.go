@@ -41,7 +41,17 @@ func inboundRender(m *InboundInput) (receiver string, drop []span, prefix []byte
 // ViewInbound parses m.Raw within the same bounds as the webhook renderer.
 func ViewInbound(m *InboundInput) InboundView {
 	_, drop, prefix := inboundRender(m)
-	p := parseInbound(prefix, m.Raw, drop)
+	return viewOf(parseInbound(prefix, m.Raw, drop))
+}
+
+// ViewMessage parses a raw message with the same bounded parser as ViewInbound
+// but without Thinpost's added fields or any dropped field: the console view
+// of a message submitted over SMTP.
+func ViewMessage(raw []byte) InboundView {
+	return viewOf(parseInbound(nil, raw, nil))
+}
+
+func viewOf(p parsedInbound) InboundView {
 	h := p.Headers
 	return InboundView{
 		From: displayAddresses(h.From), To: displayAddresses(h.To), Cc: displayAddresses(h.Cc), ReplyTo: displayAddresses(h.ReplyTo),

@@ -291,6 +291,10 @@ type MessageBody struct {
 	HTML               string               `json:"html"`
 	EnhancedProtection bool                 `json:"enhanced_protection"`
 	Attachments        []AttachmentMetadata `json:"attachments"`
+	// Raw is set when the message was submitted as raw MIME over SMTP: the
+	// contents above are parsed from the original, which can be downloaded
+	// whole, and Attachments is always empty.
+	Raw bool `json:"raw,omitempty"`
 	// Omitted names what an inbound read could not show ("text", "html",
 	// "headers"): a body over 1 MiB once decoded, an unknown charset or an
 	// oversized header block. Absent for outbound messages.
@@ -342,6 +346,9 @@ type TXTResolver interface {
 type ContentReader interface {
 	ReadMessageBody(ctx context.Context, actor, appID, messageID string) (MessageBody, error)
 	ReadAttachment(ctx context.Context, actor, appID, messageID string, index int) (AttachmentContent, error)
+	// OpenMessageRaw returns the original bytes of a raw MIME message, audited
+	// like a body read; ErrNotFound for any other message.
+	OpenMessageRaw(ctx context.Context, actor, appID, messageID string) ([]byte, error)
 	ReadDeliveryHeaders(ctx context.Context, actor, appID, messageID, deliveryID string) ([]HeaderField, error)
 }
 
@@ -787,6 +794,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeAttachment(w, index, attachment)
 		return
 	}
+	if len(path) == 8 && path[5] == "messages" && opaqueID(path[6]) && path[7] == "raw" {
+		if r.Method != http.MethodGet {
+			method(w, "GET")
+			return
+		}
+		if r.URL.RawQuery != "" {
+			fail(w, http.StatusBadRequest)
+			return
+		}
+		if h.ContentReader == nil {
+			fail(w, http.StatusServiceUnavailable)
+			return
+		}
+		raw, err := h.ContentReader.OpenMessageRaw(r.Context(), principal.Subject, appID, path[6])
+		if err != nil {
+			storeError(w, err)
+			return
+		}
+		writeRaw(w, path[6], raw)
+		return
+	}
 	if len(path) == 10 && path[5] == "messages" && opaqueID(path[6]) && path[7] == "deliveries" && opaqueID(path[8]) && path[9] == "headers" {
 		if r.Method != http.MethodGet {
 			method(w, "GET")
@@ -1106,6 +1134,19 @@ func writeAttachment(w http.ResponseWriter, index int, attachment AttachmentCont
 	header.Set("Content-Length", strconv.Itoa(len(attachment.Content)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(attachment.Content)
+}
+
+// writeRaw sends the original message as an opaque download, never rendered.
+func writeRaw(w http.ResponseWriter, messageID string, raw []byte) {
+	header := w.Header()
+	header.Set("Content-Type", "application/octet-stream")
+	header.Set("Content-Disposition", "attachment; filename=\"message-"+messageID+".eml\"")
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; sandbox")
+	header.Set("Cross-Origin-Resource-Policy", "same-origin")
+	header.Set("Content-Length", strconv.Itoa(len(raw)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
 }
 
 func method(w http.ResponseWriter, allow string) {
