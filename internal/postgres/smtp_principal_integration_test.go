@@ -36,7 +36,7 @@ func newSMTPCommitFixture(t *testing.T) *smtpCommitFixture {
 	repo.Objects = objectVerifierFunc(func(context.Context, string) error { return nil })
 	f := &smtpCommitFixture{t: t, ctx: ctx, repo: repo, exec: exec, count: count, app: strings.Repeat("a", 32), key: strings.Repeat("b", 32)}
 	exec(`INSERT INTO apps(id,name,pending_message_limit,recipient_daily_limit,submission_rate_per_minute,submission_burst) VALUES ($1,'A',1000,1000,6000,100)`, f.app)
-	exec(`UPDATE apps SET submission_tokens=100*60000000,submission_refilled_at=clock_timestamp() WHERE id=$1`, f.app)
+	exec(`UPDATE apps SET submission_tokens=100::bigint*60000000,submission_refilled_at=clock_timestamp() WHERE id=$1`, f.app)
 	exec(`INSERT INTO sender_domains(app_id,domain,active,verified_at) VALUES ($1,'example.com',true,now())`, f.app)
 	keyDigest := sha256.Sum256([]byte("api-key-secret"))
 	exec(`INSERT INTO api_keys(id,digest,app_id) VALUES ($1,$2,$3)`, f.key, keyDigest[:], f.app)
@@ -87,9 +87,9 @@ func TestCommitPrincipalsAreExclusive(t *testing.T) {
 	for name, mutate := range map[string]func(*acceptance.Record){
 		"key on the smtp adapter": func(r *acceptance.Record) { r.Adapter = submission.AdapterSMTP },
 		"key with the raw path":   func(r *acceptance.Record) { r.Raw = true },
-		"key with a credential":   func(r *acceptance.Record) { r.SMTPCredentialID = f.cred },
+		"key with a credential":   func(r *acceptance.Record) { r.SMTPCredentialID, r.Fence = f.cred, f.fence() },
 		"key with a credential, smtp": func(r *acceptance.Record) {
-			r.SMTPCredentialID, r.Adapter, r.Raw = f.cred, submission.AdapterSMTP, true
+			r.SMTPCredentialID, r.Adapter, r.Raw, r.Fence = f.cred, submission.AdapterSMTP, true, f.fence()
 		},
 		"key with a ttl": func(r *acceptance.Record) { r.IdempotencyKey, r.IdempotencyTTL = "k", time.Hour },
 	} {
@@ -119,10 +119,12 @@ func TestCommitPrincipalsAreExclusive(t *testing.T) {
 	// An operator record may not carry SMTP fields either.
 	operator := withMetadata(acceptance.Record{AppID: f.app, Operator: "admin", ObjectKey: fixtureObjectKey("submissions", f.randomID()), Adapter: submission.AdapterConsole, From: "sender@example.com", RecipientCount: 1})
 	for name, mutate := range map[string]func(*acceptance.Record){
-		"smtp adapter":  func(r *acceptance.Record) { r.Adapter = submission.AdapterSMTP },
-		"raw path":      func(r *acceptance.Record) { r.Raw = true },
-		"a credential":  func(r *acceptance.Record) { r.SMTPCredentialID = f.cred },
-		"a credential,": func(r *acceptance.Record) { r.SMTPCredentialID, r.Adapter = f.cred, submission.AdapterSMTP },
+		"smtp adapter": func(r *acceptance.Record) { r.Adapter = submission.AdapterSMTP },
+		"raw path":     func(r *acceptance.Record) { r.Raw = true },
+		"a credential": func(r *acceptance.Record) { r.SMTPCredentialID, r.Fence = f.cred, f.fence() },
+		"a credential,": func(r *acceptance.Record) {
+			r.SMTPCredentialID, r.Adapter, r.Fence = f.cred, submission.AdapterSMTP, f.fence()
+		},
 	} {
 		record := operator
 		mutate(&record)

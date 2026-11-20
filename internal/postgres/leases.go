@@ -99,8 +99,16 @@ func lockLiveControllerLease(ctx context.Context, tx *sql.Tx, lease ControllerLe
 	if err != nil {
 		return false, err
 	}
+	return controllerLeaseLive(ctx, tx, lease)
+}
+
+// controllerLeaseLive reports whether the exact lease epoch is unexpired now. A
+// caller that must stay fenced holds the row FOR SHARE (lockLiveControllerLease)
+// and calls this again after its last statement, because the first check can
+// go stale across the work done in between.
+func controllerLeaseLive(ctx context.Context, tx *sql.Tx, lease ControllerLease) (bool, error) {
 	var live bool
-	err = tx.QueryRowContext(ctx, `SELECT controller_id=$2 AND epoch=$3 AND expires_at>clock_timestamp() FROM controller_leases WHERE worker_id=$1`, lease.WorkerID, lease.ControllerID, lease.Epoch).Scan(&live)
+	err := tx.QueryRowContext(ctx, `SELECT controller_id=$2 AND epoch=$3 AND expires_at>clock_timestamp() FROM controller_leases WHERE worker_id=$1`, lease.WorkerID, lease.ControllerID, lease.Epoch).Scan(&live)
 	return live, err
 }
 

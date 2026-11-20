@@ -10,9 +10,12 @@ import (
 	"errors"
 	"net/mail"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/zyno-io/thinpost/internal/acceptance"
 	"github.com/zyno-io/thinpost/internal/admin"
+	"github.com/zyno-io/thinpost/internal/delivery"
 	"github.com/zyno-io/thinpost/internal/objectkey"
 	"github.com/zyno-io/thinpost/internal/submission"
 )
@@ -108,6 +111,18 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 	if !(validRecordedSubject(record.Subject) || smtp && validRecordedSMTPSubject(record.Subject)) || !validRecordedDomain(record.SenderDomain) || record.SenderDomain != domain || !validRecordedSender(record.SenderAddress, record.SenderName, domain) {
 		return receipt, submission.ErrInvalidMessage
 	}
+	var lease ControllerLease
+	if smtp {
+		// The fence names the control session lease the commit is valid under;
+		// without a usable one nothing can be fenced, so nothing is committed.
+		lease = ControllerLease{WorkerID: record.Fence.WorkerID, ControllerID: record.Fence.ControllerID, Epoch: record.Fence.Epoch}
+		if !leaseID(lease.WorkerID) || !leaseID(lease.ControllerID) || lease.Epoch == 0 ||
+			len(record.OriginalFromAddress) > maxRecordedAddressBytes || !utf8.ValidString(record.OriginalFromAddress) || strings.ContainsAny(record.OriginalFromAddress, "\x00\r\n") ||
+			record.OriginalFromAddress != "" && len(record.OriginalFromAddress) < 3 ||
+			(record.IdempotencyKey == "") != (record.IdempotencyTTL == 0) || record.IdempotencyTTL < 0 || record.IdempotencyTTL > 24*time.Hour || len(record.IdempotencyKey) > 256 {
+			return receipt, submission.ErrInvalidMessage
+		}
+	}
 	tx, err := r.beginRuntime(ctx)
 	if err != nil {
 		return receipt, err
@@ -195,10 +210,20 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 	}
 	if record.IdempotencyKey != "" {
 		var inserted string
-		err = tx.QueryRowContext(ctx, `INSERT INTO idempotency_keys (app_id, adapter, key, request_hash, message_id, expires_at)
+		if smtp {
+			// A provisional expiry measured from the transaction start; the window
+			// really starts at acceptance, so it is reset just before COMMIT (the
+			// object check below can take up to 30 seconds).
+			err = tx.QueryRowContext(ctx, `INSERT INTO idempotency_keys (app_id, adapter, key, request_hash, message_id, expires_at)
+			VALUES ($1,$2,$3,$4,$5,now()+$6::bigint*interval '1 millisecond')
+			ON CONFLICT (app_id,adapter,key) DO UPDATE SET request_hash=EXCLUDED.request_hash, message_id=EXCLUDED.message_id, expires_at=EXCLUDED.expires_at, batch_receipt_ids=NULL
+			WHERE idempotency_keys.expires_at <= now() RETURNING message_id`, record.AppID, record.Adapter, record.IdempotencyKey, record.RequestHash[:], messageID, record.IdempotencyTTL.Milliseconds()).Scan(&inserted)
+		} else {
+			err = tx.QueryRowContext(ctx, `INSERT INTO idempotency_keys (app_id, adapter, key, request_hash, message_id, expires_at)
 			VALUES ($1,$2,$3,$4,$5,now()+interval '24 hours')
 			ON CONFLICT (app_id,adapter,key) DO UPDATE SET request_hash=EXCLUDED.request_hash, message_id=EXCLUDED.message_id, expires_at=EXCLUDED.expires_at, batch_receipt_ids=NULL
 			WHERE idempotency_keys.expires_at <= now() RETURNING message_id`, record.AppID, record.Adapter, record.IdempotencyKey, record.RequestHash[:], messageID).Scan(&inserted)
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			var hash []byte
 			var single bool
@@ -253,9 +278,28 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 	if err = r.lockAndVerifyObjects(ctx, tx, []string{record.ObjectKey}); err != nil {
 		return submission.Receipt{}, err
 	}
+	if smtp {
+		// Lock the session lease last, after every statement that can block
+		// (the idempotency insert, the quota and backlog checks and the object
+		// check, whose storage call can take 30 seconds): the share lock then
+		// stalls lease renewal for a few statements only. Once held, acquiring a
+		// later epoch for the worker waits for this commit.
+		live, err := lockLiveControllerLease(ctx, tx, lease)
+		if err != nil {
+			return submission.Receipt{}, err
+		}
+		if !live {
+			return submission.Receipt{}, delivery.ErrLeaseInvalid
+		}
+	}
 	state, holdMS := initialMessageState(record.Hold)
-	err = tx.QueryRowContext(ctx, `INSERT INTO messages (id, app_id, object_key, enhanced_protection, subject, recipient_count, sender_domain, sender_domain_rev, sender_address, sender_name, state, hold_expires_at, console_test, limits_override, recipient_policy_override) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now()+$12::bigint*interval '1 millisecond',$13,$14,$15) RETURNING id,accepted_at`,
-		messageID, record.AppID, record.ObjectKey, record.EnhancedProtection, record.Subject, record.RecipientCount, record.SenderDomain, reverseDomainLabels(record.SenderDomain), record.SenderAddress, nullableName(record.SenderName), state, holdMS, record.Operator != "", record.LimitsOverride, record.RecipientPolicyOverride).Scan(&receipt.ID, &receipt.AcceptedAt)
+	if smtp {
+		err = tx.QueryRowContext(ctx, `INSERT INTO messages (id, app_id, object_key, enhanced_protection, subject, recipient_count, sender_domain, sender_domain_rev, sender_address, sender_name, state, hold_expires_at, console_test, limits_override, recipient_policy_override, smtp_credential_id, original_from_address) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now()+$12::bigint*interval '1 millisecond',false,false,false,$13,$14) RETURNING id,accepted_at`,
+			messageID, record.AppID, record.ObjectKey, record.EnhancedProtection, record.Subject, record.RecipientCount, record.SenderDomain, reverseDomainLabels(record.SenderDomain), record.SenderAddress, nullableName(record.SenderName), state, holdMS, record.SMTPCredentialID, nullableName(record.OriginalFromAddress)).Scan(&receipt.ID, &receipt.AcceptedAt)
+	} else {
+		err = tx.QueryRowContext(ctx, `INSERT INTO messages (id, app_id, object_key, enhanced_protection, subject, recipient_count, sender_domain, sender_domain_rev, sender_address, sender_name, state, hold_expires_at, console_test, limits_override, recipient_policy_override) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,now()+$12::bigint*interval '1 millisecond',$13,$14,$15) RETURNING id,accepted_at`,
+			messageID, record.AppID, record.ObjectKey, record.EnhancedProtection, record.Subject, record.RecipientCount, record.SenderDomain, reverseDomainLabels(record.SenderDomain), record.SenderAddress, nullableName(record.SenderName), state, holdMS, record.Operator != "", record.LimitsOverride, record.RecipientPolicyOverride).Scan(&receipt.ID, &receipt.AcceptedAt)
+	}
 	if err != nil {
 		return submission.Receipt{}, err
 	}
@@ -277,6 +321,25 @@ func (r *Repository) Commit(ctx context.Context, record acceptance.Record) (subm
 	if record.Hold {
 		if err = insertMessageEvent(ctx, tx, record.AppID, messageID, holdEventHeld); err != nil {
 			return submission.Receipt{}, err
+		}
+	}
+	if smtp {
+		// The last statement before COMMIT: the lease must still be live (the
+		// first check was made before the inserts), and the idempotency window
+		// starts now, at acceptance. The transaction owns the row, so nobody has
+		// seen the provisional value.
+		live, err := controllerLeaseLive(ctx, tx, lease)
+		if err != nil {
+			return submission.Receipt{}, err
+		}
+		if !live {
+			return submission.Receipt{}, delivery.ErrLeaseInvalid
+		}
+		if record.IdempotencyKey != "" {
+			if _, err = tx.ExecContext(ctx, `UPDATE idempotency_keys SET expires_at=clock_timestamp()+$4::bigint*interval '1 millisecond' WHERE app_id=$1 AND adapter=$2 AND key=$3`,
+				record.AppID, record.Adapter, record.IdempotencyKey, record.IdempotencyTTL.Milliseconds()); err != nil {
+				return submission.Receipt{}, err
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
