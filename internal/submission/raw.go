@@ -32,7 +32,7 @@ const (
 	// MaxRawBytes mirrors rawmime.MaxRawBytes.
 	MaxRawBytes = 7_864_320
 	// MaxRawFromField bounds the folded From field kept for rewrites.
-	MaxRawFromField = 2048
+	MaxRawFromField = 8192
 )
 
 // RawHeader is the strict JSON header of a version 3 source. It holds exactly
@@ -196,17 +196,28 @@ func (h RawHeader) validate(enhancedProtection bool, raw []byte) error {
 	}
 	if h.FromRewritten {
 		key, ok := rawKey(h.From)
-		if !ok || len(h.FromField) > MaxRawFromField || !strings.HasPrefix(h.FromField, "From:") || !strings.HasSuffix(h.FromField, "\r\n") ||
-			strings.Contains(strings.ReplaceAll(h.FromField, "\r\n", ""), "\n") || strings.Contains(strings.ReplaceAll(h.FromField, "\r\n", ""), "\r") ||
+		// The field is exactly rawmime.FoldField("From", From): unfolding it (a
+		// fold only turns one space into CRLF SP) gives back "From: " + From, so
+		// it can carry no other field and no other mailbox.
+		if !ok || len(h.FromField) > MaxRawFromField || !strings.HasSuffix(h.FromField, "\r\n") ||
+			strings.ReplaceAll(h.FromField, "\r\n", "") != "From: "+h.From ||
 			key[strings.LastIndexByte(key, '@')+1:] != h.SenderDomain {
 			return ErrInvalidSource
 		}
+		lines := strings.Split(strings.TrimSuffix(h.FromField, "\r\n"), "\r\n")
+		for i, line := range lines {
+			if len(line) > 998 || i > 0 && (line == "" || line[0] != ' ' && line[0] != '\t') {
+				return ErrInvalidSource
+			}
+		}
 	}
 	if h.OriginalFrom != "" {
-		if !h.FromRewritten || len(h.OriginalFrom) > 320 {
+		if !h.FromRewritten || len(h.OriginalFrom) > 320 || strings.ContainsAny(h.OriginalFrom, "\r\n") {
 			return ErrInvalidSource
 		}
-		if _, ok := rawKey(h.OriginalFrom); !ok {
+		// DecideFrom records the bare, unquoted addr-spec (team ops@example.org),
+		// which ParseAddress only accepts once rendered again.
+		if _, ok := rawKey((&mail.Address{Address: h.OriginalFrom}).String()); !ok {
 			return ErrInvalidSource
 		}
 	}

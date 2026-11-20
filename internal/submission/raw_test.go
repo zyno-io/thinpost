@@ -199,3 +199,35 @@ func repeatKind(n int) []string {
 	}
 	return out
 }
+
+func TestRawFromFieldMustMatchFrom(t *testing.T) {
+	ok := func(h *RawHeader) {
+		h.From, h.FromField, h.FromRewritten, h.StripSender = "a@example.com", "From: a@example.com\r\n", true, true
+	}
+	for name, field := range map[string]string{
+		"extra field":      "From: a@example.com\r\nReply-To: z@example.net\r\n",
+		"different from":   "From: evil@example.com\r\n",
+		"smuggled field":   "From: a@example.com\r\nX-A: b\r\n",
+		"fold not wsp":     "From: a@example.com\r\nx\r\n",
+		"overlong line":    "From: a@example.com" + strings.Repeat("x", 1000) + "\r\n",
+		"missing space":    "From:a@example.com\r\n",
+		"bare cr":          "From: a@example.com\r\r\n",
+		"no final newline": "From: a@example.com",
+	} {
+		h := rawHeader()
+		ok(&h)
+		h.FromField = field
+		if _, err := EncodeRawSource(h, []byte(rawMsg)); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	h := rawHeader()
+	h.From, h.FromField, h.FromRewritten, h.StripSender = "Alice Q <a@example.com>", "From: Alice\r\n Q <a@example.com>\r\n", true, true
+	if _, err := EncodeRawSource(h, []byte(rawMsg)); err != nil {
+		t.Errorf("folded field rejected: %v", err)
+	}
+	h.OriginalFrom = "team ops@example.org"
+	if _, err := EncodeRawSource(h, []byte(rawMsg)); err != nil {
+		t.Errorf("unquoted original rejected: %v", err)
+	}
+}
