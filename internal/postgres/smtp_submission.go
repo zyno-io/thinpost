@@ -85,7 +85,7 @@ func (r *Repository) SMTPPolicy(ctx context.Context, appID string, candidates []
 	if err != nil {
 		return rawmime.Policy{}, nil, err
 	}
-	result := rawmime.Policy{Mode: rawmime.FromMode(policy.Mode), KeepOrigin: policy.KeepOrigin, OnlyUnauthorized: policy.OnlyUnauthorized}
+	result := rawmime.Policy{Mode: rawmime.FromMode(policy.Mode), OnlyUnauthorized: policy.OnlyUnauthorized}
 	lookup := append([]string(nil), candidates...)
 	if policy.Domain != nil {
 		result.Domain = *policy.Domain

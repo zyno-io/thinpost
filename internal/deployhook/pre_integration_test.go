@@ -78,7 +78,7 @@ func newFixture(t *testing.T) *fixture {
 		DROP CONSTRAINT messages_subject_size, DROP COLUMN original_from_address, DROP COLUMN smtp_credential_id,
 		ADD CONSTRAINT messages_subject_size CHECK (subject IS NULL OR octet_length(subject) BETWEEN 1 AND 998);
 		ALTER TABLE apps DROP CONSTRAINT apps_smtp_from_policy, DROP COLUMN smtp_from_mode, DROP COLUMN smtp_from_domain,
-		DROP COLUMN smtp_from_keep_origin, DROP COLUMN smtp_from_address, DROP COLUMN smtp_from_only_unauthorized;
+		DROP COLUMN smtp_from_address, DROP COLUMN smtp_from_only_unauthorized;
 		DROP TABLE smtp_replay_secret, smtp_credentials;
 		ALTER TABLE messages DROP COLUMN console_test, DROP COLUMN limits_override, DROP COLUMN recipient_policy_override;
 		ALTER TABLE messages DROP COLUMN hold_expires_at, DROP COLUMN hold_resolved_at;

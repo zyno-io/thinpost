@@ -112,11 +112,11 @@ func TestSMTPPolicyReadsPolicyAndVerifiedDomains(t *testing.T) {
 	if err != nil || policy != (rawmime.Policy{Mode: rawmime.FromOff, OnlyUnauthorized: true}) || len(verified) != 1 || verified[0] != "example.com" {
 		t.Fatal(policy, verified, err)
 	}
-	f.exec(`UPDATE apps SET smtp_from_mode='domain',smtp_from_domain='mail.example.com',smtp_from_keep_origin=true,smtp_from_address='noreply@example.com',smtp_from_only_unauthorized=false WHERE id=$1`, f.app)
+	f.exec(`UPDATE apps SET smtp_from_mode='domain',smtp_from_domain='mail.example.com',smtp_from_only_unauthorized=false WHERE id=$1`, f.app)
 	policy, verified, err = f.repo.SMTPPolicy(f.ctx, f.app, nil)
 	sort.Strings(verified)
-	want := rawmime.Policy{Mode: rawmime.FromDomain, Domain: "mail.example.com", KeepOrigin: true, Address: "noreply@example.com"}
-	if err != nil || policy != want || strings.Join(verified, ",") != "example.com,mail.example.com" {
+	want := rawmime.Policy{Mode: rawmime.FromDomain, Domain: "mail.example.com"}
+	if err != nil || policy != want || strings.Join(verified, ",") != "mail.example.com" {
 		t.Fatal("target domains are looked up without being asked for", policy, verified, err)
 	}
 	if _, _, err = f.repo.SMTPPolicy(f.ctx, strings.Repeat("9", 32), nil); !errors.Is(err, submission.ErrInvalidMessage) {
@@ -126,7 +126,7 @@ func TestSMTPPolicyReadsPolicyAndVerifiedDomains(t *testing.T) {
 	other := strings.Repeat("c", 32)
 	f.exec(`INSERT INTO apps(id,name) VALUES ($1,'O')`, other)
 	f.exec(`INSERT INTO sender_domains(app_id,domain,active,verified_at) VALUES ($1,'theirs.example.net',true,now())`, other)
-	if _, verified, err = f.repo.SMTPPolicy(f.ctx, f.app, []string{"theirs.example.net"}); err != nil || len(verified) != 2 {
+	if _, verified, err = f.repo.SMTPPolicy(f.ctx, f.app, []string{"theirs.example.net"}); err != nil || len(verified) != 1 || verified[0] != "mail.example.com" {
 		t.Fatal("cross-app", verified, err)
 	}
 }

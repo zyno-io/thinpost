@@ -39,7 +39,7 @@ const CRED_ID = 'fedcba9876543210fedcba9876543210';
 const PASSWORD = 'tps_one_time_password_value_for_the_test_0';
 const app = { id: APP_ID, name: 'Billing', active: true, created_at: '2026-10-01T12:00:00Z' };
 const credential = { id: CRED_ID, name: 'Office printer', username: CRED_ID, active: true, created_at: '2026-10-02T12:00:00Z' };
-const policy = { mode: 'off', keep_origin: false, only_unauthorized: true };
+const policy = { mode: 'off', only_unauthorized: true };
 
 function smtpResponse(overrides: Record<string, unknown> = {}) {
     return {
@@ -116,7 +116,7 @@ describe('SMTP helpers', () => {
     it('rejects malformed SMTP responses', () => {
         expect(() => smtp.parseAppSmtp({})).toThrow();
         expect(() => smtp.parseAppSmtp(smtpResponse({ credentials: [{ id: 1 }] }))).toThrow();
-        expect(() => smtp.parseAppSmtp(smtpResponse({ settings: { from: { mode: 'weird', keep_origin: false, only_unauthorized: true }, signing_ready: null } }))).toThrow();
+        expect(() => smtp.parseAppSmtp(smtpResponse({ settings: { from: { mode: 'weird', only_unauthorized: true }, signing_ready: null } }))).toThrow();
         expect(smtp.parseAppSmtp(smtpResponse({ settings: { from: policy, signing_ready: null } })).settings.signing_ready).toBeNull();
     });
 
@@ -134,48 +134,20 @@ describe('SMTP helpers', () => {
 
     describe('From policy validation', () => {
         const verified = ['billing.example.com'];
-        const form = (patch: Partial<FromForm>): FromForm => ({ mode: 'off', domain: '', keepOrigin: false, address: '', onlyUnauthorized: true, ...patch });
+        const form = (patch: Partial<FromForm>): FromForm => ({ mode: 'off', domain: '', address: '', onlyUnauthorized: true, ...patch });
 
         it('accepts the three modes with only their own fields', () => {
-            expect(smtp.validateFromForm(form({ keepOrigin: true, domain: 'x' }), verified).policy).toEqual({ mode: 'off', keep_origin: false, only_unauthorized: true });
-            expect(smtp.validateFromForm(form({ mode: 'domain', domain: 'billing.example.com', keepOrigin: true }), verified).policy).toEqual({
+            expect(smtp.validateFromForm(form({ domain: 'x' }), verified).policy).toEqual({ mode: 'off', only_unauthorized: true });
+            expect(smtp.validateFromForm(form({ mode: 'domain', domain: 'billing.example.com', address: 'ignored@example.org' }), verified).policy).toEqual({
                 mode: 'domain',
                 domain: 'billing.example.com',
-                keep_origin: true,
                 only_unauthorized: true
             });
             expect(smtp.validateFromForm(form({ mode: 'address', address: ' No-Reply@Billing.Example.com ' }), verified).policy).toEqual({
                 mode: 'address',
                 address: 'No-Reply@billing.example.com',
-                keep_origin: false,
                 only_unauthorized: true
             });
-        });
-
-        it('keeps an optional fallback address in domain mode', () => {
-            expect(smtp.validateFromForm(form({ mode: 'domain', domain: 'billing.example.com', address: ' No-Reply@Billing.Example.com ' }), verified).policy).toEqual({
-                mode: 'domain',
-                domain: 'billing.example.com',
-                address: 'No-Reply@billing.example.com',
-                keep_origin: false,
-                only_unauthorized: true
-            });
-            expect(smtp.validateFromForm(form({ mode: 'domain', domain: 'billing.example.com', address: '   ' }), verified).policy).toEqual({
-                mode: 'domain',
-                domain: 'billing.example.com',
-                keep_origin: false,
-                only_unauthorized: true
-            });
-            for (const address of ['no-reply', 'a b@billing.example.com', '"a b"@billing.example.com', 'a@other.example.com']) {
-                const result = smtp.validateFromForm(form({ mode: 'domain', domain: 'billing.example.com', address }), verified);
-                expect(result.policy).toBeNull();
-                expect(result.addressError).toBeTruthy();
-            }
-            expect(smtp.formFromPolicy({ mode: 'domain', domain: 'billing.example.com', address: 'a@billing.example.com', keep_origin: false, only_unauthorized: true }).address).toBe('a@billing.example.com');
-            expect(smtp.fromExamples(form({ mode: 'domain', domain: 'billing.example.com', address: 'no-reply@billing.example.com', onlyUnauthorized: false }), verified)).toEqual([
-                { sent: 'printer@office.example.net', becomes: 'printer@billing.example.com' },
-                { sent: '"print room"@office.example.net', becomes: 'no-reply@billing.example.com' }
-            ]);
         });
 
         it('refuses a domain that is not verified and a missing domain', () => {
@@ -200,10 +172,9 @@ describe('SMTP helpers', () => {
         });
 
         it('shows what each policy does to an address', () => {
-            expect(smtp.fromExamples(form({ mode: 'domain', domain: 'billing.example.com' }), verified)[0]).toEqual({ sent: 'printer@office.example.net', becomes: 'printer@billing.example.com' });
-            expect(smtp.fromExamples(form({ mode: 'domain', domain: 'billing.example.com', keepOrigin: true }), verified)[0]?.becomes).toBe('printer+office.example.net@billing.example.com');
+            expect(smtp.fromExamples(form({ mode: 'domain', domain: 'billing.example.com' }), verified)[0]).toEqual({ sent: 'scanner@office.example.net', becomes: 'scanner=office.example.net@billing.example.com' });
             expect(smtp.fromExamples(form({ mode: 'address', address: 'no-reply@billing.example.com', onlyUnauthorized: false }), verified)).toEqual([
-                { sent: 'printer@office.example.net', becomes: 'no-reply@billing.example.com' }
+                { sent: 'scanner@office.example.net', becomes: 'no-reply@billing.example.com' }
             ]);
             expect(smtp.fromExamples(form({ mode: 'off' }), verified)).toEqual([]);
         });
@@ -319,7 +290,7 @@ describe('SMTP tab', () => {
 
     it('saves a domain policy with examples and warns when mail would not be signed', async () => {
         api.updateAppSmtpSettings.mockResolvedValue({
-            data: { from: { mode: 'domain', domain: 'billing.example.com', keep_origin: true, only_unauthorized: true }, signing_ready: [{ domain: 'billing.example.com', ready: false }] }
+            data: { from: { mode: 'domain', domain: 'billing.example.com', only_unauthorized: true }, signing_ready: [{ domain: 'billing.example.com', ready: false }] }
         });
         await mountSmtp();
         expect(wrapper!.find('[data-testid="smtp-save"]').attributes('disabled')).toBeDefined();
@@ -327,14 +298,14 @@ describe('SMTP tab', () => {
         const select = wrapper!.find<HTMLSelectElement>('#smtp-from-domain');
         expect(select.findAll('option').map(o => o.text())).toEqual(['Choose a domain', 'billing.example.com']);
         await select.setValue('billing.example.com');
-        await wrapper!.find('[data-testid="smtp-keep-origin"]').setValue(true);
-        expect(wrapper!.find('[data-testid="smtp-examples"]').text()).toContain('printer+office.example.net@billing.example.com');
+        expect(wrapper!.find('[data-testid="smtp-examples"]').text()).toContain('scanner=office.example.net@billing.example.com');
+        expect(wrapper!.find('[data-testid="smtp-keep-origin"]').exists()).toBe(false);
 
         await wrapper!.find('[data-testid="smtp-from"] form').trigger('submit');
         await flushPromises();
         expect(api.updateAppSmtpSettings).toHaveBeenCalledWith({
             path: { appId: APP_ID },
-            body: { from: { mode: 'domain', domain: 'billing.example.com', keep_origin: true, only_unauthorized: true } }
+            body: { from: { mode: 'domain', domain: 'billing.example.com', only_unauthorized: true } }
         });
         expect(wrapper!.find('[data-testid="smtp-signing-warning"]').text()).toContain('billing.example.com');
         expect(wrapper!.text()).toContain('Saved');

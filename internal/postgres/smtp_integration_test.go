@@ -175,9 +175,9 @@ func TestSMTPSettingsPostgres(t *testing.T) {
 	if _, err := repo.SetSMTPSettings(ctx, "operator", app, admin.SMTPFromPolicy{Mode: "off", OnlyUnauthorized: true}); err != nil || audits() != 0 {
 		t.Fatal("unchanged policy audited", err)
 	}
-	domain := admin.SMTPFromPolicy{Mode: "domain", Domain: str("example.com"), KeepOrigin: true, OnlyUnauthorized: false}
+	domain := admin.SMTPFromPolicy{Mode: "domain", Domain: str("example.com"), OnlyUnauthorized: false}
 	got, err := repo.SetSMTPSettings(ctx, "operator", app, domain)
-	if err != nil || got.Mode != "domain" || *got.Domain != "example.com" || !got.KeepOrigin || audits() != 1 {
+	if err != nil || got.Mode != "domain" || *got.Domain != "example.com" || audits() != 1 {
 		t.Fatal("domain mode", got, err)
 	}
 	if again, err := repo.SetSMTPSettings(ctx, "operator", app, domain); err != nil || !samePolicy(again, got) || audits() != 1 {
@@ -187,19 +187,8 @@ func TestSMTPSettingsPostgres(t *testing.T) {
 		t.Fatal("stored", stored, err)
 	}
 	address := admin.SMTPFromPolicy{Mode: "address", Address: str("no-reply@example.com"), OnlyUnauthorized: true}
-	if got, err = repo.SetSMTPSettings(ctx, "operator", app, address); err != nil || got.Domain != nil || got.KeepOrigin || audits() != 2 {
+	if got, err = repo.SetSMTPSettings(ctx, "operator", app, address); err != nil || got.Domain != nil || audits() != 2 {
 		t.Fatal("address mode", got, err)
-	}
-	// Domain mode keeps an optional fallback address, stored and idempotent.
-	fallback := admin.SMTPFromPolicy{Mode: "domain", Domain: str("example.com"), Address: str("no-reply@example.com"), KeepOrigin: true, OnlyUnauthorized: true}
-	if got, err = repo.SetSMTPSettings(ctx, "operator", app, fallback); err != nil || got.Address == nil || *got.Address != "no-reply@example.com" || *got.Domain != "example.com" || audits() != 3 {
-		t.Fatal("domain mode with fallback", got, err)
-	}
-	if stored, err := repo.GetSMTPSettings(ctx, app); err != nil || !samePolicy(stored, fallback) {
-		t.Fatal("stored fallback", stored, err)
-	}
-	if again, err := repo.SetSMTPSettings(ctx, "operator", app, fallback); err != nil || !samePolicy(again, fallback) || audits() != 3 {
-		t.Fatal("fallback PUT is not idempotent", again, err, audits())
 	}
 	// 409: a domain that is not an active verified sender domain of the app.
 	for _, p := range []admin.SMTPFromPolicy{
@@ -207,8 +196,6 @@ func TestSMTPSettingsPostgres(t *testing.T) {
 		{Mode: "domain", Domain: str("elsewhere.example"), OnlyUnauthorized: true},
 		{Mode: "address", Address: str("a@pending.example"), OnlyUnauthorized: true},
 		{Mode: "address", Address: str("a@elsewhere.example"), OnlyUnauthorized: true},
-		{Mode: "domain", Domain: str("example.com"), Address: str("a@pending.example"), OnlyUnauthorized: true},
-		{Mode: "domain", Domain: str("example.com"), Address: str("a@elsewhere.example"), OnlyUnauthorized: true},
 	} {
 		if _, err = repo.SetSMTPSettings(ctx, "operator", app, p); !errors.Is(err, admin.ErrConflict) {
 			t.Fatal("unverified domain accepted", p, err)
@@ -219,26 +206,23 @@ func TestSMTPSettingsPostgres(t *testing.T) {
 		{Mode: "rewrite"},
 		{Mode: "domain"},
 		{Mode: "domain", Domain: str("Example.com")},
-		{Mode: "domain", Domain: str("example.com"), Address: str(`"a b"@example.com`)},
-		{Mode: "domain", Domain: str("example.com"), Address: str("a..b@example.com")},
+		{Mode: "domain", Domain: str("example.com"), Address: str("a@example.com")},
 		{Mode: "address"},
 		{Mode: "address", Address: str(`"a b"@example.com`)},
 		{Mode: "address", Address: str("a..b@example.com")},
-		{Mode: "address", Address: str("a@example.com"), KeepOrigin: true},
 		{Mode: "off", Domain: str("example.com")},
-		{Mode: "off", KeepOrigin: true},
 	} {
 		if _, err = repo.SetSMTPSettings(ctx, "operator", app, p); !errors.Is(err, admin.ErrInvalidInput) {
 			t.Fatal("bad shape accepted", p, err)
 		}
 	}
-	if got, err = repo.SetSMTPSettings(ctx, "operator", app, admin.SMTPFromPolicy{Mode: "off", OnlyUnauthorized: true}); err != nil || got.Domain != nil || got.Address != nil || audits() != 4 {
+	if got, err = repo.SetSMTPSettings(ctx, "operator", app, admin.SMTPFromPolicy{Mode: "off", OnlyUnauthorized: true}); err != nil || got.Domain != nil || got.Address != nil || audits() != 3 {
 		t.Fatal("back to off", got, err)
 	}
 	if _, err = repo.SetSMTPSettings(ctx, "operator", strings.Repeat("9", 32), address); !errors.Is(err, admin.ErrNotFound) {
 		t.Fatal("unknown app", err)
 	}
-	if audits() != 4 {
+	if audits() != 3 {
 		t.Fatal("a refused change was audited")
 	}
 }

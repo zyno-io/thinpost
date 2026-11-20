@@ -45,7 +45,6 @@ type IssuedSMTPCredential struct {
 type SMTPFromPolicy struct {
 	Mode             string  `json:"mode"`
 	Domain           *string `json:"domain,omitempty"`
-	KeepOrigin       bool    `json:"keep_origin"`
 	Address          *string `json:"address,omitempty"`
 	OnlyUnauthorized bool    `json:"only_unauthorized"`
 }
@@ -116,33 +115,25 @@ func SMTPPorts() []SMTPPort {
 
 // NormalizeSMTPFromPolicy checks the shape of a policy and returns it with only
 // the fields of its mode set. The configured address must be an ASCII dot-atom
-// local part with a normalized domain. In mode domain the address is optional:
-// the fallback used when the original local part cannot be reused.
+// local part with a normalized domain.
 func NormalizeSMTPFromPolicy(p SMTPFromPolicy) (SMTPFromPolicy, bool) {
 	out := SMTPFromPolicy{Mode: p.Mode, OnlyUnauthorized: p.OnlyUnauthorized}
 	switch p.Mode {
 	case SMTPFromOff:
-		if p.Domain != nil || p.Address != nil || p.KeepOrigin {
+		if p.Domain != nil || p.Address != nil {
 			return SMTPFromPolicy{}, false
 		}
 	case SMTPFromDomain:
-		if p.Domain == nil {
+		if p.Domain == nil || p.Address != nil {
 			return SMTPFromPolicy{}, false
 		}
 		domain, ok := NormalizeDomain(*p.Domain)
 		if !ok || domain != *p.Domain {
 			return SMTPFromPolicy{}, false
 		}
-		out.Domain, out.KeepOrigin = &domain, p.KeepOrigin
-		if p.Address != nil {
-			address, ok := normalizeSMTPAddress(*p.Address)
-			if !ok || address != *p.Address {
-				return SMTPFromPolicy{}, false
-			}
-			out.Address = &address
-		}
+		out.Domain = &domain
 	case SMTPFromAddress:
-		if p.Address == nil || p.Domain != nil || p.KeepOrigin {
+		if p.Address == nil || p.Domain != nil {
 			return SMTPFromPolicy{}, false
 		}
 		address, ok := normalizeSMTPAddress(*p.Address)
@@ -154,22 +145,6 @@ func NormalizeSMTPFromPolicy(p SMTPFromPolicy) (SMTPFromPolicy, bool) {
 		return SMTPFromPolicy{}, false
 	}
 	return out, true
-}
-
-// SMTPPolicyDomains lists the sender domains a policy relies on, each once: the
-// target domain (mode domain) and the domain of the configured or fallback
-// address.
-func SMTPPolicyDomains(p SMTPFromPolicy) []string {
-	var out []string
-	if p.Domain != nil {
-		out = append(out, *p.Domain)
-	}
-	if p.Address != nil {
-		if d := SMTPAddressDomain(*p.Address); len(out) == 0 || out[0] != d {
-			out = append(out, d)
-		}
-	}
-	return out
 }
 
 // SMTPAddressDomain is the domain part of a normalized configured address.
@@ -292,17 +267,16 @@ func (h *Handler) updateAppSMTPSettings(w http.ResponseWriter, r *http.Request, 
 		From *struct {
 			Mode             string  `json:"mode"`
 			Domain           *string `json:"domain"`
-			KeepOrigin       *bool   `json:"keep_origin"`
 			Address          *string `json:"address"`
 			OnlyUnauthorized *bool   `json:"only_unauthorized"`
 		} `json:"from"`
 	}
-	if decode(r, &request) != nil || request.From == nil || request.From.KeepOrigin == nil || request.From.OnlyUnauthorized == nil {
+	if decode(r, &request) != nil || request.From == nil || request.From.OnlyUnauthorized == nil {
 		fail(w, http.StatusBadRequest)
 		return
 	}
 	policy, ok := NormalizeSMTPFromPolicy(SMTPFromPolicy{
-		Mode: request.From.Mode, Domain: request.From.Domain, KeepOrigin: *request.From.KeepOrigin,
+		Mode: request.From.Mode, Domain: request.From.Domain,
 		Address: request.From.Address, OnlyUnauthorized: *request.From.OnlyUnauthorized,
 	})
 	if !ok {
@@ -325,7 +299,14 @@ func (h *Handler) smtpSettings(ctx context.Context, appID string, policy SMTPFro
 		return settings
 	}
 	settings.SigningReady = []SMTPSigningReady{}
-	for _, target := range SMTPPolicyDomains(policy) {
+	target := ""
+	switch {
+	case policy.Domain != nil:
+		target = *policy.Domain
+	case policy.Address != nil:
+		target = SMTPAddressDomain(*policy.Address)
+	}
+	if target != "" {
 		settings.SigningReady = append(settings.SigningReady, SMTPSigningReady{Domain: target, Ready: h.SigningReadiness.Ready(ctx, appID, target) == nil})
 	}
 	return settings

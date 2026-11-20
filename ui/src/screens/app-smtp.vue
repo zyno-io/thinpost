@@ -151,14 +151,11 @@
                         <HelpButton topic="the From address">
                             <p>
                                 The From address is who the message says it's from. Mailbox providers only trust mail sent from domains you've verified,
-                                but many devices and apps send from addresses of their own, such as <code>printer@office.example.net</code>. This setting decides what happens then.
+                                but many devices and apps send from addresses of their own, such as <code>scanner@office.example.net</code>. This setting decides what happens then.
                             </p>
                             <ul>
                                 <li><strong>Only accept verified addresses.</strong> Mail from any other address is refused, so the sender sees an error.</li>
-                                <li>
-                                    <strong>Send from one of my domains.</strong> The address is moved onto a domain you pick, so <code>printer@office.example.net</code> becomes <code>printer@example.com</code>.
-                                    If the original name can't be kept (it has spaces or quotes, say), the optional fallback address is used instead; without one, that mail is refused.
-                                </li>
+                                <li><strong>Send from one of my domains.</strong> The address is moved onto a domain you pick, so <code>scanner@office.example.net</code> becomes <code>scanner=office.example.net@example.com</code>. The original address stays in the name part, so you can still tell senders apart. Very long or unusual names are shortened and end with a short code.</li>
                                 <li><strong>Always send from one address.</strong> Every message goes out from the address you enter.</li>
                                 <li>The address the sender used is kept and shown as “Original From” on the message.</li>
                             </ul>
@@ -195,34 +192,7 @@
                             <option v-for="name in domainChoices" :key="name" :value="name">{{ name }}</option>
                         </select>
                         <p id="smtp-from-domain-hint" class="hint" :class="{ invalid: validation.domainError && touched }">
-                            {{ validation.domainError && touched ? validation.domainError : 'Only verified sending domains of this app are listed.' }}
-                        </p>
-                        <label class="check">
-                            <input v-model="form.keepOrigin" type="checkbox" :disabled="isSaving" data-testid="smtp-keep-origin" />
-                            <span>Keep the original address inside the new one <span class="hint">(printer@office.example.net becomes printer+office.example.net@example.com)</span></span>
-                        </label>
-                        <label for="smtp-from-fallback">Fallback address (optional)</label>
-                        <input
-                            id="smtp-from-fallback"
-                            v-model="form.address"
-                            class="input"
-                            type="text"
-                            autocomplete="off"
-                            autocapitalize="off"
-                            spellcheck="false"
-                            placeholder="no-reply@example.com"
-                            :disabled="isSaving"
-                            :aria-invalid="!!validation.addressError && touched"
-                            aria-describedby="smtp-from-fallback-hint"
-                            data-testid="smtp-from-fallback"
-                            @blur="touched = true"
-                        />
-                        <p id="smtp-from-fallback-hint" class="hint" :class="{ invalid: validation.addressError && touched }">
-                            {{
-                                validation.addressError && touched
-                                    ? validation.addressError
-                                    : 'Used when the original name can\'t be kept, for example when it has spaces or quotes. Leave it empty to refuse that mail. It must be on one of this app\'s verified sending domains.'
-                            }}
+                            {{ validation.domainError && touched ? validation.domainError : 'Only verified sending domains of this app are listed. The original address is kept in the name part, so senders stay distinguishable.' }}
                         </p>
                     </div>
 
@@ -354,7 +324,7 @@ const isIssuing = ref(false);
 const issueError = ref<ApiErrorDescription | null>(null);
 const revokingId = ref<string | null>(null);
 
-const form = ref<FromForm>({ mode: 'off', domain: '', keepOrigin: false, address: '', onlyUnauthorized: true });
+const form = ref<FromForm>({ mode: 'off', domain: '', address: '', onlyUnauthorized: true });
 const saved = ref<FromForm>({ ...form.value });
 const touched = ref(false);
 const isSaving = ref(false);
@@ -403,8 +373,7 @@ function normalized(f: FromForm) {
     return {
         mode: f.mode,
         domain: f.mode === 'domain' ? f.domain : '',
-        keepOrigin: f.mode === 'domain' ? f.keepOrigin : false,
-        address: f.mode === 'address' || f.mode === 'domain' ? f.address.trim() : '',
+        address: f.mode === 'address' ? f.address.trim() : '',
         onlyUnauthorized: f.mode === 'off' ? true : f.onlyUnauthorized
     };
 }
