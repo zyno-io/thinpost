@@ -81,6 +81,14 @@ describe('tracking rules', () => {
         for (const raw of ['-1', '1.5', '1,000', 'x']) expect(validateDailyLimit(raw).error).toContain('whole number');
     });
 
+    it('reads the recipient policy only when it is one of the two known values', () => {
+        expect(parseRuntimeInfo({ features: { submission: true, tracking: false, recipient_policy: 'allowlist' } }).features.recipient_policy).toBe('allowlist');
+        expect(parseRuntimeInfo({ features: { submission: true, tracking: false, recipient_policy: 'unrestricted' } }).features.recipient_policy).toBe('unrestricted');
+        for (const value of [undefined, 'other', 1, null]) {
+            expect(parseRuntimeInfo({ features: { submission: true, tracking: false, recipient_policy: value } }).features.recipient_policy).toBeUndefined();
+        }
+    });
+
     it('accepts only contract-valid responses', () => {
         expect(parseRuntimeInfo(disabled).tracking).toBeUndefined();
         expect(parseRuntimeInfo(enabled).tracking).toEqual({ origin: 'https://t.example.com', link_event_limit: 25 });

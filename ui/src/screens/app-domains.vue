@@ -133,6 +133,7 @@
             :domains="testSend.domains.value"
             :domains-error="testSend.domainsError.value"
             :preselect="testSend.preselect.value"
+            :recipient-policy="testSend.recipientPolicy.value"
             :is-submitting="testSend.isSubmitting.value"
             :error="testSend.error.value"
             @close="testSend.close"

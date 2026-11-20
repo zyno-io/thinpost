@@ -22,6 +22,22 @@ export interface MessageRow {
     senderDomain: string | null;
     /** From address and display name; never masked; null when not recorded. */
     sender: { address: string; name: string | null } | null;
+    /** Set when an administrator sent it from the console; records the options that send used. */
+    operatorTest: OperatorTestView | null;
+}
+
+/** The operator-only options of a console test send. */
+export interface OperatorTestView {
+    bypassLimits: boolean;
+    bypassRecipientPolicy: boolean;
+}
+
+/** Null when absent or malformed: the tag is informational, so a bad value shows no tag rather than failing the row. */
+function readOperatorTest(raw: unknown): OperatorTestView | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const v = raw as Record<string, unknown>;
+    if (typeof v.bypass_limits !== 'boolean' || typeof v.bypass_recipient_policy !== 'boolean') return null;
+    return { bypassLimits: v.bypass_limits, bypassRecipientPolicy: v.bypass_recipient_policy };
 }
 
 const DEFAULT_MAX_RECIPIENTS = 3;
@@ -93,7 +109,8 @@ export function readMessageSummary(raw: unknown, options: { maxRecipients?: numb
         subject,
         recipients,
         senderDomain,
-        sender
+        sender,
+        operatorTest: readOperatorTest(v.operator_test)
     };
 }
 

@@ -56,6 +56,9 @@ export function useTestSend(options: TestSendOptions) {
     }
     void loadRuntime();
 
+    /** The deployment's recipient policy when the server reported it; the allowlist bypass is offered only for 'allowlist'. */
+    const recipientPolicy = computed(() => runtime.value?.features.recipient_policy ?? null);
+
     /** Why a test send is not offered, from what the console knows; the server re-checks everything. */
     const blocker = computed(() => {
         if (authState.status !== 'signed-in') return 'Sign in to send a test message.';
@@ -138,5 +141,5 @@ export function useTestSend(options: TestSendOptions) {
         }
     }
 
-    return { isOpen, domains, domainsError, preselect, isSubmitting, error, outcomeError, blocker, open, close, submit };
+    return { isOpen, recipientPolicy, domains, domainsError, preselect, isSubmitting, error, outcomeError, blocker, open, close, submit };
 }

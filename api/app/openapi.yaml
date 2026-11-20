@@ -38,7 +38,10 @@ paths:
         permitted headers are List-Unsubscribe, List-Unsubscribe-Post,
         In-Reply-To and References; reply addresses are reply_to. A message
         submitted with hold: true is stored but not sent until released (see
-        releaseMessage) and the response carries X-Thinpost-Hold: held.
+        releaseMessage) and the response carries X-Thinpost-Hold: held. The
+        console's test-send options bypass_limits and bypass_recipient_policy
+        are operator-only and are not accepted here: either field, even false,
+        is a 400.
       parameters:
         - name: Idempotency-Key
           in: header

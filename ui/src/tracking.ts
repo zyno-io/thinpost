@@ -19,6 +19,9 @@ export function parseRuntimeInfo(data: unknown): RuntimeInfo {
         throw new InvalidResponseError();
     }
     const info: RuntimeInfo = { features: { submission: features.submission, tracking: features.tracking } };
+    // Informational: an unknown or missing value only means the allowlist bypass is not offered.
+    const policy = (features as { recipient_policy?: unknown }).recipient_policy;
+    if (policy === 'allowlist' || policy === 'unrestricted') info.features.recipient_policy = policy;
     const tracking = candidate?.tracking;
     if (tracking !== undefined) {
         if (typeof tracking.origin !== 'string' || !tracking.origin || !isCount(tracking.link_event_limit, 1000) || tracking.link_event_limit < 1) {

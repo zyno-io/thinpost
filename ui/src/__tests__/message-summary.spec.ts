@@ -20,6 +20,14 @@ function raw(overrides: Record<string, unknown> = {}) {
 }
 
 describe('readMessageSummary', () => {
+    it('reads the console test tag only when it is well formed', () => {
+        expect(readMessageSummary(raw())?.operatorTest).toBeNull();
+        expect(readMessageSummary(raw({ operator_test: { bypass_limits: true, bypass_recipient_policy: false } }))?.operatorTest).toEqual({ bypassLimits: true, bypassRecipientPolicy: false });
+        for (const bad of [null, 'yes', {}, { bypass_limits: true }, { bypass_limits: 'true', bypass_recipient_policy: false }]) {
+            expect(readMessageSummary(raw({ operator_test: bad }))?.operatorTest).toBeNull();
+        }
+    });
+
     it('requires a status', () => {
         expect(readMessageSummary(raw({ status: 'sending' }))?.status).toBe('sending');
         expect(readMessageSummary(raw({ status: undefined }))).toBeNull();

@@ -1397,10 +1397,14 @@ paths:
         must be on one of the app's active, verified sender domains, there are 1 to
         5 To recipients, and Cc, Bcc, reply addresses, headers, attachments,
         tracking choices and hold are not accepted. It needs no API key and takes
-        no idempotency key: a repeated request sends another message. Audited as
-        message.test.submitted (actor: the administrator subject, resource: the
-        message ID, details: recipient_count only). The body is read only from the
-        request (at most 64 KiB); a query string is rejected.
+        no idempotency key: a repeated request sends another message. Two
+        operator-only options, bypass_limits and bypass_recipient_policy, relax
+        parts of that path and nothing else; no other route accepts them. Audited
+        as message.test.submitted (actor: the administrator subject, resource: the
+        message ID, details: recipient_count, bypass_limits and
+        bypass_recipient_policy only). The message is tagged operator_test in
+        every message read. The body is read only from the request (at most
+        64 KiB); a query string is rejected.
       requestBody:
         required: true
         content:
@@ -1705,6 +1709,13 @@ components:
           properties:
             submission: { type: boolean }
             tracking: { type: boolean }
+            recipient_policy:
+              type: string
+              enum: [allowlist, unrestricted]
+              description: >-
+                The deployment's recipient policy, present when this replica
+                enforces one (that is, when submission is available). The console
+                offers bypass_recipient_policy only for allowlist.
         tracking:
           type: object
           required: [origin, link_event_limit]
@@ -2214,6 +2225,31 @@ components:
         text: { type: string, description: Plain-text body. The whole request is at most 64 KiB. }
         html: { type: string, description: HTML body. }
         enhanced_protection: { type: boolean, description: "Require TLS to the recipient's server (Enhanced Protection)." }
+        bypass_limits:
+          type: boolean
+          default: false
+          description: >-
+            Skip, and do not count, the app's submission rate, daily recipient
+            quota and pending-message limit for this send. The send does not
+            consume the rate bucket or the daily quota, and the message is
+            excluded from the app's pending-message count (the operations backlog
+            still shows it). It does not skip the verified sender domain, DKIM
+            signing, the suppression list, a paused app, the admission gate, any
+            size or profile limit, the egress policy or Enhanced Protection TLS.
+            Operator-only: rejected with 400 on the app API and every provider
+            route, even when false.
+        bypass_recipient_policy:
+          type: boolean
+          default: false
+          description: >-
+            Skip the deployment's recipient allowlist (THINPOST_RECIPIENT_POLICY=allowlist)
+            for this send, at acceptance and at dispatch. It skips nothing else:
+            the egress policy, which control applies when it resolves each
+            recipient's route, still refuses special-use and infrastructure
+            destinations, and every limit and check other than the allowlist still
+            applies. Has no effect when the deployment is unrestricted
+            (RuntimeInfo features.recipient_policy). Operator-only: rejected with
+            400 on the app API and every provider route, even when false.
     SubmittedMessage:
       type: object
       required: [id, accepted_at]
@@ -2329,6 +2365,16 @@ components:
         failed_count: { type: integer, minimum: 0 }
         uncertain_count: { type: integer, minimum: 0 }
         suppressed_count: { type: integer, minimum: 0, description: Failed deliveries dropped because the recipient was suppressed; also counted in failed_count. }
+        operator_test:
+          type: object
+          required: [bypass_limits, bypass_recipient_policy]
+          description: >-
+            Present only for a message an administrator submitted through the
+            console test send (sendAppTestMessage), and records the operator-only
+            options that send used. Also returned by the app API's message reads.
+          properties:
+            bypass_limits: { type: boolean }
+            bypass_recipient_policy: { type: boolean }
     MessageHold:
       type: object
       required: [expires_at]

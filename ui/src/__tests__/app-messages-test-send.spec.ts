@@ -142,8 +142,8 @@ describe('send test message from the messages tab', () => {
         const name = dialog()!.querySelectorAll('input[type="text"]')[1] as HTMLInputElement;
         name.value = 'Team, Example';
         name.dispatchEvent(new Event('input'));
-        const boxes = dialog()!.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
-        boxes[boxes.length - 1]!.click();
+        const boxes = [...dialog()!.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+        boxes.find(box => box.parentElement?.textContent?.includes('Enhanced Protection'))!.click();
         await flushPromises();
         await submit();
 
@@ -215,6 +215,155 @@ describe('send test message from the messages tab', () => {
         expect(api.listAppMessages).toHaveBeenCalledTimes(2);
         expect(sendButton().attributes('disabled')).toBeUndefined();
         expect(api.sendAppTestMessage).toHaveBeenCalledTimes(1);
+    });
+});
+
+function checkbox(testid: string) {
+    return dialog()!.querySelector<HTMLInputElement>(`[data-testid="${testid}"] input[type="checkbox"]`);
+}
+
+async function openForm() {
+    await sendButton().trigger('click');
+    await flushPromises();
+    await setValue('textarea.recipients', 'one@example.org\ntwo@example.org');
+}
+
+describe('operator test-send options', () => {
+    it('offers the limits option, off by default, and sends no flag unless it is on', async () => {
+        api.sendAppTestMessage.mockResolvedValue(created());
+        await mountMessages();
+        await openForm();
+        expect(checkbox('bypass-limits')).not.toBeNull();
+        expect(checkbox('bypass-limits')!.checked).toBe(false);
+        expect(dialog()!.textContent).toContain('Not checked or counted against the sending rate, daily recipient quota or pending limit');
+        expect(dialog()!.textContent).toContain('Verified domain, DKIM, suppressions and pause still apply');
+        await submit();
+        const body = api.sendAppTestMessage.mock.calls[0]![0].body;
+        expect(body).not.toHaveProperty('bypass_limits');
+        expect(body).not.toHaveProperty('bypass_recipient_policy');
+    });
+
+    it('sends bypass_limits when ticked, without a confirmation', async () => {
+        api.sendAppTestMessage.mockResolvedValue(created());
+        await mountMessages();
+        await openForm();
+        checkbox('bypass-limits')!.click();
+        await flushPromises();
+        await submit();
+        expect(vf.showConfirm).not.toHaveBeenCalled();
+        const body = api.sendAppTestMessage.mock.calls[0]![0].body;
+        expect(body.bypass_limits).toBe(true);
+        expect(body).not.toHaveProperty('bypass_recipient_policy');
+    });
+
+    it.each([
+        ['an unrestricted deployment', { submission: true, tracking: true, recipient_policy: 'unrestricted' }],
+        ['a server that does not report the policy', { submission: true, tracking: true }]
+    ])('hides the allowlist option for %s', async (_name, features) => {
+        api.getRuntime.mockResolvedValue({ data: { features } });
+        await mountMessages();
+        await openForm();
+        expect(checkbox('bypass-recipient-policy')).toBeNull();
+        expect(dialog()!.textContent).not.toContain('recipient allowlist');
+    });
+
+    describe('with a recipient allowlist', () => {
+        beforeEach(() => {
+            api.getRuntime.mockResolvedValue({ data: { features: { submission: true, tracking: true, recipient_policy: 'allowlist' } } });
+        });
+
+        it('shows the option off by default with its warning', async () => {
+            await mountMessages();
+            await openForm();
+            expect(checkbox('bypass-recipient-policy')).not.toBeNull();
+            expect(checkbox('bypass-recipient-policy')!.checked).toBe(false);
+            expect(dialog()!.textContent).toContain("Can deliver to people outside this deployment's recipient allowlist.");
+        });
+
+        it('asks for a second confirmation naming the recipient count and sends only when confirmed', async () => {
+            api.sendAppTestMessage.mockResolvedValue(created());
+            vf.showConfirm.mockResolvedValue(true);
+            await mountMessages();
+            await openForm();
+            checkbox('bypass-recipient-policy')!.click();
+            await flushPromises();
+            await submit();
+            expect(vf.showConfirm).toHaveBeenCalledTimes(1);
+            expect(vf.showConfirm.mock.calls[0]![1]).toContain('2 recipients');
+            const body = api.sendAppTestMessage.mock.calls[0]![0].body;
+            expect(body.bypass_recipient_policy).toBe(true);
+            expect(body).not.toHaveProperty('bypass_limits');
+        });
+
+        it('does not send when the confirmation is declined, and keeps the form open', async () => {
+            vf.showConfirm.mockResolvedValue(false);
+            await mountMessages();
+            await openForm();
+            checkbox('bypass-recipient-policy')!.click();
+            await flushPromises();
+            await submit();
+            expect(vf.showConfirm).toHaveBeenCalledTimes(1);
+            expect(api.sendAppTestMessage).not.toHaveBeenCalled();
+            expect(dialog()).not.toBeNull();
+            expect(submitButton().disabled).toBe(false);
+        });
+
+        it('sends both flags when both are ticked', async () => {
+            api.sendAppTestMessage.mockResolvedValue(created());
+            vf.showConfirm.mockResolvedValue(true);
+            await mountMessages();
+            await openForm();
+            checkbox('bypass-limits')!.click();
+            checkbox('bypass-recipient-policy')!.click();
+            await flushPromises();
+            await submit();
+            const body = api.sendAppTestMessage.mock.calls[0]![0].body;
+            expect(body.bypass_limits).toBe(true);
+            expect(body.bypass_recipient_policy).toBe(true);
+        });
+    });
+});
+
+describe('console test tags in the message list', () => {
+    const row = (id: string, operatorTest?: { bypass_limits: boolean; bypass_recipient_policy: boolean }) => ({
+        id,
+        state: 'prepared',
+        status: 'delivered',
+        enhanced_protection: false,
+        subject: 'Hello',
+        subject_masked: false,
+        accepted_at: '2026-10-02T12:00:00Z',
+        delivery_count: 1,
+        accepted_count: 1,
+        failed_count: 0,
+        uncertain_count: 0,
+        suppressed_count: 0,
+        ...(operatorTest ? { operator_test: operatorTest } : {})
+    });
+
+    it('tags console tests and what they skipped, and nothing else', async () => {
+        api.listAppMessages.mockResolvedValue({
+            data: {
+                messages: [
+                    row('1'.repeat(32)),
+                    row('2'.repeat(32), { bypass_limits: false, bypass_recipient_policy: false }),
+                    row('3'.repeat(32), { bypass_limits: true, bypass_recipient_policy: false }),
+                    row('4'.repeat(32), { bypass_limits: true, bypass_recipient_policy: true })
+                ]
+            }
+        });
+        await mountMessages();
+        const rows = wrapper!.findAll('tbody tr');
+        expect(rows).toHaveLength(4);
+        const tags = (i: number) => ({
+            test: rows[i]!.find('[data-testid="console-test-tag"]').exists(),
+            limits: rows[i]!.find('[data-testid="limits-skipped-tag"]').exists(),
+            allowlist: rows[i]!.find('[data-testid="allowlist-skipped-tag"]').exists()
+        });
+        expect(tags(0)).toEqual({ test: false, limits: false, allowlist: false });
+        expect(tags(1)).toEqual({ test: true, limits: false, allowlist: false });
+        expect(tags(2)).toEqual({ test: true, limits: true, allowlist: false });
+        expect(tags(3)).toEqual({ test: true, limits: true, allowlist: true });
     });
 });
 

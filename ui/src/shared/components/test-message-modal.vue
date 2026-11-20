@@ -24,7 +24,10 @@
                 <div class="notice" role="note">
                     <i class="fa-solid fa-circle-info" aria-hidden="true" />
                     <ul class="notice-body">
-                        <li>This sends a real message. It counts against this app's sending limit, daily recipient limit and pending-message limit.</li>
+                        <li>
+                            This sends a real message. It counts against this app's sending limit, daily recipient limit and pending-message limit,
+                            unless you skip them below.
+                        </li>
                         <li>This app's webhooks receive events for it, as for any message.</li>
                         <li>
                             Open and click tracking and the one-click unsubscribe link follow this app's settings. If a recipient clicks unsubscribe,
@@ -95,6 +98,25 @@
                     <input v-model="enhancedProtection" type="checkbox" />
                     <span>Enhanced Protection: send only over TLS, and hide the subject in the console</span>
                 </label>
+
+                <label class="acknowledge" data-testid="bypass-limits">
+                    <input v-model="bypassLimits" type="checkbox" />
+                    <span>
+                        Skip sending limits
+                        <span class="option-hint">
+                            Not checked or counted against the sending rate, daily recipient quota or pending limit. Verified domain, DKIM, suppressions
+                            and pause still apply.
+                        </span>
+                    </span>
+                </label>
+
+                <label v-if="recipientPolicy === 'allowlist'" class="acknowledge" data-testid="bypass-recipient-policy">
+                    <input v-model="bypassRecipientPolicy" type="checkbox" />
+                    <span>
+                        Skip recipient allowlist
+                        <span class="option-hint">Can deliver to people outside this deployment's recipient allowlist.</span>
+                    </span>
+                </label>
             </template>
         </div>
 
@@ -108,7 +130,7 @@
 </template>
 
 <script setup lang="ts">
-import { VfModal } from '@zyno-io/vue-foundation';
+import { showConfirm, VfModal } from '@zyno-io/vue-foundation';
 import { computed, ref, useId } from 'vue';
 
 import type { ApiErrorDescription } from '@/api-errors';
@@ -138,6 +160,8 @@ const props = defineProps<{
     preselect?: string | null;
     isSubmitting: boolean;
     error: ApiErrorDescription | null;
+    /** The deployment's recipient policy, when the server reported it. The allowlist bypass is offered only for 'allowlist'. */
+    recipientPolicy?: 'allowlist' | 'unrestricted' | null;
 }>();
 
 const emit = defineEmits<{
@@ -160,6 +184,12 @@ const text = ref(DEFAULT_TEST_TEXT);
 const includeHtml = ref(false);
 const html = ref('');
 const enhancedProtection = ref(false);
+const bypassLimits = ref(false);
+const bypassRecipientPolicy = ref(false);
+/** True while the allowlist confirmation is open, so a second click cannot stack another. */
+const confirming = ref(false);
+/** The recipient bypass counts only while it is offered, so a stale tick cannot be sent. */
+const bypassingRecipients = computed(() => props.recipientPolicy === 'allowlist' && bypassRecipientPolicy.value);
 
 const domain = computed({
     get: () => {
@@ -188,6 +218,7 @@ const toSummary = computed(() => {
 const canSubmit = computed(
     () =>
         !props.isSubmitting &&
+        !confirming.value &&
         !!props.domains?.length &&
         !!domain.value &&
         !localProblem.value &&
@@ -198,16 +229,33 @@ const canSubmit = computed(
         hasBody.value
 );
 
-function submit() {
+async function submit() {
     localTouched.value = true;
     if (!canSubmit.value) return;
+    if (bypassingRecipients.value) {
+        confirming.value = true;
+        let confirmed = false;
+        try {
+            const count = parsed.value.valid.length;
+            confirmed = await showConfirm(
+                'Skip the recipient allowlist?',
+                `This sends to ${count} ${count === 1 ? 'recipient' : 'recipients'} without checking this deployment's recipient allowlist, so the message can reach people outside it. The send is recorded in the audit log and the message is tagged as a console test.`
+            );
+        } finally {
+            confirming.value = false;
+        }
+        if (!confirmed) return;
+    }
     const request: TestMessageRequest = {
         from: formatFrom(displayName.value, local.value, domain.value),
         to: parsed.value.valid,
         subject: subject.value,
         ...(text.value.trim() ? { text: text.value } : {}),
         ...(includeHtml.value && html.value.trim() ? { html: html.value } : {}),
-        ...(enhancedProtection.value ? { enhanced_protection: true } : {})
+        ...(enhancedProtection.value ? { enhanced_protection: true } : {}),
+        // Sent only when on: an absent flag is the safe default.
+        ...(bypassLimits.value ? { bypass_limits: true } : {}),
+        ...(bypassingRecipients.value ? { bypass_recipient_policy: true } : {})
     };
     emit('submit', request);
 }
@@ -256,5 +304,11 @@ function submit() {
 .acknowledge {
     align-items: flex-start;
     font-weight: 400;
+
+    .option-hint {
+        display: block;
+        color: var(--text-3);
+        font-size: 12px;
+    }
 }
 </style>

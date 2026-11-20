@@ -107,6 +107,14 @@
                             </dd>
                             <dd v-else class="muted">Not recorded</dd>
                         </div>
+                        <div v-if="detail.message.operatorTest" data-fact="console-test">
+                            <dt>Console test</dt>
+                            <dd>
+                                <span class="tag info">Console test</span>
+                                <span v-if="detail.message.operatorTest.bypassLimits" class="tag warning">limits skipped</span>
+                                <span v-if="detail.message.operatorTest.bypassRecipientPolicy" class="tag warning">allowlist skipped</span>
+                            </dd>
+                        </div>
                         <div data-fact="enhanced-protection">
                             <dt>Enhanced Protection</dt>
                             <dd>

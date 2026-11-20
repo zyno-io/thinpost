@@ -179,6 +179,13 @@
                                     <span class="tag" :class="tagClass(messageStatus(row.status).tone)" :title="messageStatus(row.status).description">
                                         {{ messageStatus(row.status).label }}
                                     </span>
+                                    <span v-if="row.operatorTest" class="tag info" data-testid="console-test-tag" title="Sent from the console as a test">Console test</span>
+                                    <span v-if="row.operatorTest?.bypassLimits" class="tag warning" data-testid="limits-skipped-tag" title="The sending limits were skipped and not counted">
+                                        limits skipped
+                                    </span>
+                                    <span v-if="row.operatorTest?.bypassRecipientPolicy" class="tag warning" data-testid="allowlist-skipped-tag" title="The recipient allowlist was skipped">
+                                        allowlist skipped
+                                    </span>
                                     <span v-if="row.enhancedProtection" class="ep-icon" title="Enhanced Protection">
                                         <i class="fa-solid fa-shield-halved" aria-hidden="true" /><span class="sr-only">Enhanced Protection</span>
                                     </span>
@@ -213,6 +220,7 @@
             :domains="testSend.domains.value"
             :domains-error="testSend.domainsError.value"
             :preselect="testSend.preselect.value"
+            :recipient-policy="testSend.recipientPolicy.value"
             :is-submitting="testSend.isSubmitting.value"
             :error="testSend.error.value"
             @close="testSend.close"
