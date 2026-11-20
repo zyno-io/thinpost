@@ -148,7 +148,7 @@ The SMTP tab warns you when the chosen domain would not be signed yet.
 | Header characters | ASCII only. Encode non-ASCII text in a header (a `Subject` with an accent, a display name) as an [RFC 2047](https://www.rfc-editor.org/rfc/rfc2047) encoded word, as every mail library does. |
 | Body | 8-bit text is accepted and passed on as written. NUL bytes and a bare carriage return are refused. Use `quoted-printable` or `base64` for the widest compatibility. |
 | Addresses | ASCII only. Thinpost does not offer SMTPUTF8. |
-| Connection | A connection allows three sign-in attempts and 100 messages, and is closed 30 minutes after it was opened, a limit enforced once the client has signed in. A single message transfer that takes longer than 10 minutes is cut. |
+| Connection | A connection allows three sign-in attempts and 100 messages. A client must sign in within 2 minutes of connecting, and the connection is closed 30 minutes after it was opened. A single message transfer that takes longer than 10 minutes, or stalls, is cut and the connection closed. |
 
 On top of these, the app's own [limits](/guide/console#app-limits) apply: the submission rate, the daily recipient quota and the pending-message limit. A new app starts with all three at zero, which blocks everything until an administrator raises them.
 
