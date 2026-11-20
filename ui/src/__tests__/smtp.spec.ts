@@ -178,10 +178,16 @@ describe('SMTP helpers', () => {
             ]);
             expect(smtp.fromExamples(form({ mode: 'off' }), verified)).toEqual([]);
             // A long target leaves less room: the example is shortened like the server's, with the hash shown as <hash>.
-            const longTarget = `${'t'.repeat(63)}.${'u'.repeat(63)}.${'v'.repeat(63)}.${'w'.repeat(40)}.example.com`;
+            // 241 bytes leaves 12 for the name part: shortened with the hash.
+            const longTarget = `${'t'.repeat(63)}.${'u'.repeat(63)}.${'v'.repeat(63)}.${'w'.repeat(37)}.example.com`;
+            expect(longTarget.length).toBe(241);
             const [long] = smtp.fromExamples(form({ mode: 'domain', domain: longTarget, onlyUnauthorized: false }), [longTarget]);
             expect(long!.becomes.endsWith(`-<hash>@${longTarget}`)).toBe(true);
             expect(long!.becomes.length - '<hash>'.length + 8).toBeLessThanOrEqual(254);
+            // 244 bytes leaves 9, fewer than the server needs: shown as refused.
+            const tooLong = `${'t'.repeat(63)}.${'u'.repeat(63)}.${'v'.repeat(63)}.${'w'.repeat(40)}.example.com`;
+            expect(tooLong.length).toBe(244);
+            expect(smtp.fromExamples(form({ mode: 'domain', domain: tooLong, onlyUnauthorized: false }), [tooLong])[0]!.becomes).toMatch(/^Refused/);
         });
     });
 });
