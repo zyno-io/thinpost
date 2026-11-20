@@ -75,3 +75,18 @@ func TestDefaultOutputIsStdout(t *testing.T) {
 		t.Fatal("lifecycle lines must be written to stdout")
 	}
 }
+
+func TestSubmissionFormat(t *testing.T) {
+	lines := capture(t)
+	Submission("accepted", app, msg)
+	Submission("rate_limited", app, msg)
+	Submission("made up", "not an id", "x\ny")
+	want := []string{
+		"submission result=accepted app=" + app + " transfer=" + msg,
+		"submission result=rate_limited app=" + app + " transfer=" + msg,
+		"submission result=other app=invalid transfer=invalid",
+	}
+	if strings.Join(*lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got %q", *lines)
+	}
+}
