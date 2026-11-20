@@ -1,6 +1,8 @@
 package rawmime
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/mail"
 	"strings"
 )
@@ -23,10 +25,7 @@ type Policy struct {
 	Mode FromMode
 	// Domain is smtp_from_domain, the target T of FromDomain mode.
 	Domain string
-	// KeepOrigin is smtp_from_keep_origin: generate local+origin-domain@T.
-	KeepOrigin bool
-	// Address is smtp_from_address: the fixed sender of FromAddress mode, and
-	// the fallback of FromDomain mode.
+	// Address is smtp_from_address: the fixed sender of FromAddress mode.
 	Address string
 	// OnlyUnauthorized is smtp_from_only_unauthorized: keep a From whose domain
 	// the app has verified instead of rewriting it.
@@ -148,31 +147,96 @@ func DecideFrom(s *Scanned, mailFrom string, p Policy, verified func(domain stri
 	return d, nil
 }
 
-// generateAddress builds the domain-mode sender local@T from S, or falls back
-// to the configured address. It fails with ErrFromNotPermitted when neither
-// works and ErrMisconfigured when T or the fallback is not a valid generated
-// address.
+// maxLocal is the longest local part generated, per RFC 5321.
+const maxLocal = 64
+
+// hashLen is the number of lowercase hex digits of the stable hash suffix.
+const hashLen = 8
+
+// generateAddress builds the domain-mode sender from the source mailbox S. It
+// fails with ErrFromNotPermitted when there is no usable S and ErrMisconfigured
+// when T is not a valid domain.
 func generateAddress(src *mail.Address, p Policy) (string, error) {
 	target := p.Domain
 	if !validLDH(target) {
 		return "", ErrMisconfigured
 	}
-	if src != nil {
-		local := src.Address[:strings.LastIndexByte(src.Address, '@')]
-		origin := domainOf(src.Address)
-		if isDotAtom(local) && len(local) <= 64 {
-			if p.KeepOrigin && origin != target && validLDH(origin) {
-				if kept := local + "+" + origin; len(kept) <= 64 && isDotAtom(kept) {
-					local = kept
-				}
-			}
-			return local + "@" + target, nil
-		}
-	}
-	if p.Address == "" {
+	if src == nil {
 		return "", ErrFromNotPermitted
 	}
-	return configuredAddress(p.Address)
+	addr := encodeFrom(src.Address, target) + "@" + target
+	if len(addr) > 254 {
+		return "", ErrMisconfigured
+	}
+	return addr, nil
+}
+
+// encodeFrom encodes the original addr-spec into the local part of a sender at
+// target: "<local>=<origdomain>", or "<local>" when the original domain is the
+// target.
+//
+// The original local part keeps ASCII letters, digits, '.', '_' and '-'; every
+// other character, including '=' (the separator) and '+', becomes '-'. Dot runs
+// collapse to one dot and leading/trailing dots are dropped, so the result is a
+// dot-atom. The origin domain is lowercase, with anything outside letters,
+// digits, '.' and '-' mapped the same way. When anything was altered, or the
+// result exceeds 64 octets, the prefix is truncated to make room for "-" and
+// the first 8 hex digits of SHA-256(local + "@" + lowercase domain) and that
+// suffix is appended. The result is deterministic and at most 64 octets.
+func encodeFrom(original, target string) string {
+	at := strings.LastIndexByte(original, '@')
+	local, domain := original[:at], strings.ToLower(original[at+1:])
+	prefix, changed := sanitizeAtom(local, false)
+	if domain != target {
+		d, dc := sanitizeAtom(domain, true)
+		prefix += "=" + d
+		changed = changed || dc
+	}
+	if !changed && len(prefix) <= maxLocal {
+		return prefix
+	}
+	sum := sha256.Sum256([]byte(local + "@" + domain))
+	suffix := hex.EncodeToString(sum[:])[:hashLen]
+	if len(prefix) > maxLocal-hashLen-1 {
+		prefix = prefix[:maxLocal-hashLen-1]
+	}
+	prefix = strings.TrimRight(prefix, ".-")
+	if prefix == "" {
+		return suffix
+	}
+	return prefix + "-" + suffix
+}
+
+// sanitizeAtom maps bytes outside the safe set to '-' and tidies dots. It
+// reports whether the result differs from s.
+func sanitizeAtom(s string, domain bool) (string, bool) {
+	var b strings.Builder
+	prevDot := true // drops leading dots
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '.':
+			if !prevDot {
+				b.WriteByte('.')
+			}
+			prevDot = true
+			continue
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-':
+		case c >= 'A' && c <= 'Z', c == '_':
+			if domain {
+				c = '-'
+			}
+		default:
+			c = '-'
+		}
+		b.WriteByte(c)
+		prevDot = false
+	}
+	out := strings.TrimRight(b.String(), ".")
+	if out == "" {
+		out = "-"
+	}
+	return out, out != s
 }
 
 // configuredAddress validates a configured sender: an ASCII dot-atom local part

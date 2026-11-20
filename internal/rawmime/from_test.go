@@ -1,6 +1,8 @@
 package rawmime
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/mail"
 	"strings"
@@ -45,20 +47,18 @@ func TestDecideFromMatrix(t *testing.T) {
 
 		{name: "only_unauthorized keeps authorized", from: "al@example.com", policy: domainT, addr: "al@example.com"},
 		{name: "only_unauthorized preserved quoted local", from: `"team ops"@example.com`, policy: domainT, addr: "team ops@example.com"},
-		{name: "domain rewrites unauthorized", from: "Al <al@example.org>", policy: domainT, addr: "al@example.net", rewrite: true, original: "al@example.org", strip: true},
-		{name: "domain all (only_unauthorized off)", from: "al@example.com", policy: Policy{Mode: FromDomain, Domain: "example.net"}, addr: "al@example.net", rewrite: true, original: "al@example.com", strip: true},
-		{name: "domain keep origin", from: "al@example.org", policy: Policy{Mode: FromDomain, Domain: "example.net", KeepOrigin: true, OnlyUnauthorized: true}, addr: "al+example.org@example.net", rewrite: true, original: "al@example.org", strip: true},
-		{name: "domain keep origin same domain not added", from: "al@example.com", policy: Policy{Mode: FromDomain, Domain: "example.com", KeepOrigin: true}, addr: "al@example.com", rewrite: true, original: "al@example.com", strip: true},
-		{name: "domain keep origin too long drops origin", from: strings.Repeat("a", 55) + "@example.org", policy: Policy{Mode: FromDomain, Domain: "example.net", KeepOrigin: true, OnlyUnauthorized: true}, addr: strings.Repeat("a", 55) + "@example.net", rewrite: true, original: strings.Repeat("a", 55) + "@example.org", strip: true},
-		{name: "domain local over 64 falls back", from: strings.Repeat("a", 65) + "@example.org", policy: Policy{Mode: FromDomain, Domain: "example.net", Address: "noreply@example.net", OnlyUnauthorized: true}, addr: "noreply@example.net", rewrite: true, original: strings.Repeat("a", 65) + "@example.org", strip: true},
-		{name: "domain quoted local falls back", from: `"team ops"@example.org`, policy: Policy{Mode: FromDomain, Domain: "example.net", Address: "noreply@example.net", OnlyUnauthorized: true}, addr: "noreply@example.net", rewrite: true, original: "team ops@example.org", strip: true},
-		{name: "domain quoted local no fallback", from: `"team ops"@example.org`, policy: domainT, wantErr: ErrFromNotPermitted},
-		{name: "domain invalid from falls back", from: "a@example.org, b@example.org", policy: Policy{Mode: FromDomain, Domain: "example.net", Address: "noreply@example.net", OnlyUnauthorized: true}, addr: "noreply@example.net", rewrite: true, strip: true},
-		{name: "domain invalid from no fallback", from: "a@example.org, b@example.org", policy: domainT, wantErr: ErrFromNotPermitted},
+		{name: "domain rewrites unauthorized", from: "Al <al@example.org>", policy: domainT, addr: "al=example.org@example.net", rewrite: true, original: "al@example.org", strip: true},
+		{name: "domain all (only_unauthorized off)", from: "al@example.com", policy: Policy{Mode: FromDomain, Domain: "example.net"}, addr: "al=example.com@example.net", rewrite: true, original: "al@example.com", strip: true},
+		{name: "domain same domain has no suffix", from: "al@example.com", policy: Policy{Mode: FromDomain, Domain: "example.com"}, addr: "al@example.com", rewrite: true, original: "al@example.com", strip: true},
+		{name: "domain quoted local is encoded", from: `"team ops"@example.org`, policy: domainT, addr: "team-ops=example.org-" + encHash("team ops@example.org") + "@example.net", rewrite: true, original: "team ops@example.org", strip: true},
+		{name: "domain over 64 is shortened", from: strings.Repeat("a", 65) + "@example.org", policy: domainT, addr: strings.Repeat("a", 55) + "-" + encHash(strings.Repeat("a", 65)+"@example.org") + "@example.net", rewrite: true, original: strings.Repeat("a", 65) + "@example.org", strip: true},
+		{name: "domain invalid from not permitted", from: "a@example.org, b@example.org", policy: domainT, wantErr: ErrFromNotPermitted},
+		{name: "domain missing from uses mail from", mailFrom: "scan@Office.Example.org", policy: domainT, addr: "scan=office.example.org@example.net", rewrite: true, original: "scan@Office.Example.org", strip: true},
+		{name: "domain missing from and mail from", mailFrom: "<>", policy: domainT, wantErr: ErrFromNotPermitted},
+		{name: "domain invalid from is not permitted", from: "a@example.org, b@example.org", policy: domainT, wantErr: ErrFromNotPermitted},
 		{name: "domain unverified target", from: "al@example.org", policy: Policy{Mode: FromDomain, Domain: "example.org"}, wantErr: ErrMisconfigured},
 		{name: "domain target not LDH", from: "al@example.org", policy: Policy{Mode: FromDomain, Domain: "Example.Net"}, wantErr: ErrMisconfigured},
-		{name: "domain unverified fallback", from: `"x y"@example.org`, policy: Policy{Mode: FromDomain, Domain: "example.net", Address: "noreply@example.org"}, wantErr: ErrMisconfigured},
-		{name: "domain keeps display name", from: "Al Smith <al@example.org>", policy: domainT, addr: "al@example.net", rewrite: true, original: "al@example.org", strip: true},
+		{name: "domain keeps display name", from: "Al Smith <al@example.org>", policy: domainT, addr: "al=example.org@example.net", rewrite: true, original: "al@example.org", strip: true},
 
 		{name: "address mode", from: "al@example.org", policy: Policy{Mode: FromAddress, Address: "noreply@example.net"}, addr: "noreply@example.net", rewrite: true, original: "al@example.org", strip: true},
 		{name: "address mode many froms", from: "a@example.org\r\nFrom: b@example.org", policy: Policy{Mode: FromAddress, Address: "noreply@example.net"}, addr: "noreply@example.net", rewrite: true, strip: true},
@@ -270,4 +270,120 @@ func TestFoldFieldNeverEmitsBlankLine(t *testing.T) {
 			t.Fatalf("does not unfold: %q", got)
 		}
 	}
+}
+
+func encHash(original string) string {
+	at := strings.LastIndexByte(original, '@')
+	sum := sha256.Sum256([]byte(original[:at] + "@" + strings.ToLower(original[at+1:])))
+	return hex.EncodeToString(sum[:])[:8]
+}
+
+func TestEncodeFromTable(t *testing.T) {
+	long := strings.Repeat("a", 70)
+	cases := []struct{ in, target, want string }{
+		{"scanner@office.example.net", "example.com", "scanner=office.example.net"},
+		{"Scanner@Office.Example.NET", "example.com", "Scanner=office.example.net"},
+		{"a.b_c-d@x.org", "example.com", "a.b_c-d=x.org"},
+		{"al@example.com", "example.com", "al"},
+		{"al@EXAMPLE.com", "example.com", "al"},
+		{"team ops@x.org", "example.com", "team-ops=x.org-" + encHash("team ops@x.org")},
+		{"a=b@x.org", "example.com", "a-b=x.org-" + encHash("a=b@x.org")},
+		{"a+b@x.org", "example.com", "a-b=x.org-" + encHash("a+b@x.org")},
+		{"a+b@example.com", "example.com", "a-b-" + encHash("a+b@example.com")},
+		{`a"b(c)@x.org`, "example.com", "a-b-c-=x.org-" + encHash(`a"b(c)@x.org`)},
+		{"a..b@x.org", "example.com", "a.b=x.org-" + encHash("a..b@x.org")},
+		{".a.@x.org", "example.com", "a=x.org-" + encHash(".a.@x.org")},
+		{"...@x.org", "example.com", "-=x.org-" + encHash("...@x.org")},
+		{"a_b@x_y.org", "example.com", "a_b=x-y.org-" + encHash("a_b@x_y.org")},
+		{"a!#$%&'*/?^`{|}~@x.org", "example.com", "a" + strings.Repeat("-", 15) + "=x.org-" + encHash("a!#$%&'*/?^`{|}~@x.org")},
+		{long + "@x.org", "example.com", long[:55] + "-" + encHash(long+"@x.org")},
+	}
+	for _, c := range cases {
+		if got := encodeFrom(c.in, c.target); got != c.want {
+			t.Errorf("%q: got %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestEncodeFromLimits(t *testing.T) {
+	// A long origin domain forces truncation inside the domain part; cuts that
+	// land on a dot or hyphen must not leave one before the hash.
+	for n := 1; n <= 80; n++ {
+		for _, local := range []string{"a", strings.Repeat("a.", 10) + "b", strings.Repeat("a-", 20) + "b"} {
+			dom := strings.Repeat("a", n) + "." + strings.Repeat("b-", 30) + "c.example.org"
+			got := encodeFrom(local+"@"+dom, "example.com")
+			checkEncoded(t, local+"@"+dom, got)
+			if got != encodeFrom(local+"@"+dom, "example.com") {
+				t.Fatal("not deterministic")
+			}
+		}
+	}
+	// 64 octets exactly stays unhashed; 65 is hashed and cut to 64.
+	l := strings.Repeat("a", 64)
+	if got := encodeFrom(l+"@example.com", "example.com"); got != l {
+		t.Fatalf("%q", got)
+	}
+	if got := encodeFrom(strings.Repeat("a", 65)+"@example.com", "example.com"); len(got) != 64 || !strings.Contains(got, "-") {
+		t.Fatalf("%q", got)
+	}
+	// Distinct originals that sanitize alike stay distinct.
+	if encodeFrom("a b@x.org", "example.com") == encodeFrom("a+b@x.org", "example.com") {
+		t.Fatal("collision")
+	}
+}
+
+func checkEncoded(t *testing.T, original, got string) {
+	t.Helper()
+	if len(got) == 0 || len(got) > 64 {
+		t.Fatalf("%q -> %q: length %d", original, got, len(got))
+	}
+	if !isDotAtom(got) {
+		t.Fatalf("%q -> %q: not a dot-atom", original, got)
+	}
+	if strings.Contains(got, "..") || strings.HasSuffix(got, ".") {
+		t.Fatalf("%q -> %q", original, got)
+	}
+	if strings.Count(got, "=") > 1 || strings.Contains(got, "+") {
+		t.Fatalf("%q -> %q", original, got)
+	}
+}
+
+func TestDecideFromDomainValueRoundTrips(t *testing.T) {
+	ver := verifiedSet("example.net")
+	for _, from := range []string{
+		"al@example.org", `"team ops"@example.org`, `"a=b+c"@example.org`, `"a\"b"@Example.ORG`,
+		strings.Repeat("x", 80) + "@" + strings.Repeat("y", 50) + "." + strings.Repeat("z", 50) + ".example.org",
+	} {
+		s := scanFrom(t, "Al Smith <"+from+">", "")
+		d, err := DecideFrom(s, "", Policy{Mode: FromDomain, Domain: "example.net"}, ver)
+		if err != nil {
+			t.Fatalf("%q: %v", from, err)
+		}
+		local := d.Address[:strings.LastIndexByte(d.Address, '@')]
+		checkEncoded(t, from, local)
+		back, err := mail.ParseAddress(d.Value)
+		if err != nil || back.Address != d.Address || back.Name != "Al Smith" {
+			t.Fatalf("%q: %q %v", from, d.Value, err)
+		}
+		again, _ := DecideFrom(s, "", Policy{Mode: FromDomain, Domain: "example.net"}, ver)
+		if again.Address != d.Address {
+			t.Fatal("not deterministic")
+		}
+	}
+}
+
+func FuzzEncodeFrom(f *testing.F) {
+	for _, s := range []string{"a@b.c", "team ops@office.example.net", "a=b+c@x", strings.Repeat("a", 70) + "@" + strings.Repeat("b", 60) + ".org", "..@.", "@"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, original string) {
+		if !strings.Contains(original, "@") || !isASCII(original) {
+			t.Skip()
+		}
+		got := encodeFrom(original, "example.com")
+		checkEncoded(t, original, got)
+		if got != encodeFrom(original, "example.com") {
+			t.Fatal("not deterministic")
+		}
+	})
 }

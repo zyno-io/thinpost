@@ -534,7 +534,7 @@ func FuzzScanPrepare(f *testing.F) {
 	verified := verifiedSet("example.com", "example.net")
 	policies := []Policy{
 		{Mode: FromOff},
-		{Mode: FromDomain, Domain: "example.net", KeepOrigin: true, Address: "noreply@example.net", OnlyUnauthorized: true},
+		{Mode: FromDomain, Domain: "example.net", OnlyUnauthorized: true},
 		{Mode: FromAddress, Address: "noreply@example.net"},
 	}
 	known := []error{ErrInvalid, ErrContentNotSupported, ErrTooLarge, ErrFromNotPermitted, ErrMisconfigured, ErrSigning}
