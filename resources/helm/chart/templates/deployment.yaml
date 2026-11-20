@@ -57,6 +57,19 @@ spec:
             - name: smtp
               containerPort: 25
               protocol: TCP
+{{- if .Values.smtpSubmission.enabled }}
+            - name: submission
+              containerPort: 587
+              protocol: TCP
+            - name: submissions
+              containerPort: 465
+              protocol: TCP
+{{- end }}
+{{- if .Values.smtpSubmission.internal.enabled }}
+            - name: submission-int
+              containerPort: {{ int .Values.smtpSubmission.internal.port }}
+              protocol: TCP
+{{- end }}
           env:
             - name: POD_IP
               valueFrom:
@@ -86,6 +99,22 @@ spec:
 {{- if .Values.additionalBounceDomains }}
             - name: THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS
               value: {{ join "," .Values.additionalBounceDomains | quote }}
+{{- end }}
+{{- if .Values.smtpSubmission.enabled }}
+            - name: THINPOST_EDGE_SUBMISSION
+              value: "true"
+{{- end }}
+{{- if .Values.smtpSubmission.internal.enabled }}
+            - name: THINPOST_EDGE_SUBMISSION_INTERNAL_LISTEN
+              value: {{ printf "$(POD_IP):%d" (int .Values.smtpSubmission.internal.port) | quote }}
+            - name: THINPOST_EDGE_SUBMISSION_INTERNAL_HOSTNAME
+              value: {{ .Values.smtpSubmission.internal.hostname | quote }}
+            - name: THINPOST_EDGE_SUBMISSION_INTERNAL_CERT
+              value: /run/thinpost/submission-internal/tls.crt
+            - name: THINPOST_EDGE_SUBMISSION_INTERNAL_KEY
+              value: /run/thinpost/submission-internal/tls.key
+            - name: THINPOST_EDGE_SUBMISSION_INTERNAL_CA
+              value: /run/thinpost/submission-internal/ca.crt
 {{- end }}
             - name: THINPOST_EDGE_CONTROLLER_IDENTITIES
               value: {{ .Values.controllerIdentity | quote }}
@@ -126,6 +155,12 @@ spec:
             # A whole-directory mount, so a renewed certificate reaches the Edge.
             - name: {{ printf "smtp-source-%d" $i }}
               mountPath: {{ printf "/run/thinpost/smtp-sources/%d" $i }}
+              readOnly: true
+{{- end }}
+{{- if .Values.smtpSubmission.internal.enabled }}
+            # A whole-directory mount, so a renewed certificate reaches the Edge.
+            - name: submission-internal-tls
+              mountPath: /run/thinpost/submission-internal
               readOnly: true
 {{- end }}
             - name: journal
@@ -177,6 +212,12 @@ spec:
         - name: {{ printf "smtp-source-%d" $i }}
           secret:
             secretName: {{ default "thinpost-smtp-public" $extra.certificateSecret | quote }}
+            defaultMode: 0440
+{{- end }}
+{{- if .Values.smtpSubmission.internal.enabled }}
+        - name: submission-internal-tls
+          secret:
+            secretName: {{ .Values.smtpSubmission.internal.certificateSecret | quote }}
             defaultMode: 0440
 {{- end }}
         - name: journal

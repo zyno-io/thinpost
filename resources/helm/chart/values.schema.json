@@ -379,6 +379,58 @@
           }
         }
       }
+    },
+    "smtpSubmission": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Open 587 (STARTTLS) and 465 (implicit TLS) on every sending IP, with each IP's own certificate."
+        },
+        "internal": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Open the in-cluster submission listener and its ClusterIP Service."
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "Listener port on the pod address (also the Service target)."
+            },
+            "hostname": {
+              "type": "string",
+              "maxLength": 219,
+              "description": "DNS name of the listener certificate."
+            },
+            "certificateSecret": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "description": "Secret with tls.crt, tls.key and ca.crt from the cluster-local CA."
+            },
+            "clientCidrs": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Source CIDRs allowed to connect."
+            },
+            "clientNamespaceSelector": {
+              "type": "object",
+              "description": "Namespace selector for allowed client namespaces."
+            }
+          },
+          "description": "Optional in-cluster submission listener."
+        }
+      },
+      "description": "Authenticated SMTP submission settings for the Edge workload."
     }
   }
 }

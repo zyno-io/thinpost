@@ -35,6 +35,28 @@ additionalSources: []
 # still receiving bounces. The bounce listener already accepts bounceDomain and
 # every additionalSources hostname, so those need no entry here.
 additionalBounceDomains: []
+# Authenticated SMTP submission for apps that send raw mail (Edge workload).
+smtpSubmission:
+  # true: opens 587 (STARTTLS) and 465 (implicit TLS) on every sending IP, each
+  # presenting that IP's own certificate (the primary's or the additionalSources
+  # entry's). Port 25 is unchanged: no AUTH there. Router and firewall rules must
+  # allow inbound TCP 465 and 587 to every sending address.
+  enabled: false
+  # Optional in-cluster listener (STARTTLS), reachable through the ClusterIP
+  # Service thinpost-edge-submission:587 (thinpost-edge-submission.<namespace>.svc).
+  # Prefer it over the public IPs for in-cluster senders: those arrive through
+  # SNAT and share one source address. It is not shown in the console.
+  internal:
+    enabled: false
+    port: 587
+    # DNS name of the certificate, for example thinpost-edge-submission.<namespace>.svc
+    hostname: ''
+    # Secret with tls.crt, tls.key and ca.crt, issued by the cluster-local CA
+    # (for example cert-manager); mounted as a directory so renewals propagate.
+    certificateSecret: thinpost-edge-submission-internal
+    # Who may connect: source CIDRs and/or a namespace selector (one is required).
+    clientCidrs: []
+    clientNamespaceSelector: {}
 journalCapacity: 1000
 journalReserveBytes: 67108864
 clockMargin: 5s
