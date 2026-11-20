@@ -34,7 +34,7 @@ async function mountAt(path: string) {
         history: createMemoryHistory(),
         routes: [
             { path: '/apps', name: 'apps', component: stub, meta: { nav: 'apps' } },
-            appRoute({ 'app-keys': stub, 'app-domains': stub, 'app-messages': stub, 'app-message': stub, 'app-webhooks': stub, 'app-tracking': stub, 'app-suppressions': stub, 'app-inbound': stub, 'app-inbound-message': stub }),
+            appRoute({ 'app-keys': stub, 'app-domains': stub, 'app-messages': stub, 'app-message': stub, 'app-webhooks': stub, 'app-tracking': stub, 'app-suppressions': stub, 'app-inbound': stub, 'app-inbound-message': stub, 'app-smtp': stub }),
             { path: '/domains', name: 'domains', component: stub, meta: { nav: 'domains' } },
             { path: '/messages', name: 'messages', component: stub, meta: { nav: 'messages' } },
             { path: '/webhooks', name: 'webhooks', component: stub, meta: { nav: 'webhooks' } },
