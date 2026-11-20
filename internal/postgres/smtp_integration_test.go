@@ -436,3 +436,37 @@ func TestSMTPMessageSummaryPostgres(t *testing.T) {
 		t.Fatal("search", found, err)
 	}
 }
+
+// A submission locks the app and then shares the credential. Revocation must
+// take the same order, or it deadlocks against a submission in flight and the
+// credential stays live.
+func TestSMTPRevocationDoesNotDeadlockWithASubmission(t *testing.T) {
+	ctx, repo, exec, _ := smtpOwnerFixture(t)
+	app := strings.Repeat("a", 32)
+	exec(`INSERT INTO apps(id,name) VALUES ($1,'A')`, app)
+	issued, err := repo.IssueSMTPCredential(ctx, "operator", app, "printer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stand-in for a submission: app FOR UPDATE now, credential FOR SHARE later.
+	sub, err := repo.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Rollback()
+	if _, err = sub.ExecContext(ctx, `SELECT 1 FROM apps WHERE id=$1 FOR UPDATE`, app); err != nil {
+		t.Fatal(err)
+	}
+	revoked := make(chan error, 1)
+	go func() { revoked <- repo.RevokeSMTPCredential(ctx, "operator", app, issued.Username) }()
+	time.Sleep(300 * time.Millisecond) // let the revocation start waiting
+	if _, err = sub.ExecContext(ctx, `SELECT 1 FROM smtp_credentials WHERE id=$1 FOR SHARE`, issued.Username); err != nil {
+		t.Fatal("submission side:", err)
+	}
+	if err = sub.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-revoked; err != nil {
+		t.Fatal("revocation:", err)
+	}
+}
