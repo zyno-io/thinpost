@@ -85,6 +85,18 @@ type MessageSummary struct {
 	// message through the console test send, and records which operator-only
 	// options that send used.
 	OperatorTest *OperatorTest `json:"operator_test,omitempty"`
+	// SMTP is present exactly when the message was submitted over SMTP with
+	// an app credential.
+	SMTP *MessageSMTP `json:"smtp,omitempty"`
+}
+
+// MessageSMTP names the credential that submitted a message over SMTP and,
+// when the app's From policy replaced the sender's From address, the address
+// the client originally sent.
+type MessageSMTP struct {
+	CredentialID   string  `json:"credential_id"`
+	CredentialName string  `json:"credential_name"`
+	OriginalFrom   *string `json:"original_from,omitempty"`
 }
 
 // OperatorTest tags a console test message with the options it was sent with.
