@@ -2391,9 +2391,9 @@ components:
         mode:
           type: string
           enum: [off, domain, address]
-          description: off leaves From as sent, domain rewrites it onto a verified sender domain, address replaces it with one fixed address.
+          description: off accepts only a From on one of the app's verified sender domains and refuses anything else; domain rewrites the From onto a verified sender domain; address replaces it with one fixed address.
         domain: { type: string, maxLength: 253, description: A verified sender domain of the app (mode domain). }
-        keep_origin: { type: boolean, description: Mode domain only. Keep the original local part on the domain. }
+        keep_origin: { type: boolean, description: "Mode domain only. Add the original domain as a +tag: local+origdomain@domain." }
         address:
           type: string
           maxLength: 254

@@ -39,8 +39,16 @@ func (r *Repository) RecordEdgeSources(ctx context.Context, lease ControllerLeas
 	}
 	var ports any
 	if caps.SubmissionPorts != nil {
+		// The ports come from the edge's report, which is not trusted. Keep only
+		// valid, distinct ports and at most the schema's 8, so a bad report can
+		// never fail the upsert and drop the rest of the source report.
 		list := make([]string, 0, len(caps.SubmissionPorts))
+		seen := make(map[int]bool, len(caps.SubmissionPorts))
 		for _, port := range caps.SubmissionPorts {
+			if port < 1 || port > 65535 || seen[port] || len(list) == 8 {
+				continue
+			}
+			seen[port] = true
 			list = append(list, strconv.Itoa(port))
 		}
 		ports = list

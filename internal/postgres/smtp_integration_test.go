@@ -320,6 +320,15 @@ func TestRecordEdgeSourcesWritesSubmissionPorts(t *testing.T) {
 	if err := repo.DB.QueryRowContext(ctx, `SELECT submission_ports::text FROM edge_source_reports WHERE worker_id=$1`, worker).Scan(&ports); err != nil || ports != "{465,587}" {
 		t.Fatal(ports, err)
 	}
+	// An untrusted report with invalid, duplicate and too many ports is cleaned,
+	// never refused, so the rest of the source report still lands.
+	caps.SubmissionPorts = []int{0, -1, 70000, 587, 587, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+	if err := repo.RecordEdgeSources(ctx, lease, caps); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DB.QueryRowContext(ctx, `SELECT submission_ports::text FROM edge_source_reports WHERE worker_id=$1`, worker).Scan(&ports); err != nil || ports != "{587,1,2,3,4,5,6,7}" {
+		t.Fatal(ports, err)
+	}
 	caps.SubmissionPorts = nil
 	if err := repo.RecordEdgeSources(ctx, lease, caps); err != nil {
 		t.Fatal(err)
