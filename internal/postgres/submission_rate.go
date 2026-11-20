@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/hmac"
 	"database/sql"
 	"errors"
 	"time"
@@ -25,7 +26,7 @@ func (r *Repository) ReserveSubmission(ctx context.Context, appID, keyID string,
 	if keyID == "" || len(keyID) > 256 {
 		return submission.ErrInvalidMessage
 	}
-	return r.reserveSubmission(ctx, appID, keyID, false, true, messages)
+	return r.reserveSubmission(ctx, appID, submissionPrincipal{keyID: keyID}, true, messages)
 }
 
 // ReserveOperatorSubmission is ReserveSubmission for an operator submission:
@@ -34,10 +35,30 @@ func (r *Repository) ReserveSubmission(ctx context.Context, appID, keyID string,
 // active state are still checked, but the bucket is neither checked nor
 // consumed, so a bypassed send leaves submission_tokens exactly as it was.
 func (r *Repository) ReserveOperatorSubmission(ctx context.Context, appID string, messages int, charge bool) error {
-	return r.reserveSubmission(ctx, appID, "", true, charge, messages)
+	return r.reserveSubmission(ctx, appID, submissionPrincipal{operator: true}, charge, messages)
 }
 
-func (r *Repository) reserveSubmission(ctx context.Context, appID, keyID string, operator, charge bool, messages int) error {
+// ReserveSMTPSubmission is ReserveSubmission for an SMTP submission: the same
+// bucket and rate checks, with the credential's digest rechecked under a share
+// lock instead of an API key. An inactive app is paused; a revoked credential
+// or a digest that no longer matches is ErrInvalidKey. It always charges.
+func (r *Repository) ReserveSMTPSubmission(ctx context.Context, appID, credentialID string, digest [32]byte) error {
+	if credentialID == "" || len(credentialID) > 256 {
+		return submission.ErrInvalidMessage
+	}
+	return r.reserveSubmission(ctx, appID, submissionPrincipal{smtpCredential: credentialID, smtpDigest: digest}, true, 1)
+}
+
+// submissionPrincipal is who a reservation is for: an API key, an operator, or
+// an SMTP credential with its digest. Exactly one is set.
+type submissionPrincipal struct {
+	keyID          string
+	operator       bool
+	smtpCredential string
+	smtpDigest     [32]byte
+}
+
+func (r *Repository) reserveSubmission(ctx context.Context, appID string, principal submissionPrincipal, charge bool, messages int) error {
 	if appID == "" || len(appID) > 256 || messages < 1 || messages > 100 {
 		return submission.ErrInvalidMessage
 	}
@@ -59,14 +80,29 @@ func (r *Repository) reserveSubmission(ctx context.Context, appID, keyID string,
 		return err
 	}
 	if !active {
-		if operator {
+		// An operator and an SMTP credential are not invalidated by pausing the
+		// app, so they are told it is paused; an API key reads as invalid.
+		if principal.operator || principal.smtpCredential != "" {
 			return submission.ErrAppPaused
 		}
 		return submission.ErrInvalidMessage
 	}
-	if !operator {
+	switch {
+	case principal.smtpCredential != "":
+		var stored []byte
+		err = tx.QueryRowContext(ctx, `SELECT digest FROM smtp_credentials WHERE id=$1 AND app_id=$2 AND revoked_at IS NULL FOR SHARE`, principal.smtpCredential, appID).Scan(&stored)
+		if errors.Is(err, sql.ErrNoRows) {
+			return submission.ErrInvalidKey
+		}
+		if err != nil {
+			return err
+		}
+		if !hmac.Equal(stored, principal.smtpDigest[:]) {
+			return submission.ErrInvalidKey
+		}
+	case !principal.operator:
 		var exists bool
-		err = tx.QueryRowContext(ctx, `SELECT true FROM api_keys WHERE id=$1 AND app_id=$2 AND active FOR SHARE`, keyID, appID).Scan(&exists)
+		err = tx.QueryRowContext(ctx, `SELECT true FROM api_keys WHERE id=$1 AND app_id=$2 AND active FOR SHARE`, principal.keyID, appID).Scan(&exists)
 		if errors.Is(err, sql.ErrNoRows) {
 			return submission.ErrInvalidKey
 		}

@@ -198,3 +198,22 @@ func Inbound(result, appID, inboundID string) {
 	}
 	emit("inbound result=%s app=%s inbound=%s", result, ID(appID), ID(inboundID))
 }
+
+// submissionResults are the outcomes of one SMTP submission, mirroring
+// smtpintake.Outcome. Anything else is logged as "other".
+var submissionResults = map[string]bool{
+	"accepted": true, "tempfail": true, "rate_limited": true, "quota_exceeded": true, "backlog": true,
+	"unavailable": true, "credential_invalid": true, "app_paused": true, "from_not_permitted": true,
+	"message_invalid": true, "too_large": true, "recipient_not_permitted": true, "encryption_required": true,
+	"misconfigured": true, "content_not_supported": true,
+}
+
+// Submission logs `submission result=<enum> app=<id> transfer=<id>`. Addresses,
+// headers, credentials and content never reach the log; an app unknown at the
+// point of refusal and any malformed ID are logged as "invalid".
+func Submission(result, appID, transferID string) {
+	if !submissionResults[result] {
+		result = string(StatusOther)
+	}
+	emit("submission result=%s app=%s transfer=%s", result, ID(appID), ID(transferID))
+}

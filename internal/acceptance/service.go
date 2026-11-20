@@ -29,10 +29,28 @@ type Objects interface {
 
 type Record struct {
 	AppID string
-	// KeyID or Operator identifies the principal; exactly one is set. Operator
-	// is the administrator subject of a console submission.
-	KeyID    string
-	Operator string
+	// KeyID, Operator or SMTPCredentialID identifies the principal; exactly
+	// one is set. Operator is the administrator subject of a console submission.
+	// SMTPCredentialID is the SMTP credential of a raw submission, and
+	// SMTPCredentialDigest the SHA-256 of its secret, which Commit rechecks
+	// under a lock.
+	KeyID                string
+	Operator             string
+	SMTPCredentialID     string
+	SMTPCredentialDigest [32]byte
+	// Raw marks a raw MIME (source v3) submission. It is set exactly for the
+	// SMTP principal, which Commit enforces. Raw records may have an empty
+	// subject and may start with a Cc or Bcc recipient (all-Bcc mail).
+	Raw bool
+	// Fence is the control session lease an SMTP submission commits under;
+	// Commit locks it last and rechecks it before COMMIT. Only for SMTP.
+	Fence submission.Fence
+	// IdempotencyTTL is how long an SMTP idempotency row lives, measured from
+	// acceptance. Only for SMTP; the HTTP window is a fixed 24 hours.
+	IdempotencyTTL time.Duration
+	// OriginalFromAddress is the From address the client sent when the
+	// app's From policy replaced it (SMTP only).
+	OriginalFromAddress string
 	// LimitsOverride and RecipientPolicyOverride record the operator test-send
 	// overrides; valid only with Operator set.
 	LimitsOverride          bool
@@ -225,6 +243,11 @@ func (s *Service) Accept(ctx context.Context, app submission.App, req submission
 	// an operator never carries a key or an idempotency key, and no key
 	// submission may claim the console adapter.
 	operator := app.Operator != ""
+	// An SMTP principal has its own entry point, AcceptRaw, and a provider
+	// adapter cannot claim the SMTP adapter.
+	if app.SMTPCredentialID != "" || req.Adapter == submission.AdapterSMTP {
+		return submission.Receipt{}, submission.ErrInvalidMessage
+	}
 	if operator && (app.KeyID != "" || !validOperator(app.Operator) || req.Adapter != submission.AdapterConsole || req.IdempotencyKey != "") || !operator && req.Adapter == submission.AdapterConsole {
 		return submission.Receipt{}, submission.ErrInvalidMessage
 	}

@@ -24,6 +24,13 @@ func validRecordedSubject(subject string) bool {
 	return len(subject) >= 1 && len(subject) <= maxRecordedSubjectBytes && utf8.ValidString(subject) && !strings.ContainsAny(subject, "\x00\r\n")
 }
 
+// validRecordedSMTPSubject is validRecordedSubject for a raw SMTP message, which
+// may have no Subject: the empty subject is allowed (the schema allows it only
+// together with a credential).
+func validRecordedSMTPSubject(subject string) bool {
+	return subject == "" || validRecordedSubject(subject)
+}
+
 // validRecordedSender reports whether the From address and display name satisfy
 // the schema 31 bounds and agree with the recorded domain.
 func validRecordedSender(address, name, domain string) bool {
@@ -85,7 +92,9 @@ type recipientRows struct {
 
 // add validates recipients for one message and appends them. kinds is parallel
 // to recipients: "to" first, then "cc", then "bcc" (never out of that order).
-func (rows *recipientRows) add(messageID string, recipients, kinds []string, count int) bool {
+// Only raw SMTP mail may start with a cc or bcc (allowLeadingNonTo): a message
+// whose envelope recipients are all blind-copied has no To recipient.
+func (rows *recipientRows) add(messageID string, recipients, kinds []string, count int, allowLeadingNonTo bool) bool {
 	if len(recipients) != count || len(kinds) != count || count < 1 || count > maxRecordedRecipients {
 		return false
 	}
@@ -102,7 +111,7 @@ func (rows *recipientRows) add(messageID string, recipients, kinds []string, cou
 		default:
 			return false
 		}
-		if i == 0 && kindRank != 0 || kindRank < rank {
+		if i == 0 && kindRank != 0 && !allowLeadingNonTo || kindRank < rank {
 			return false
 		}
 		rank = kindRank

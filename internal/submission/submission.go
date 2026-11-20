@@ -22,9 +22,23 @@ var (
 	ErrRateLimited         = errors.New("application submission rate exceeded")
 	ErrBacklogExceeded     = errors.New("application pending message limit exceeded")
 	// ErrAppPaused reports that the application is inactive. It is returned
-	// only for operator submissions, whose principal is not a credential that
-	// an inactive application would already have invalidated.
+	// for operator and SMTP submissions, whose principals are not credentials
+	// that an inactive application would already have invalidated (an API key
+	// is, so a paused app reads as an invalid key to a key principal). The batch
+	// adapters never see it.
 	ErrAppPaused = errors.New("application is paused")
+	// ErrSenderDomainInactive reports that the sender domain stopped being an
+	// active domain of the app between the policy decision and the commit. It
+	// is returned on the raw (SMTP) path only; HTTP reports ErrInvalidMessage.
+	ErrSenderDomainInactive = errors.New("sender domain is not active")
+	// ErrMessageTooLarge reports a raw message whose prepared form would not
+	// fit the delivery limits. It is returned on the raw (SMTP) path only.
+	ErrMessageTooLarge = errors.New("message too large")
+	// ErrRecipientNotPermitted reports a raw message with a recipient outside
+	// the operator's allowlist; the whole message is refused. It is returned on
+	// the raw (SMTP) path only: HTTP reports the same condition as
+	// ErrInvalidMessage.
+	ErrRecipientNotPermitted = errors.New("recipient not permitted")
 	// ErrInvalidRequest reports a request that could not be decoded, or that
 	// is outside the profile of its route. It is never a policy refusal: the
 	// message was not submitted to acceptance.
@@ -33,11 +47,22 @@ var (
 
 // Adapter names recorded with a submission. AdapterNative is Thinpost's own
 // JSON API. AdapterConsole is reserved for operator submissions and is the
-// only adapter an operator principal may use.
+// only adapter an operator principal may use. AdapterSMTP is reserved for SMTP
+// submission and is the only adapter an SMTP principal may use.
 const (
 	AdapterNative  = "thinpost"
 	AdapterConsole = "console"
+	AdapterSMTP    = "smtp"
 )
+
+// Fence identifies the control session lease an SMTP submission was accepted
+// under. The commit of an SMTP message is valid only while that exact lease
+// epoch is live (see postgres.Repository.Commit). It lives here, not in the
+// session package, to keep acceptance free of an import cycle.
+type Fence struct {
+	WorkerID, ControllerID string
+	Epoch                  uint64
+}
 
 // App identifies the authenticated application. It must come from an
 // authoritative credential lookup, never from the message payload.
@@ -45,14 +70,19 @@ const (
 // authentication. DefaultTrackOpens and DefaultTrackClicks are the app's
 // tracking defaults as read at authentication; only acceptance applies them.
 //
-// Exactly one of KeyID and Operator identifies the principal. KeyID is set by
-// authenticating an API key. Operator is the subject of an authenticated
-// administrator and is set only by OperatorService.AuthorizeOperator; it
-// selects the operator submission path (adapter AdapterConsole, no
-// idempotency key). Nothing else may set it.
+// Exactly one of KeyID, Operator and SMTPCredentialID identifies the principal.
+// KeyID is set by authenticating an API key. Operator is the subject of an
+// authenticated administrator and is set only by
+// OperatorService.AuthorizeOperator; it selects the operator submission path
+// (adapter AdapterConsole, no idempotency key). SMTPCredentialID is a verified
+// SMTP submission credential with SMTPCredentialDigest, the SHA-256 of its
+// secret, which the repository rechecks under a lock; it selects the raw path
+// (adapter AdapterSMTP). Nothing else may set Operator or SMTPCredentialID.
 type App struct {
 	ID, KeyID                             string
 	Operator                              string
+	SMTPCredentialID                      string
+	SMTPCredentialDigest                  [32]byte
 	ListUnsubscribe                       bool
 	DefaultTrackOpens, DefaultTrackClicks bool
 }
@@ -575,6 +605,10 @@ type Receipt struct {
 	AcceptedAt time.Time
 	// Replayed is true when an idempotent retry returned an earlier receipt.
 	Replayed bool
+	// Held is set by the raw (SMTP) path when the message was accepted on hold
+	// (the X-Thinpost-Hold header). It is never read from the database: the
+	// replay digests cover the raw bytes, so a replay carries the same choice.
+	Held bool
 }
 
 // BatchRequest represents one atomic provider batch. Resend's retry key

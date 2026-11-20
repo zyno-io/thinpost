@@ -20,7 +20,7 @@ import (
 // single submission. Any failed authorization, quota, or object check rolls
 // back the whole batch. Uploaded but unreferenced objects require collection.
 func (r *Repository) CommitBatch(ctx context.Context, record acceptance.BatchRecord) (submission.BatchReceipt, error) {
-	if (record.Adapter != "resend" && record.Adapter != "sendgrid") || (record.Adapter == "sendgrid" && record.IdempotencyKey != "") || record.AppID == "" || record.KeyID == "" || len(record.Items) == 0 || len(record.Items) > 100 || len(record.PreviousHashes) > 7 || len(record.IdempotencyKey) > 256 || !utf8.ValidString(record.IdempotencyKey) || strings.ContainsRune(record.IdempotencyKey, 0) {
+	if (record.Adapter != "resend" && record.Adapter != "sendgrid") || (record.Adapter == "sendgrid" && record.IdempotencyKey != "") || record.AppID == "" || record.KeyID == "" || record.SMTPCredentialID != "" || len(record.Items) == 0 || len(record.Items) > 100 || len(record.PreviousHashes) > 7 || len(record.IdempotencyKey) > 256 || !utf8.ValidString(record.IdempotencyKey) || strings.ContainsRune(record.IdempotencyKey, 0) {
 		return submission.BatchReceipt{}, submission.ErrInvalidMessage
 	}
 	ids, keys := make([]string, 0, len(record.Items)), make([]string, 0, len(record.Items))
@@ -42,7 +42,7 @@ func (r *Repository) CommitBatch(ctx context.Context, record acceptance.BatchRec
 		}
 		domain := strings.ToLower(address.Address[at+1:])
 		// Validate every recorded value before any INSERT (see Commit).
-		if !validRecordedSubject(item.Subject) || !validRecordedDomain(item.SenderDomain) || item.SenderDomain != domain || !validRecordedSender(item.SenderAddress, item.SenderName, domain) || !recipients.add(parsed.ID, item.Recipients, item.RecipientKinds, item.RecipientCount) {
+		if !validRecordedSubject(item.Subject) || !validRecordedDomain(item.SenderDomain) || item.SenderDomain != domain || !validRecordedSender(item.SenderAddress, item.SenderName, domain) || !recipients.add(parsed.ID, item.Recipients, item.RecipientKinds, item.RecipientCount, false) {
 			return submission.BatchReceipt{}, submission.ErrInvalidMessage
 		}
 		domains[domain] = true

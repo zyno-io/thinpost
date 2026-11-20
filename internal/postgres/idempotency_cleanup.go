@@ -6,7 +6,7 @@ import (
 )
 
 // CleanupExpiredIdempotency removes at most limit expired markers. Competing
-// replicas skip locked rows; an active 24-hour marker is never removed.
+// replicas skip locked rows; an active 24-hour or 10-minute marker is never removed.
 func (r *Repository) CleanupExpiredIdempotency(ctx context.Context, limit int) (int64, error) {
 	if limit <= 0 || limit > 1000 {
 		return 0, errors.New("invalid idempotency cleanup limit")

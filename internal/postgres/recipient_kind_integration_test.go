@@ -36,7 +36,7 @@ func TestRecipientRowsKindOrder(t *testing.T) {
 		"upper case is wrong": {[]string{"to", "to", "TO", "to"}, false},
 	} {
 		var rows recipientRows
-		if got := rows.add("m", addresses, tc.kinds, len(addresses)); got != tc.ok {
+		if got := rows.add("m", addresses, tc.kinds, len(addresses), false); got != tc.ok {
 			t.Errorf("%s: add returned %v", name, got)
 		}
 	}
@@ -146,7 +146,7 @@ func TestRecipientKindsInHistorySearchAndWebhookContext(t *testing.T) {
 	kinds := []string{"to", "to", "cc", "bcc"}
 	f.exec(`INSERT INTO messages(id,app_id,object_key,enhanced_protection,subject,recipient_count,sender_domain,sender_domain_rev,sender_address,sender_name) VALUES ($1,$2,'k'||$1,false,'Kinds',4,'sender.example','example.sender.','s@sender.example','S')`, message, app)
 	var rows recipientRows
-	if !rows.add(message, addresses, kinds, 4) {
+	if !rows.add(message, addresses, kinds, 4, false) {
 		t.Fatal("fixture recipients rejected")
 	}
 	tx, err := f.owner.BeginTx(f.ctx, nil)
