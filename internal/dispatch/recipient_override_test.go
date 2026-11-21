@@ -75,7 +75,7 @@ func overrideProvider(t *testing.T, override bool, destination string) (*dispatc
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &overrideRepo{claim: delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", RecipientPolicyOverride: override}}
+	r := &overrideRepo{claim: delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", BounceDomain: "mx.example", RecipientPolicyOverride: override}}
 	routes := &mailroute.Resolver{DNS: overrideDNS{address: netip.MustParseAddr(destination)}, Filter: policy}
 	return &dispatch.Provider{Repository: r, Objects: overrideObjects{source: source}, Routes: routes, Envelopes: overrideEnvelopes{}, Recipients: denyAll{}}, r
 }
@@ -85,11 +85,11 @@ func overrideProvider(t *testing.T, override bool, destination string) (*dispatc
 func TestClaimOverrideSkipsOnlyTheAllowlist(t *testing.T) {
 	lease := postgres.ControllerLease{WorkerID: "worker", Epoch: 1}
 	p, r := overrideProvider(t, false, "8.8.8.8")
-	if _, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) || len(r.results) != 1 || r.results[0].Outcome != delivery.OutcomeRecipientPolicyDenied {
+	if _, _, err := p.Next(context.Background(), lease, overrideCaps()); !errors.Is(err, delivery.ErrNoWork) || len(r.results) != 1 || r.results[0].Outcome != delivery.OutcomeRecipientPolicyDenied {
 		t.Fatal("allowlist denial without an override was not held", err, r.results)
 	}
 	p, r = overrideProvider(t, true, "8.8.8.8")
-	start, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{})
+	start, _, err := p.Next(context.Background(), lease, overrideCaps())
 	if err != nil || start == nil || start.Recipient != "b@example.net" || len(r.results) != 0 {
 		t.Fatal("override did not skip the allowlist", err, r.results)
 	}
@@ -103,9 +103,14 @@ func TestClaimOverrideStillAppliesEgressPolicy(t *testing.T) {
 	lease := postgres.ControllerLease{WorkerID: "worker", Epoch: 1}
 	for _, destination := range []string{"10.1.2.3", "127.0.0.1", "169.254.1.1", "45.0.1.40"} {
 		p, r := overrideProvider(t, true, destination)
-		start, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{})
+		start, _, err := p.Next(context.Background(), lease, overrideCaps())
 		if !errors.Is(err, delivery.ErrNoWork) || start != nil || len(r.results) != 1 || r.results[0].Outcome != "rejected" {
 			t.Fatalf("%s: egress-denied destination was dispatched: %v %+v", destination, err, r.results)
 		}
 	}
+}
+
+// overrideCaps is a worker that reported its one source and that source's name.
+func overrideCaps() delivery.EdgeCapabilities {
+	return delivery.EdgeCapabilities{Sources: []delivery.Source{{Address: netip.MustParseAddr("45.0.1.22"), Hostname: "mx.example"}}}
 }

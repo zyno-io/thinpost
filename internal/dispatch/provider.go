@@ -11,7 +11,6 @@ import (
 	"errors"
 	"net/mail"
 	"net/netip"
-	"slices"
 	"strings"
 
 	controlv1 "github.com/zyno-io/thinpost/api/control/v1"
@@ -52,10 +51,10 @@ type Provider struct {
 }
 
 // Next claims one delivery the connected worker can serve. caps is what that
-// worker reported (or the legacy equivalent): the DeliveryStart source fields
-// are filled only for a worker that reported sources and only with an address it
-// reported, so a legacy worker never receives them and never sends from an
-// address control did not report for it.
+// worker reported in Ready: a worker that reported no sources is given nothing,
+// and the DeliveryStart source fields name only an address it reported, with the
+// name it reported for it, so it never sends from an address control did not
+// get from its report.
 func (p *Provider) Next(ctx context.Context, lease postgres.ControllerLease, caps delivery.EdgeCapabilities) (*controlv1.DeliveryStart, []byte, error) {
 	if p.Repository == nil || p.Objects == nil || p.Routes == nil || p.Envelopes == nil || p.Recipients == nil {
 		return nil, nil, errors.New("delivery provider is not configured")
@@ -97,18 +96,24 @@ func (p *Provider) prepare(ctx context.Context, claim delivery.Claim, caps deliv
 	if claim.AttemptID == "" || claim.DeliveryID == "" || claim.Epoch == 0 || claim.RecipientIndex < 0 || claim.RouteAttempt < 0 {
 		return nil, nil, errors.New("invalid delivery claim")
 	}
-	// Defense in depth behind the claim query: never hand a worker a delivery
-	// whose source or bounce domain it did not report. The attempt is committed
-	// as a local rejection (retried later), and nothing is sent.
-	if claim.ResolvedAddress != "" && !caps.Has(claim.ResolvedAddress) {
+	// Defense in depth behind the claim: never hand a worker a delivery whose
+	// source or bounce domain does not match what it reported. The attempt is
+	// committed as a local rejection (retried later), and nothing is sent. The
+	// bounce domain is the reported name of the address the delivery leaves
+	// from; this is the one check to relax if apps get domains of their own.
+	if claim.ResolvedAddress != "" && (!caps.Has(claim.ResolvedAddress) || claim.SourceAddress != claim.ResolvedAddress) {
 		return nil, nil, errors.New("delivery source is not available on this worker")
 	}
+	sent, ok := caps.Primary()
 	if claim.SourceAddress != "" || claim.HeloName != "" {
-		if !caps.Explicit || claim.SourceAddress == "" || claim.HeloName == "" || !caps.Has(claim.SourceAddress) {
+		if claim.SourceAddress == "" || claim.HeloName == "" {
+			return nil, nil, errors.New("delivery source is not available on this worker")
+		}
+		if sent, ok = caps.Source(claim.SourceAddress); !ok || claim.HeloName != sent.Hostname {
 			return nil, nil, errors.New("delivery source is not available on this worker")
 		}
 	}
-	if claim.BounceDomain != "" && !slices.Contains(caps.BounceDomains, claim.BounceDomain) {
+	if !ok || claim.BounceDomain == "" || claim.BounceDomain != sent.Hostname {
 		return nil, nil, errors.New("delivery bounce domain is not available on this worker")
 	}
 	source, err := p.Objects.Get(ctx, claim.SourceKey, 16<<20)

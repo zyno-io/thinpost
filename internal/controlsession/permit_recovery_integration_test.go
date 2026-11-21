@@ -55,7 +55,7 @@ func (w *oneClaimWork) Next(ctx context.Context, lease postgres.ControllerLease,
 	if w.claimed.Swap(true) {
 		return nil, nil, delivery.ErrNoWork
 	}
-	claim, err := w.repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000003", delivery.EdgeCapabilities{})
+	claim, err := w.repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000003", delivery.EdgeCapabilities{Sources: []delivery.Source{{Address: netip.MustParseAddr("45.0.1.22"), Hostname: "bounce.example.com"}}})
 	if err != nil {
 		return nil, nil, err
 	}

@@ -523,6 +523,7 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	edge.Advertise([]string{"45.0.1.22"}, []string{"bounce.example.com"}, []string{"bounce.example.com"})
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(serverTLS)), grpc.MaxRecvMsgSize(128<<10), grpc.MaxSendMsgSize(128<<10))
 	controlv1.RegisterEdgeControlServer(server, edge)
@@ -537,7 +538,7 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 	if !ok {
 		t.Fatal("unexpected key")
 	}
-	envelopes := &bounceaddress.Service{Repository: repo, Domain: "bounce.example.com", ActiveVersion: "v1", Keys: map[string][]byte{"v1": []byte("0123456789abcdef0123456789abcdef")}}
+	envelopes := &bounceaddress.Service{Repository: repo, ActiveVersion: "v1", Keys: map[string][]byte{"v1": []byte("0123456789abcdef0123456789abcdef")}}
 	mxDNS := &integrationMXDNS{}
 	work := &dispatch.Provider{Repository: repo, Objects: objects, Routes: &mailroute.Resolver{DNS: mxDNS, Filter: integrationMXFilter{}}, Envelopes: envelopes, Recipients: controlPolicy}
 	bounceGate := &integrationBounceGate{repository: repo, entered: make(chan struct{}, 1), release: make(chan struct{})}

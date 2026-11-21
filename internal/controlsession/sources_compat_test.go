@@ -62,9 +62,9 @@ func newStart(source, helo string) *controlv1.DeliveryStart {
 	return &controlv1.DeliveryStart{AttemptId: "attempt", DeliveryId: "delivery", Epoch: 3, MxName: "mx.example", DestinationIp: "8.8.8.8", EnvelopeFrom: "b+token@bounce.example", Recipient: "a@example.net", ExpectedSize: 11, Sha256: digest[:], SourceAddress: source, HeloName: helo}
 }
 
-// An old Edge's Ready has no source lists; control reads it as a legacy worker
-// and uses its own legacy capabilities.
-func TestOldShapeReadyDecodesAsLegacy(t *testing.T) {
+// An old Edge's Ready has no source lists. Control accepts it, but it reports
+// nothing to address a delivery from, so no capabilities come of it.
+func TestOldShapeReadyDecodesWithoutCapabilities(t *testing.T) {
 	old := oldReady(t)
 	fields := old.Descriptor().Fields()
 	old.Set(fields.ByName("worker_id"), protoreflect.ValueOfString("worker"))
@@ -78,9 +78,9 @@ func TestOldShapeReadyDecodesAsLegacy(t *testing.T) {
 	if err = proto.Unmarshal(wire, &ready); err != nil {
 		t.Fatal(err)
 	}
-	caps, valid := capabilitiesFromReady(&ready, legacyCaps)
-	if !valid || caps.Explicit || len(caps.Addresses) != 1 || caps.Addresses[0] != legacyCaps.Addresses[0] {
-		t.Fatalf("an old Ready was not treated as legacy: %+v %v", caps, valid)
+	caps, valid := capabilitiesFromReady(&ready)
+	if !valid || len(caps.Sources) != 0 {
+		t.Fatalf("an old Ready was not accepted without capabilities: %+v %v", caps, valid)
 	}
 	// And a new worker's Ready, decoded by an old control plane, only gains
 	// unknown fields: every field it knows is intact.
@@ -97,8 +97,8 @@ func TestOldShapeReadyDecodesAsLegacy(t *testing.T) {
 // An old Edge keeps the fields it does not know and hashes the whole message,
 // so it would obtain a valid permit for a start that names a source it cannot
 // honor, and then send from its primary address with its own HELO. Control's
-// gating (nothing is set for an Edge that did not report sources) is therefore
-// the only guard. This test pins both halves: the digest binds the new fields,
+// gating (the source fields are set only for an address the Edge reported) is
+// therefore the only guard. This test pins both halves: the digest binds the new fields,
 // and an old Edge computes the same digest.
 func TestOldEdgeWouldPermitNewDeliveryStartFields(t *testing.T) {
 	withSource, without := newStart("45.0.0.10", "smtp.hosting.example"), newStart("", "")
@@ -127,9 +127,10 @@ func TestOldEdgeWouldPermitNewDeliveryStartFields(t *testing.T) {
 	}
 }
 
-// A start for an Edge that reported nothing is byte-identical to the schema-39
-// one: control sets neither new field, so an old Edge hashes what it always did.
-func TestLegacyStartIsIdenticalToTheOldWireShape(t *testing.T) {
+// A start with empty source fields (an app on the primary address) is
+// byte-identical to the schema-39 one: control sets neither new field, so an old
+// Edge hashes what it always did.
+func TestStartWithoutSourceFieldsIsIdenticalToTheOldWireShape(t *testing.T) {
 	start := newStart("", "")
 	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(start)
 	if err != nil {

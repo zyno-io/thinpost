@@ -336,7 +336,6 @@ func (h *Handler) sendingIPRoute(w http.ResponseWriter, r *http.Request, actor s
 			if list.UnnamedEdgeAddresses == nil {
 				list.UnnamedEdgeAddresses = []string{}
 			}
-			list.GlobalBounceDomain = h.BounceDomain
 			respond(w, http.StatusOK, list)
 		case http.MethodPost:
 			var req struct {

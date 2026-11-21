@@ -9,39 +9,59 @@ import (
 	"github.com/zyno-io/thinpost/internal/delivery"
 )
 
+const (
+	primaryHost = "mx.example"
+	hostingHost = "smtp.hosting.example"
+)
+
 var (
 	primaryAddr = netip.MustParseAddr("45.0.1.22")
 	hostingAddr = netip.MustParseAddr("45.0.0.10")
 )
 
-func explicitCaps(addresses ...netip.Addr) delivery.EdgeCapabilities {
-	return delivery.EdgeCapabilities{Explicit: true, Addresses: addresses, BounceDomains: []string{"bounce.example", "bounce.hosting.example"}}
+// primaryCaps is a worker that reported one source and its name.
+func primaryCaps() delivery.EdgeCapabilities { return reportedCaps(primaryAddr) }
+
+// reportedCaps is a worker that reported the given sources, primary first, with
+// their names.
+func reportedCaps(addresses ...netip.Addr) delivery.EdgeCapabilities {
+	names := map[netip.Addr]string{primaryAddr: primaryHost, hostingAddr: hostingHost}
+	caps := delivery.EdgeCapabilities{}
+	for _, address := range addresses {
+		caps.Sources = append(caps.Sources, delivery.Source{Address: address, Hostname: names[address]})
+	}
+	return caps
 }
 
-// Control must never hand a worker a delivery whose source it did not report.
-// The claim query already filters; this is the assertion behind it, and the
-// only guard for an old worker that would sign off on fields it does not know.
+// Control must never hand a worker a delivery whose source or bounce domain
+// does not match what it reported. The claim already addresses deliveries from
+// the report; this is the assertion behind it, and the only guard for an old
+// worker that would sign off on fields it does not know.
 func TestSourceFieldsAreSetOnlyForAddressesTheWorkerReported(t *testing.T) {
-	hosting := delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", EnhancedProtection: true, SourceAddress: hostingAddr.String(), HeloName: "smtp.hosting.example", SourceName: "hosting", BounceDomain: "bounce.hosting.example"}
-	// The real claim shape for a legacy worker: the fields are cleared, only the
-	// resolved row (a pinned hosting IP that shares the global bounce domain) remains.
-	legacyShape := delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", EnhancedProtection: true, ResolvedAddress: hostingAddr.String(), SourceName: "hosting", BounceDomain: "bounce.example"}
+	base := delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", EnhancedProtection: true}
+	pinned := base
+	pinned.SourceAddress, pinned.HeloName, pinned.BounceDomain, pinned.SourceName, pinned.ResolvedAddress = hostingAddr.String(), hostingHost, hostingHost, "hosting", hostingAddr.String()
+	unpinned := base
+	unpinned.BounceDomain = primaryHost
 	for name, tc := range map[string]struct {
 		claim delivery.Claim
 		caps  delivery.EdgeCapabilities
 		want  string // "" = sent with empty fields, "sent" = with fields, "held" = committed as a local rejection
 	}{
-		"explicit worker with the address":                            {withResolved(hosting), explicitCaps(primaryAddr, hostingAddr), "sent"},
-		"explicit worker without the address":                         {hosting, explicitCaps(primaryAddr), "held"},
-		"legacy worker, hosting row sharing the global bounce domain": {legacyShape, delivery.EdgeCapabilities{Addresses: []netip.Addr{primaryAddr}, BounceDomains: []string{"bounce.example"}}, "held"},
-		"legacy worker, claim carries a source":                       {hosting, delivery.EdgeCapabilities{Addresses: []netip.Addr{primaryAddr}, BounceDomains: []string{"bounce.example"}}, "held"},
-		"legacy worker with zero capabilities":                        {hosting, delivery.EdgeCapabilities{}, "held"},
-		"source without a HELO name":                                  {withHelo(hosting, ""), explicitCaps(primaryAddr, hostingAddr), "held"},
-		"HELO name without a source":                                  {withSource(hosting, ""), explicitCaps(primaryAddr, hostingAddr), "held"},
-		"bounce domain the worker did not report":                     {withBounce(hosting, "bounce.other.example"), explicitCaps(primaryAddr, hostingAddr), "held"},
-		"legacy worker, unassigned app":                               {delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", EnhancedProtection: true}, delivery.EdgeCapabilities{Addresses: []netip.Addr{primaryAddr}, BounceDomains: []string{"bounce.example"}}, ""},
-		"explicit worker, unassigned app":                             {delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", EnhancedProtection: true}, explicitCaps(primaryAddr), ""},
-		"legacy worker, global bounce domain":                         {delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", EnhancedProtection: true, BounceDomain: "bounce.example"}, delivery.EdgeCapabilities{Addresses: []netip.Addr{primaryAddr}, BounceDomains: []string{"bounce.example"}}, ""},
+		"pinned app, address reported":                       {pinned, reportedCaps(primaryAddr, hostingAddr), "sent"},
+		"pinned app, address not reported":                   {pinned, reportedCaps(primaryAddr), "held"},
+		"pinned app, worker reported nothing":                {pinned, delivery.EdgeCapabilities{}, "held"},
+		"source without a HELO name":                         {withHelo(pinned, ""), reportedCaps(primaryAddr, hostingAddr), "held"},
+		"HELO name without a source":                         {withSource(pinned, ""), reportedCaps(primaryAddr, hostingAddr), "held"},
+		"HELO name that is not the reported name":            {withHelo(pinned, primaryHost), reportedCaps(primaryAddr, hostingAddr), "held"},
+		"bounce domain that is not the source's name":        {withBounce(pinned, primaryHost), reportedCaps(primaryAddr, hostingAddr), "held"},
+		"bounce domain the worker did not report":            {withBounce(pinned, "bounce.other.example"), reportedCaps(primaryAddr, hostingAddr), "held"},
+		"claim with no bounce domain":                        {withBounce(pinned, ""), reportedCaps(primaryAddr, hostingAddr), "held"},
+		"unpinned app, bounce domain is the primary's name":  {unpinned, reportedCaps(primaryAddr, hostingAddr), ""},
+		"unpinned app, no bounce domain":                     {withBounce(unpinned, ""), reportedCaps(primaryAddr), "held"},
+		"unpinned app, bounce domain of a non-primary":       {withBounce(unpinned, hostingHost), reportedCaps(primaryAddr, hostingAddr), "held"},
+		"unpinned app, worker reported nothing":              {unpinned, delivery.EdgeCapabilities{}, "held"},
+		"unpinned app, global-style domain the worker lacks": {withBounce(unpinned, "bounce.example"), reportedCaps(primaryAddr), "held"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p, r, _, lease := setup(t)
@@ -53,7 +73,7 @@ func TestSourceFieldsAreSetOnlyForAddressesTheWorkerReported(t *testing.T) {
 					t.Fatalf("delivery with an unreported source was not held: start=%v results=%+v err=%v", start, r.results, err)
 				}
 			case "sent":
-				if err != nil || start.SourceAddress != hostingAddr.String() || start.HeloName != "smtp.hosting.example" {
+				if err != nil || start.SourceAddress != hostingAddr.String() || start.HeloName != hostingHost {
 					t.Fatalf("start %v err %v", start, err)
 				}
 			default:
@@ -71,5 +91,3 @@ func withBounce(c delivery.Claim, domain string) delivery.Claim {
 	c.BounceDomain = domain
 	return c
 }
-
-func withResolved(c delivery.Claim) delivery.Claim { c.ResolvedAddress = c.SourceAddress; return c }

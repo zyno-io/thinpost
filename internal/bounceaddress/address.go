@@ -22,15 +22,13 @@ type Repository interface {
 // remain available for as long as deliveries using them can be retried.
 type Service struct {
 	Repository    Repository
-	Domain        string
 	ActiveVersion string
 	Keys          map[string][]byte
 }
 
 // Validate checks configuration without reading or writing a delivery.
 func (s *Service) Validate() error {
-	domain, ok := admin.NormalizeDomain(s.Domain)
-	if !ok || domain != s.Domain || len(domain) > 219 || s.Repository == nil || len(s.Keys) == 0 || len(s.Keys) > 32 {
+	if s.Repository == nil || len(s.Keys) == 0 || len(s.Keys) > 32 {
 		return errors.New("invalid bounce address configuration")
 	}
 	for version, key := range s.Keys {
@@ -38,7 +36,7 @@ func (s *Service) Validate() error {
 			return errors.New("invalid bounce keyring")
 		}
 	}
-	if _, ok = s.Keys[s.ActiveVersion]; !ok {
+	if _, ok := s.Keys[s.ActiveVersion]; !ok {
 		return errors.New("active bounce key unavailable")
 	}
 	return nil
@@ -51,15 +49,12 @@ func (s *Service) ForDelivery(ctx context.Context, claim delivery.Claim) (string
 	if claim.DeliveryID == "" {
 		return "", errors.New("invalid delivery")
 	}
-	// A sending IP may have its own bounce domain; the token does not depend
-	// on it, so a delivery whose domain changes still correlates.
-	domain := s.Domain
-	if claim.BounceDomain != "" {
-		normalized, ok := admin.NormalizeDomain(claim.BounceDomain)
-		if !ok || normalized != claim.BounceDomain || len(normalized) > 219 {
-			return "", errors.New("invalid bounce domain")
-		}
-		domain = claim.BounceDomain
+	// The domain is the one the claim carries, the reported name of the
+	// address the delivery leaves from; there is no fallback. The token does not
+	// depend on it, so a delivery whose domain changes still correlates.
+	domain, ok := admin.NormalizeDomain(claim.BounceDomain)
+	if !ok || domain != claim.BounceDomain || len(domain) > 219 {
+		return "", errors.New("invalid bounce domain")
 	}
 	tokens := make(map[string]string, len(s.Keys))
 	hashes := make(map[string][32]byte, len(s.Keys))

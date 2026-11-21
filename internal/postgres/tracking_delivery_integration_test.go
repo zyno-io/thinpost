@@ -144,7 +144,7 @@ func TestTrackedDeliveryHoldsAndRechecksBeforePermit(t *testing.T) {
 	if _, err = owner.ExecContext(ctx, `CREATE FUNCTION fail_tracking_hold() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.outcome='tracking_unavailable' THEN RAISE EXCEPTION 'fixture failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_tracking_hold BEFORE INSERT ON webhook_events FOR EACH ROW EXECUTE FUNCTION fail_tracking_hold()`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = repo.ClaimDelivery(ctx, lease, id(100), delivery.EdgeCapabilities{}); err == nil {
+	if _, err = repo.ClaimDelivery(ctx, lease, id(100), claimCaps()); err == nil {
 		t.Fatal("hold committed without its webhook event")
 	}
 	var state string
@@ -156,7 +156,7 @@ func TestTrackedDeliveryHoldsAndRechecksBeforePermit(t *testing.T) {
 		t.Fatal(err)
 	}
 	for n := 0; n < 2; n++ {
-		if _, err = repo.ClaimDelivery(ctx, lease, id(101+n), delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+		if _, err = repo.ClaimDelivery(ctx, lease, id(101+n), claimCaps()); !errors.Is(err, delivery.ErrNoWork) {
 			t.Fatal("unusable tracking was sent", err)
 		}
 		var pending, authorized bool
@@ -165,7 +165,7 @@ func TestTrackedDeliveryHoldsAndRechecksBeforePermit(t *testing.T) {
 			t.Fatal("invalid tracking hold", state, pending, authorized, outcome, count, err)
 		}
 	}
-	if _, err = repo.ClaimDelivery(ctx, lease, id(109), delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+	if _, err = repo.ClaimDelivery(ctx, lease, id(109), claimCaps()); !errors.Is(err, delivery.ErrNoWork) {
 		t.Fatal("legacy mapping without a post-send lifetime was sent", err)
 	}
 	if err = owner.QueryRowContext(ctx, `SELECT state FROM deliveries WHERE id=$1`, id(24)).Scan(&state); err != nil || state != "tracking_held" {
@@ -240,7 +240,7 @@ func TestTrackedDeliveryHoldsAndRechecksBeforePermit(t *testing.T) {
 	if err = repo.CommitWebhook(ctx, hook, 204); err != nil {
 		t.Fatal("tracking abandonment webhook result", err)
 	}
-	claim, err := repo.ClaimDelivery(ctx, lease, id(103), delivery.EdgeCapabilities{})
+	claim, err := repo.ClaimDelivery(ctx, lease, id(103), claimCaps())
 	if err != nil || claim.DeliveryID != id(22) {
 		t.Fatal("valid mapping not claimed", err)
 	}
@@ -265,7 +265,7 @@ func TestTrackedDeliveryHoldsAndRechecksBeforePermit(t *testing.T) {
 	if err = owner.QueryRowContext(ctx, `SELECT start_authorized FROM delivery_attempts WHERE id=$1`, claim.AttemptID).Scan(&authorized); err != nil || authorized {
 		t.Fatal("expired mapping persisted a permit", err)
 	}
-	claim, err = repo.ClaimDelivery(ctx, lease, id(106), delivery.EdgeCapabilities{})
+	claim, err = repo.ClaimDelivery(ctx, lease, id(106), claimCaps())
 	if err != nil || claim.DeliveryID != id(23) {
 		t.Fatal("second valid mapping not claimed", err)
 	}
@@ -287,7 +287,7 @@ func TestTrackedDeliveryHoldsAndRechecksBeforePermit(t *testing.T) {
 	if _, err = owner.ExecContext(ctx, `INSERT INTO deliveries(id,message_id,recipient_index,final_object_key) VALUES ($1,$2,0,'final/untracked')`, id(31), id(30)); err != nil {
 		t.Fatal(err)
 	}
-	untracked, err := repo.ClaimDelivery(ctx, lease, id(107), delivery.EdgeCapabilities{})
+	untracked, err := repo.ClaimDelivery(ctx, lease, id(107), claimCaps())
 	if err != nil || !untracked.TrackingSendCutoff.IsZero() {
 		t.Fatal("untracked claim included an expiry", err)
 	}

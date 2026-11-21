@@ -19,7 +19,6 @@ import (
 	"github.com/zyno-io/thinpost/internal/controllease"
 	"github.com/zyno-io/thinpost/internal/controlsession"
 	"github.com/zyno-io/thinpost/internal/controltls"
-	"github.com/zyno-io/thinpost/internal/delivery"
 	"github.com/zyno-io/thinpost/internal/dispatch"
 	"github.com/zyno-io/thinpost/internal/egress"
 	"github.com/zyno-io/thinpost/internal/feedback"
@@ -114,7 +113,7 @@ func New(c Config, repository *postgres.Repository, objects Objects) (*Bridge, e
 	for version, key := range c.BounceKeys {
 		keys[version] = append([]byte(nil), key...)
 	}
-	envelopes := &bounceaddress.Service{Repository: repository, Domain: c.BounceDomain, ActiveVersion: c.ActiveBounceKey, Keys: keys}
+	envelopes := &bounceaddress.Service{Repository: repository, ActiveVersion: c.ActiveBounceKey, Keys: keys}
 	if err = envelopes.Validate(); err != nil {
 		return nil, errors.New("invalid bounce address configuration")
 	}
@@ -126,9 +125,6 @@ func New(c Config, repository *postgres.Repository, objects Objects) (*Bridge, e
 	issuer := &controllease.Issuer{Repository: repository, Signer: signer, Identity: c.ControllerIdentity, JournalID: c.JournalID}
 	runner := &controlsession.Runner{WorkerID: c.WorkerID, ControllerID: c.ControllerID, JournalID: c.JournalID, Issuer: issuer, Results: repository, Starts: repository, Reconciler: repository, Work: work, Bounces: &bounceingest.Service{Repository: repository, Objects: objects, Feedback: &feedback.Service{Repository: repository}},
 		Inbound: &inbound.Service{Repository: repository, Objects: objects, Keys: inbound.FingerprintKeys(c.ActiveBounceKey, keys)}, LeaseTTL: c.LeaseTTL, ClockMargin: c.ClockMargin, PollInterval: c.PollInterval, Reports: repository, Sources: policy, Submission: c.Submission,
-		// A worker that reports no sources sends only from its primary address and
-		// accepts only the global bounce domain; control must not claim more.
-		Legacy: delivery.EdgeCapabilities{Addresses: []netip.Addr{c.Source}, BounceDomains: []string{c.BounceDomain}},
 		Connect: func(ctx context.Context) (controlsession.Stream, error) {
 			return controlv1.NewEdgeControlClient(conn).Connect(ctx)
 		}}

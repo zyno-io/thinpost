@@ -273,7 +273,7 @@ func TestAutomaticHardBounceSuppressionPostgres(t *testing.T) {
 		exec(`INSERT INTO messages(id,app_id,object_key,enhanced_protection,state) VALUES ($1,$2,$3,false,'prepared')`, m, app, "source-"+m)
 		exec(`INSERT INTO deliveries(id,message_id,recipient_index,final_object_key,retry_after) VALUES ($1,$2,0,$3,now()-interval '1 hour')`, d, m, "signed-"+d)
 		exec(`INSERT INTO message_recipients(message_id,app_id,recipient_index,address,address_lower,domain_lower,domain_rev,kind) VALUES ($1,$2,0,'gone0@example.com','gone0@example.com','example.com','com.example.','to')`, m, app)
-		if _, err = repo.ClaimDelivery(ctx, lease, id(), delivery.EdgeCapabilities{}); err == nil {
+		if _, err = repo.ClaimDelivery(ctx, lease, id(), claimCaps()); err == nil {
 			t.Fatal("a delivery to an automatically suppressed recipient was claimed")
 		}
 		if got := func() string {

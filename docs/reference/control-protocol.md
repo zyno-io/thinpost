@@ -165,21 +165,23 @@ A capability list holds at most 8 entries of at most 32 characters from `a-z 0-9
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `worker_id`, `epoch`, `session_id`, `protocol_version`, `journal_id` | | Echo `Open`. The control plane rejects any mismatch. |
-| `source_addresses` | repeated string | The addresses the Edge can send from, primary first. Absent for a legacy Edge. |
-| `bounce_domains` | repeated string | Domains the Edge accepts bounces for. |
+| `source_addresses` | repeated string | The addresses the Edge can send from, primary first. |
+| `bounce_domains` | repeated string | Domains the Edge accepts bounces for. Checked for form and otherwise ignored: a source's bounce domain is its `source_hostnames` entry. |
 | `capabilities` | repeated string | Optional features the Edge supports (`inbound/1`, `submission/1`). |
-| `source_hostnames` | repeated string | The SMTP name each source address greets with, one per `source_addresses` entry in the same order. |
+| `source_hostnames` | repeated string | The SMTP name each source address greets with, one per `source_addresses` entry in the same order. Required for deliveries. This name is both the HELO name and the return-path domain for the address. |
 | `submission_ports` | repeated uint32 | Public ports on which the Edge currently accepts SMTP AUTH (465 and 587). Observed availability only; never used to tell clients where to connect. Meaningful only with `submission/1`. |
 
 The control plane validates the lists and treats a violation as an invalid readiness:
 
 - `source_addresses`: at most 16 entries, each unique, in canonical text form, and a public address.
-- `source_hostnames`: absent, or exactly one normalized, unique DNS name per source address, each at most 219 characters.
+- `source_hostnames`: absent, or exactly one normalized, unique DNS name per source address, each at most 219 characters. Control sends nothing from an Edge that reports no names (see below).
 - `bounce_domains`: at most 24 entries, normalized and unique, each at most 219 characters.
 - `submission_ports`: at most 8 entries, each unique and from 1 to 65535. It is checked only when the Edge reported `submission/1` and the control plane serves it, and a violation then is an invalid readiness; otherwise the field is ignored. The Edge refuses to enable submission with an invalid list. The control plane records the ports for display only when it serves `submission/1` itself and the Edge reported the capability; otherwise it records none.
-- No sources with bounce domains or host names is malformed. No sources and no domains means a legacy Edge, which sends only from its primary address.
+- No sources with bounce domains or host names is malformed. No sources and no domains is an old-shape Ready.
 
-The control plane never hands the Edge a delivery whose source or bounce domain the Edge did not report. Such a delivery stays queued.
+An Edge whose Ready reports no sources, or sources without host names, keeps its session: replay, bounces, inbound mail and submission all work. The control plane just has nothing to address a delivery from, so it hands that Edge no deliveries and they stay queued.
+
+The control plane addresses every delivery from the live session's Ready, never from its own configuration. The HELO name and the return-path domain are the host name the Edge reported for the address the delivery is sent from. An app on the primary address (the first entry) leaves `DeliveryStart.source_address` and `helo_name` empty and the Edge sends from its primary under its own name; an app assigned to a sending IP names that address and its reported host name. The control plane never hands the Edge a delivery for an address the Edge did not report. Such a delivery stays queued and is never sent from another address.
 
 ### Lease messages
 

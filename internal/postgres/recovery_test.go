@@ -260,7 +260,7 @@ func TestRecoveryGateAndQuarantine(t *testing.T) {
 		t.Fatal("old generation admitted during recovery", err)
 	}
 	closedLease := ControllerLease{WorkerID: "worker", ControllerID: "old", Epoch: 1}
-	if _, err = initial.ClaimDelivery(ctx, closedLease, token, delivery.EdgeCapabilities{}); !errors.Is(err, ErrRuntimeClosed) {
+	if _, err = initial.ClaimDelivery(ctx, closedLease, token, claimCaps()); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatal("delivery claim admitted during recovery", err)
 	}
 	if err = initial.AuthorizeDeliveryStart(ctx, closedLease, token, token, token, "0123456789abcdef0123456789abcdef", [32]byte{}, 0); !errors.Is(err, ErrRuntimeClosed) {

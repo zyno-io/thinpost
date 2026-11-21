@@ -14,8 +14,8 @@ Three places each own one part of a sending IP:
 | Owner | Decides |
 | --- | --- |
 | **Deployment (Helm values)** | Which addresses exist on the edge: the primary `sourceAddress` and any `additionalSources`. Each entry needs a `hostname` (the name it greets with, its PTR and HELO) and a certificate Secret for that name. |
-| **Database (console)** | What each address is called (a lowercase slug used in logs instead of the address), its HELO name, its bounce domain and which apps are assigned to it. |
-| **Edge (runtime)** | What it can actually bind. At session start it reports its addresses and bounce domains. A delivery for an address the edge did not report stays queued and is never sent from another address. |
+| **Database (console)** | What each address is called (a lowercase slug used in logs instead of the address), which apps are assigned to it. |
+| **Edge (runtime)** | What it can actually bind. At session start it reports its addresses and the name each one greets with. Control sends every delivery with that name as the HELO name and the return-path domain. An edge that reports no names is sent no mail. A delivery for an address the edge did not report stays queued and is never sent from another address. |
 
 An app with no assignment uses the **primary** address. The primary needs no database row, but may have one that only gives it a name.
 
@@ -43,8 +43,8 @@ None of these records are published by Thinpost. Set them at the address owner (
 - The **HELO name** is the PTR of the address. The edge greets with it and control sends it as the outbound HELO, so the banner, the HELO and the PTR agree.
 - `v=spf1 a -all` uses the name's own A record, so it follows the address. Do not use `ptr`, which RFC 7208 deprecates.
 - The **MX** record makes bounces and inbound mail for the address arrive at the address itself.
-- The **bounce domain** is the HELO name or a domain it belongs to. The console requires this and pre-fills it. The edge accepts every one of its own names as a bounce domain automatically. If you choose a different bounce domain, publish an MX record pointing at this address's name and an SPF record listing the address.
-- Several addresses can share one bounce domain. Its SPF record then lists all of them as `ip4:` entries. Add to the existing record; publish only one SPF record per name.
+- The **bounce domain** is the HELO name. Every message leaves with a return path like `b+<token>@<HELO name>`, using the name the edge reported for the address the message is sent from. The edge accepts bounces for every one of its own names automatically, so the MX record above is all bounces need. A bounce domain saved in the console no longer changes what is sent.
+- If you rename an address's HELO name, messages sent under the old name can still bounce for days. Keep the old name in `additionalBounceDomains` (below) so the edge still accepts those bounces.
 
 A customer's own SPF record does not need to mention Thinpost.
 

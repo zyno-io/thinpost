@@ -77,7 +77,7 @@ func TestSendingIPPoolRoutes(t *testing.T) {
 		t.Fatal("non-admin created an IP", w.Code)
 	}
 	h.Authenticator = fakeAuth{admin: true}
-	if w := send(h, "GET", "/api/v1/sending-ips", "", "valid"); w.Code != 200 || !strings.Contains(w.Body.String(), `"ips":[]`) || !strings.Contains(w.Body.String(), `"unnamed_edge_addresses":[]`) || !strings.Contains(w.Body.String(), `"global_bounce_domain":"bounce.example.net"`) {
+	if w := send(h, "GET", "/api/v1/sending-ips", "", "valid"); w.Code != 200 || !strings.Contains(w.Body.String(), `"ips":[]`) || !strings.Contains(w.Body.String(), `"unnamed_edge_addresses":[]`) || strings.Contains(w.Body.String(), `global_bounce_domain`) {
 		t.Fatal("empty list", w.Code, w.Body.String())
 	}
 	if w := send(h, "GET", "/api/v1/sending-ips?x=1", "", "valid"); w.Code != 503 {

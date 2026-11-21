@@ -310,7 +310,7 @@ func TestRecordEdgeSourcesWritesSubmissionPorts(t *testing.T) {
 	worker, controller := strings.Repeat("e", 32), strings.Repeat("f", 32)
 	exec(`INSERT INTO controller_leases(worker_id,controller_id,epoch,expires_at) VALUES ($1,$2,1,clock_timestamp()+interval '1 hour')`, worker, controller)
 	lease := ControllerLease{WorkerID: worker, ControllerID: controller, Epoch: 1}
-	caps := delivery.EdgeCapabilities{Explicit: true, Addresses: []netip.Addr{netip.MustParseAddr("45.0.1.22")}, BounceDomains: []string{"mail.example.org"}, SubmissionPorts: []int{465, 587}}
+	caps := delivery.EdgeCapabilities{Sources: []delivery.Source{{Address: netip.MustParseAddr("45.0.1.22"), Hostname: "mail.example.org"}}, SubmissionPorts: []int{465, 587}}
 	if err := repo.RecordEdgeSources(ctx, lease, caps); err != nil {
 		t.Fatal(err)
 	}
