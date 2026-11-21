@@ -151,9 +151,10 @@ func Rewrite(input string, options Options) (string, []Mapping, error) {
 
 // NormalizeOrigin validates the same HTTPS origin used by message rewriting.
 // The host must be ASCII letters, digits, '-' and '.', with an optional numeric
-// port, and an IDN must be given in punycode (xn--) form. Case is preserved:
-// links are bound to the exact origin string, so changing it would invalidate
-// every link already sent.
+// port, and an IDN must be given in punycode (xn--) form. Case is preserved
+// because the origin is only the URL prefix of each link; links are not bound
+// to it, so links already sent keep working wherever their hostname still
+// routes to this deployment.
 // Such an origin needs no HTML or quoted-printable escaping in a message, which
 // lets the acceptance preflight measure a maximum-length placeholder origin as
 // an upper bound on a real one. IP literals with colons (IPv6) are rejected.

@@ -205,12 +205,12 @@ func TestRewrittenCapabilitiesResolveThroughEncryptedMappings(t *testing.T) {
 	for _, ref := range refs {
 		visitor.allowed[ref.Hash] = ref.Kind
 	}
-	h := &Handler{Origin: "https://track.example.com", Links: links, Visitor: visitor}
+	h := &Handler{Links: links, Visitor: visitor}
 	for _, mapping := range mappings {
 		if strings.Contains(html, mapping.Token) || bytes.Contains(raw.objects[key], []byte(mapping.Token)) {
 			t.Fatal("capability not confined to rewritten content")
 		}
-		path := regexp.MustCompile(`/t/` + mapping.Kind[:1] + `/v2/[A-Za-z0-9_/-]+`).FindString(html)
+		path := regexp.MustCompile(`/t/` + mapping.Kind[:1] + `/v3/[A-Za-z0-9_/-]+`).FindString(html)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		if mapping.Kind == "click" && (w.Code != 302 || w.Header().Get("Location") != mapping.Destination) {

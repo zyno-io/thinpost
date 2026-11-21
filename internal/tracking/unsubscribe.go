@@ -85,7 +85,7 @@ func (h *Handler) serveUnsubscribe(w http.ResponseWriter, r *http.Request) {
 		unsubscribePage(w, r, http.StatusNotFound, unsubscribeMissingPage)
 		return
 	}
-	deliveryID, err := h.Links.verifyUnsubscribe(h.Origin, r.URL.Path)
+	deliveryID, err := h.Links.verifyUnsubscribe(r.URL.Path)
 	if err != nil {
 		unsubscribePage(w, r, http.StatusNotFound, unsubscribeMissingPage)
 		return

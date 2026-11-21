@@ -449,7 +449,7 @@ func TestOneClickUnsubscribeIsPreparedPerDelivery(t *testing.T) {
 		t.Fatal("not committed")
 	}
 	seen := map[string]bool{}
-	handler := &tracking.Handler{Origin: "https://tracking.example.com", Links: keys}
+	handler := &tracking.Handler{Links: keys}
 	for _, delivery := range repo.deliveries {
 		data := objects.final[delivery.ObjectKey]
 		parsed, err := mail.ReadMessage(bytes.NewReader(data))
@@ -457,7 +457,7 @@ func TestOneClickUnsubscribeIsPreparedPerDelivery(t *testing.T) {
 			t.Fatal(err)
 		}
 		list := parsed.Header.Get("List-Unsubscribe")
-		if !strings.HasPrefix(list, "<https://tracking.example.com/t/u/v2/") || !strings.HasSuffix(list, ">") || strings.Contains(list, delivery.ID) || seen[list] {
+		if !strings.HasPrefix(list, "<https://tracking.example.com/t/u/v3/") || !strings.HasSuffix(list, ">") || strings.Contains(list, delivery.ID) || seen[list] {
 			t.Fatal("unexpected or shared unsubscribe URL")
 		}
 		seen[list] = true

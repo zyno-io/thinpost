@@ -71,7 +71,7 @@ func TestUnsubscribePostReachesTrackingHandlerAndMalformedVariantsDoNot(t *testi
 	}
 	recorded := &recordedUnsubscribes{}
 	console := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("console")) })
-	router := RouterWithRuntime(console, nil, console, nil, MailRuntime{Tracking: &tracking.Handler{Origin: origin, Links: keys, Unsubscribes: recorded}})
+	router := RouterWithRuntime(console, nil, console, nil, MailRuntime{Tracking: &tracking.Handler{Links: keys, Unsubscribes: recorded}})
 	post := func(path string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader("List-Unsubscribe=One-Click"))
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
