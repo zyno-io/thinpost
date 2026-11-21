@@ -31,7 +31,7 @@ func TestTrackingResponsesUseOnlyHashedCapabilities(t *testing.T) {
 	hash := sha256.Sum256([]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
 	keys := testLinkKeys(t)
 	v := &fakeVisitor{}
-	h := &Handler{Origin: origin, Links: keys, Visitor: v}
+	h := &Handler{Links: keys, Visitor: v}
 	request := func(method, link string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(method, link, nil))
@@ -69,7 +69,7 @@ func TestTrackingResponsesUseOnlyHashedCapabilities(t *testing.T) {
 func TestTrackingRejectsEverythingButV2AndDoesNotEchoSecrets(t *testing.T) {
 	keys := testLinkKeys(t)
 	v := &fakeVisitor{}
-	h := &Handler{Origin: linkOrigin, Links: keys, Visitor: v}
+	h := &Handler{Links: keys, Visitor: v}
 	open, _ := keys.link(linkOrigin, "open", linkToken, "")
 	for _, tc := range []struct {
 		method, path string
@@ -82,7 +82,7 @@ func TestTrackingRejectsEverythingButV2AndDoesNotEchoSecrets(t *testing.T) {
 		{"HEAD", "/t/o/" + linkToken, 404},
 		{"GET", "/t/o/" + strings.ToUpper(linkToken), 404},
 		{"GET", "/t/o/%30" + linkToken[1:], 404},
-		{"GET", "/t/x/v2/" + keys.active + "/AAAA", 404},
+		{"GET", "/t/x/v3/" + keys.active + "/AAAA", 404},
 		{"GET", "/t/o", 404},
 		{"GET", "/t/", 404},
 		{"GET", "/", 404},
@@ -106,7 +106,7 @@ func TestTrackingRejectsEverythingButV2AndDoesNotEchoSecrets(t *testing.T) {
 	}
 	// No keys: nothing resolves.
 	w = httptest.NewRecorder()
-	(&Handler{Origin: linkOrigin}).ServeHTTP(w, httptest.NewRequest("GET", open, nil))
+	(&Handler{}).ServeHTTP(w, httptest.NewRequest("GET", open, nil))
 	if w.Code != 404 {
 		t.Fatal("link resolved without keys", w.Code)
 	}

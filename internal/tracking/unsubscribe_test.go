@@ -50,10 +50,10 @@ const formType = "application/x-www-form-urlencoded"
 func TestUnsubscribeLinkShapeAndVerification(t *testing.T) {
 	keys := testLinkKeys(t)
 	link := unsubLink(t, keys)
-	if !strings.HasPrefix(link, unsubOrigin+"/t/u/v2/"+keys.active+"/") || strings.Count(link, "/") != 7 {
+	if !strings.HasPrefix(link, unsubOrigin+"/t/u/v3/"+keys.active+"/") || strings.Count(link, "/") != 7 {
 		t.Fatal("unexpected link shape")
 	}
-	id, err := keys.verifyUnsubscribe(unsubOrigin, strings.TrimPrefix(link, unsubOrigin))
+	id, err := keys.verifyUnsubscribe(strings.TrimPrefix(link, unsubOrigin))
 	if err != nil || id != unsubDelivery {
 		t.Fatal("link did not verify", err)
 	}
@@ -62,9 +62,13 @@ func TestUnsubscribeLinkShapeAndVerification(t *testing.T) {
 			t.Fatal("signed a malformed delivery ID")
 		}
 	}
-	// A different origin or key never verifies.
-	if _, err := keys.verifyUnsubscribe("https://other.example.com", strings.TrimPrefix(link, unsubOrigin)); err == nil {
-		t.Fatal("verified under another origin")
+	// A link is not bound to its origin: it verifies at any host (the path is all that matters).
+	other, err := keys.UnsubscribeLink("https://other.example.com", unsubDelivery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, err := keys.verifyUnsubscribe(strings.TrimPrefix(other, "https://other.example.com")); err != nil || id != unsubDelivery {
+		t.Fatal("an unsubscribe link minted for another origin did not verify", id, err)
 	}
 }
 
@@ -115,19 +119,19 @@ func TestSignaturesDoNotCrossKinds(t *testing.T) {
 	}
 	openPath := strings.TrimPrefix(open, unsubOrigin)
 	replayed := strings.Replace(openPath, "/t/o/", "/t/u/", 1)
-	if _, err := keys.verifyUnsubscribe(unsubOrigin, replayed); err == nil {
+	if _, err := keys.verifyUnsubscribe(replayed); err == nil {
 		t.Fatal("open signature verified as unsubscribe")
 	}
 	// An unsubscribe signature replayed under /t/o and /t/c.
 	for _, letter := range []string{"o", "c"} {
 		path := strings.Replace(unsubscribe, "/t/u/", "/t/"+letter+"/", 1)
-		if _, _, _, err := keys.verify(unsubOrigin, path); err == nil {
+		if _, _, _, err := keys.verify(path); err == nil {
 			t.Fatal("unsubscribe signature verified as /t/" + letter)
 		}
 	}
 	// Through the handler: neither crosses over, and storage is never touched.
 	v, u := &fakeVisitor{}, &fakeUnsubscribes{}
-	h := &Handler{Origin: unsubOrigin, Links: keys, Visitor: v, Unsubscribes: u}
+	h := &Handler{Links: keys, Visitor: v, Unsubscribes: u}
 	for _, path := range []string{replayed, strings.Replace(unsubscribe, "/t/u/", "/t/o/", 1)} {
 		w := unsubRequest(h, http.MethodPost, path, formType, "List-Unsubscribe=One-Click")
 		if (w.Code != http.StatusNotFound && w.Code != http.StatusMethodNotAllowed) || v.calls != 0 || len(u.calls) != 0 {
@@ -140,7 +144,7 @@ func TestUnsubscribeGetAndHeadNeverChangeState(t *testing.T) {
 	keys := testLinkKeys(t)
 	link := unsubLink(t, keys)
 	u := &fakeUnsubscribes{}
-	h := &Handler{Origin: unsubOrigin, Links: keys, Unsubscribes: u}
+	h := &Handler{Links: keys, Unsubscribes: u}
 	get := unsubRequest(h, http.MethodGet, link, "", "")
 	if get.Code != 200 || len(u.calls) != 0 {
 		t.Fatal("GET changed state or failed", get.Code)
@@ -186,7 +190,7 @@ func TestUnsubscribePostRecordsAfterSignatureOnly(t *testing.T) {
 	keys := testLinkKeys(t)
 	link := unsubLink(t, keys)
 	u := &fakeUnsubscribes{}
-	h := &Handler{Origin: unsubOrigin, Links: keys, Unsubscribes: u}
+	h := &Handler{Links: keys, Unsubscribes: u}
 	w := unsubRequest(h, http.MethodPost, link, formType, "List-Unsubscribe=One-Click")
 	if w.Code != 200 || len(u.calls) != 1 || u.calls[0] != unsubDelivery || !strings.Contains(w.Body.String(), "You're unsubscribed.") {
 		t.Fatal("POST did not record", w.Code, u.calls)
@@ -215,7 +219,7 @@ func TestUnsubscribePostRecordsAfterSignatureOnly(t *testing.T) {
 		}
 		assertUnsubscribeHeaders(t, w)
 	}
-	for _, path := range []string{"/t/u/", "/t/u/x", link + "?a=b", link + "/extra", strings.Replace(link, "/v2/", "/V2/", 1)} {
+	for _, path := range []string{"/t/u/", "/t/u/x", link + "?a=b", link + "/extra", strings.Replace(link, "/v3/", "/V3/", 1)} {
 		before := len(u.calls)
 		if w = unsubRequest(h, http.MethodPost, path, formType, "List-Unsubscribe=One-Click"); w.Code != 404 || len(u.calls) != before {
 			t.Fatal("malformed path reached storage", path, w.Code)
@@ -227,7 +231,7 @@ func TestUnsubscribePostBodyVariants(t *testing.T) {
 	keys := testLinkKeys(t)
 	link := unsubLink(t, keys)
 	u := &fakeUnsubscribes{}
-	h := &Handler{Origin: unsubOrigin, Links: keys, Unsubscribes: u}
+	h := &Handler{Links: keys, Unsubscribes: u}
 	var extra bytes.Buffer
 	mw := multipart.NewWriter(&extra)
 	_ = mw.WriteField("List-Unsubscribe", "One-Click")
@@ -272,7 +276,7 @@ func TestUnsubscribePostStorageOutcomes(t *testing.T) {
 		{"gate closed or database down", errors.New("runtime closed"), 503, "Your request was not recorded."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := &Handler{Origin: unsubOrigin, Links: keys, Unsubscribes: &fakeUnsubscribes{err: tc.err}}
+			h := &Handler{Links: keys, Unsubscribes: &fakeUnsubscribes{err: tc.err}}
 			w := unsubRequest(h, http.MethodPost, link, formType, "List-Unsubscribe=One-Click")
 			if w.Code != tc.status || !strings.Contains(w.Body.String(), tc.text) {
 				t.Fatal("status", w.Code)
@@ -286,7 +290,7 @@ func TestUnsubscribePostStorageOutcomes(t *testing.T) {
 		})
 	}
 	// No recorder configured: a verified POST is a 503, GET and HEAD still work.
-	h := &Handler{Origin: unsubOrigin, Links: keys}
+	h := &Handler{Links: keys}
 	if w := unsubRequest(h, http.MethodPost, link, formType, "List-Unsubscribe=One-Click"); w.Code != 503 {
 		t.Fatal("POST without a recorder", w.Code)
 	}
@@ -294,7 +298,7 @@ func TestUnsubscribePostStorageOutcomes(t *testing.T) {
 		t.Fatal("GET without a recorder", w.Code)
 	}
 	// No keys at all: every path is a 404.
-	if w := unsubRequest(&Handler{Origin: unsubOrigin}, http.MethodGet, link, "", ""); w.Code != 404 {
+	if w := unsubRequest(&Handler{}, http.MethodGet, link, "", ""); w.Code != 404 {
 		t.Fatal("GET without keys", w.Code)
 	}
 }
@@ -304,7 +308,7 @@ func TestUnsubscribePostStaysUnsupportedForOpenAndClick(t *testing.T) {
 	v := &fakeVisitor{}
 	h := &Handler{Visitor: v, Unsubscribes: &fakeUnsubscribes{}}
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/t/o/v2/"+strings.Repeat("0", 32)+"/AAAA", nil))
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/t/o/v3/"+strings.Repeat("0", 32)+"/AAAA", nil))
 	if w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != "GET, HEAD" || v.calls != 0 {
 		t.Fatal("POST to an open link", w.Code)
 	}

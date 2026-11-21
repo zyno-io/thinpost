@@ -23,6 +23,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/admin"
 	"github.com/zyno-io/thinpost/internal/controlapp"
 	"github.com/zyno-io/thinpost/internal/controlbridge"
+	"github.com/zyno-io/thinpost/internal/customdomain"
 	"github.com/zyno-io/thinpost/internal/envguard"
 	"github.com/zyno-io/thinpost/internal/httpapi"
 	"github.com/zyno-io/thinpost/internal/messagebody"
@@ -137,7 +138,7 @@ func run() error {
 		return errors.New("operator identity initialization failed")
 	}
 	repository := &postgres.Repository{DB: db, Generation: config.Generation, WebhookDestinations: config.WebhookDestinations}
-	operator := &admin.Handler{Authenticator: auth, Store: repository, WebhookHistory: repository, PolicyHolds: repository, TrackingHolds: repository, AppStatus: repository, Suppressions: repository, Operations: repository, AuthConfig: &config.PublicAuth, DNS: net.DefaultResolver, MX: net.DefaultResolver, ReverseDNS: net.DefaultResolver, CNAME: net.DefaultResolver, WebhookDestinations: config.WebhookDestinations}
+	operator := &admin.Handler{Authenticator: auth, Store: repository, WebhookHistory: repository, PolicyHolds: repository, TrackingHolds: repository, AppStatus: repository, Suppressions: repository, Operations: repository, AuthConfig: &config.PublicAuth, DNS: net.DefaultResolver, MX: net.DefaultResolver, ReverseDNS: net.DefaultResolver, CNAME: net.DefaultResolver, AdminHost: config.AdminHost, WebhookDestinations: config.WebhookDestinations}
 	// Signing keys live in the database, sealed under the object keyring, so
 	// signing (and with it submission, tracking and message preparation) is
 	// available exactly when the keyring is. keys stays nil without it.
@@ -148,7 +149,20 @@ func run() error {
 	defer stopHoldExpiry()
 	// Custom bounce domains are rechecked by every replica; the store leases
 	// each due row to one of them.
-	stopDomainChecks := startDomainChecks(ctx, newDomainChecker(bounceDomainKind(repository, net.DefaultResolver)))
+	// Apps may use their own tracking domains only when the console has its own
+	// hostname (THINPOST_ADMIN_ORIGIN), so it can never answer on a customer's.
+	customTrackingDomains := config.Tracking != nil && config.AdminHost != ""
+	domainKinds := []domainKind{bounceDomainKind(repository, net.DefaultResolver)}
+	if config.Tracking != nil {
+		// Tracking domains are checked by replicas with tracking configured:
+		// the proof of "this deployment" needs the tracking link keys.
+		if host, err := trackingHost(config.Tracking.Origin); err == nil {
+			trackingChecker := &customdomain.TrackingChecker{Resolver: net.DefaultResolver, Target: host, Verify: config.Tracking.Links.VerifyHostCheck, Allow: webhook.PublicAddress}
+			operator.TrackingChecker = trackingChecker
+			domainKinds = append(domainKinds, trackingDomainKind(repository, trackingChecker))
+		}
+	}
+	stopDomainChecks := startDomainChecks(ctx, newDomainChecker(domainKinds...))
 	defer stopDomainChecks()
 	var objects *objectstore.EncryptedStore
 	var objectKeyring *objectstore.Keyring
@@ -236,8 +250,8 @@ func run() error {
 		if trackingErr != nil {
 			return trackingErr
 		}
-		trackingPreparation = &preparation.TrackingConfig{Origin: config.Tracking.Origin, Links: config.Tracking.Links, EventLimit: config.Tracking.EventLimit, Objects: protected}
-		trackingHandler = &tracking.Handler{Origin: config.Tracking.Origin, Links: config.Tracking.Links, Visitor: &tracking.Service{Repository: repository, Objects: protected}, Unsubscribes: repository}
+		trackingPreparation = &preparation.TrackingConfig{Origin: config.Tracking.Origin, CustomDomains: customTrackingDomains, Links: config.Tracking.Links, EventLimit: config.Tracking.EventLimit, Objects: protected}
+		trackingHandler = &tracking.Handler{Links: config.Tracking.Links, Visitor: &tracking.Service{Repository: repository, Objects: protected}, Unsubscribes: repository}
 	}
 	if keys != nil {
 		preparer := &preparation.Service{Repository: repository, Objects: objects, Keys: keys, Tracking: trackingPreparation}
@@ -292,7 +306,8 @@ func run() error {
 	smtpIntake := bridgeConfig != nil && bridgeConfig.Submission != nil
 	runtimeInfo := &admin.RuntimeInfo{Features: admin.RuntimeFeatures{Submission: handler != nil, Tracking: config.Tracking != nil, SMTPSubmission: smtpIntake}}
 	if config.Tracking != nil {
-		runtimeInfo.Tracking = &admin.RuntimeTracking{Origin: config.Tracking.Origin, LinkEventLimit: config.Tracking.EventLimit}
+		target, _ := trackingHost(config.Tracking.Origin)
+		runtimeInfo.Tracking = &admin.RuntimeTracking{Origin: config.Tracking.Origin, LinkEventLimit: config.Tracking.EventLimit, CustomDomains: customTrackingDomains, CNAMETarget: target}
 	}
 	runtimeInfo.Features.RecipientPolicy = recipients.Mode()
 	operator.Runtime = runtimeInfo

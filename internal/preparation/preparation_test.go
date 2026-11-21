@@ -449,7 +449,7 @@ func TestOneClickUnsubscribeIsPreparedPerDelivery(t *testing.T) {
 		t.Fatal("not committed")
 	}
 	seen := map[string]bool{}
-	handler := &tracking.Handler{Origin: "https://tracking.example.com", Links: keys}
+	handler := &tracking.Handler{Links: keys}
 	for _, delivery := range repo.deliveries {
 		data := objects.final[delivery.ObjectKey]
 		parsed, err := mail.ReadMessage(bytes.NewReader(data))
@@ -457,7 +457,7 @@ func TestOneClickUnsubscribeIsPreparedPerDelivery(t *testing.T) {
 			t.Fatal(err)
 		}
 		list := parsed.Header.Get("List-Unsubscribe")
-		if !strings.HasPrefix(list, "<https://tracking.example.com/t/u/v2/") || !strings.HasSuffix(list, ">") || strings.Contains(list, delivery.ID) || seen[list] {
+		if !strings.HasPrefix(list, "<https://tracking.example.com/t/u/v3/") || !strings.HasSuffix(list, ">") || strings.Contains(list, delivery.ID) || seen[list] {
 			t.Fatal("unexpected or shared unsubscribe URL")
 		}
 		seen[list] = true
@@ -687,5 +687,86 @@ func TestPreparationAcceptsCeilingSizeAttachmentSource(t *testing.T) {
 		if !tc.ok && len(repo.deliveries) != 0 {
 			t.Fatal("source above the ceiling prepared")
 		}
+	}
+}
+
+// htmlAndListUnsubscribe prepares one tracked, one-click message and returns
+// the HTML body and List-Unsubscribe header of its first delivery.
+func htmlAndListUnsubscribe(t *testing.T, config *TrackingConfig, domain string) (string, string) {
+	t.Helper()
+	service, repo, objects, _ := setup(t)
+	trackedSource(t, objects)
+	repo.claim.ListUnsubscribe = true
+	repo.claim.TrackingDomain = domain
+	service.Tracking = config
+	if err := service.PrepareNext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := mail.ReadMessage(bytes.NewReader(objects.final[repo.deliveries[0].ObjectKey]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var html string
+	walkParts(t, textproto.MIMEHeader(parsed.Header), parsed.Body, func(h textproto.MIMEHeader, data []byte) {
+		if mediaType, _, _ := mime.ParseMediaType(h.Get("Content-Type")); mediaType == "text/html" {
+			html = string(data)
+		}
+	})
+	return html, parsed.Header.Get("List-Unsubscribe")
+}
+
+// The app's own tracking domain carries body links and the open pixel, but only
+// when the claim names one and custom domains are on; one-click unsubscribe
+// always stays on the deployment's origin.
+func TestPreparationUsesTheCustomTrackingOrigin(t *testing.T) {
+	keys := preparationLinkKeys(t)
+	config := func(custom bool) *TrackingConfig {
+		return &TrackingConfig{Origin: "https://tracking.example.com", CustomDomains: custom, Links: keys, EventLimit: 10, Objects: &fakeTrackingObjects{}}
+	}
+	const global, custom = "https://tracking.example.com/t/", "https://links.customer.example/t/"
+	for name, tc := range map[string]struct {
+		config *TrackingConfig
+		domain string
+		body   string
+	}{
+		"an eligible domain":                  {config(true), "links.customer.example", custom},
+		"custom domains off":                  {config(false), "links.customer.example", global},
+		"no domain on the claim":              {config(true), "", global},
+		"a domain that is not a valid host":   {config(true), "bad host.example", global},
+		"a name with a path or port smuggled": {config(true), "links.customer.example/x", global},
+	} {
+		t.Run(name, func(t *testing.T) {
+			html, list := htmlAndListUnsubscribe(t, tc.config, tc.domain)
+			if !strings.Contains(html, tc.body+"c/") || !strings.Contains(html, tc.body+"o/") {
+				t.Fatal("body links and pixel should use", tc.body, html)
+			}
+			other := global
+			if tc.body == global {
+				other = custom
+			}
+			if strings.Contains(html, other) {
+				t.Fatal("body mixes origins")
+			}
+			if !strings.HasPrefix(list, "<"+global+"u/v3/") {
+				t.Fatal("List-Unsubscribe must keep the global origin:", list)
+			}
+		})
+	}
+}
+
+// A link made for the custom domain verifies at the deployment: links are not
+// bound to a hostname.
+func TestCustomOriginLinksVerifyAnywhere(t *testing.T) {
+	keys := preparationLinkKeys(t)
+	html, _ := htmlAndListUnsubscribe(t, &TrackingConfig{Origin: "https://tracking.example.com", CustomDomains: true, Links: keys, EventLimit: 10, Objects: &fakeTrackingObjects{}}, "links.customer.example")
+	start := strings.Index(html, "https://links.customer.example/t/c/")
+	if start < 0 {
+		t.Fatal("no custom click link")
+	}
+	link := html[start:]
+	link = link[:strings.IndexAny(link, `"' <>`)]
+	request := httptest.NewRequest(http.MethodGet, "https://tracking.example.com"+strings.TrimPrefix(link, "https://links.customer.example"), nil)
+	if w := httptest.NewRecorder(); func() int { (&tracking.Handler{Links: keys}).ServeHTTP(w, request); return w.Code }() == http.StatusNotFound {
+		t.Fatal("a custom-origin link does not open at the deployment")
 	}
 }

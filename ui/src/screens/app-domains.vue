@@ -24,6 +24,9 @@
                             Each verified domain can also have its own <strong>bounce domain</strong>, so bounces come back to a name of yours and SPF passes for your domain too.
                             It's optional; without it, Thinpost's standard bounce address is used.
                         </p>
+                        <p>
+                            Where tracking is available, a verified domain can also have its own <strong>tracking domain</strong>, so links and the open-tracking image in your emails show your domain.
+                        </p>
                     </HelpButton>
                 </div>
                 <button type="button" class="btn primary" :disabled="!canRequest" :aria-describedby="app.active ? undefined : 'request-hint'" @click="openRequest">
@@ -158,6 +161,19 @@
             <div v-if="verifiedDomains.length && !domainsError" class="card-body bounce-panels" role="group" aria-label="Bounce domains">
                 <BounceDomainPanel v-for="domain in verifiedDomains" :key="domain.name" :app-id="app.id" :app-active="app.active" :can-act="canAct" :domain="domain" @changed="reloadDomains" />
             </div>
+
+            <div v-if="trackingPanelDomains.length && !domainsError" class="card-body bounce-panels" role="group" aria-label="Tracking domains">
+                <TrackingDomainPanel
+                    v-for="domain in trackingPanelDomains"
+                    :key="domain.name"
+                    :app-id="app.id"
+                    :app-active="app.active"
+                    :can-act="canAct"
+                    :domain="domain"
+                    :support="trackingSupport"
+                    @changed="reloadDomains"
+                />
+            </div>
         </section>
 
         <TestMessageModal
@@ -185,6 +201,7 @@ import { authState } from '@/auth';
 import { parseDkimKey, type DkimKeyView } from '@/dkim';
 import { formatDateTime } from '@/format';
 import { DefaultApi, type Domain } from '@/openapi-client-generated';
+import { loadRuntimeFeatures, runtimeTracking } from '@/runtime-features';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import BounceDomainPanel from '@/shared/components/bounce-domain-panel.vue';
 import DkimRecord from '@/shared/components/dkim-record.vue';
@@ -192,6 +209,7 @@ import HelpButton from '@/shared/components/help-button.vue';
 import DomainModal from '@/shared/components/domain-modal.vue';
 import Loader from '@/shared/components/loader.vue';
 import TestMessageModal from '@/shared/components/test-message-modal.vue';
+import TrackingDomainPanel from '@/shared/components/tracking-domain-panel.vue';
 import { useTestSend } from '@/test-send';
 
 type Action = 'verify' | 'switch' | 'cancel' | 'create';
@@ -221,6 +239,12 @@ const canAct = computed(() => isSignedIn.value && !busy.value && !isRequesting.v
 
 /** Verified domains each get a bounce-domain panel. */
 const verifiedDomains = computed(() => (domains.value ?? []).filter(d => d.active));
+
+/** What the deployment offers for custom tracking addresses; unknown until the runtime report loads. */
+const trackingSupport = computed(() => ({ available: runtimeTracking.value?.custom_domains === true, cnameTarget: runtimeTracking.value?.cname_target || null }));
+/** Tracking panels appear only where tracking exists: for every verified domain when apps may add their own address, else only for one that already has it. */
+const trackingPanelDomains = computed(() => (runtimeTracking.value ? verifiedDomains.value.filter(d => trackingSupport.value.available || d.tracking_domain) : []));
+void loadRuntimeFeatures();
 
 /** Domains with a record card: a pending key always, an active key when asked for. */
 const recordDomains = computed(() => (domains.value ?? []).filter(d => shownKey(d) !== null));

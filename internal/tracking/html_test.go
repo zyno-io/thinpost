@@ -31,12 +31,12 @@ func TestRewriteIssuesIndependentOpaqueRecipientMappings(t *testing.T) {
 	if len(mappings[0].Token) != 32 || len(mappings[1].Token) != 32 || mappings[0].Token == mappings[1].Token {
 		t.Fatal("tracking tokens were not independent 128-bit values")
 	}
-	if !strings.Contains(out, "https://track.example.com/t/c/v2/") || !strings.Contains(out, "https://track.example.com/t/o/v2/") || strings.Contains(out, "order=secret") || strings.Contains(out, mappings[0].Token) || strings.Contains(out, mappings[1].Token) {
+	if !strings.Contains(out, "https://track.example.com/t/c/v3/") || !strings.Contains(out, "https://track.example.com/t/o/v3/") || strings.Contains(out, "order=secret") || strings.Contains(out, mappings[0].Token) || strings.Contains(out, mappings[1].Token) {
 		t.Fatal("tracked links did not use opaque capabilities")
 	}
 	for _, m := range mappings {
-		link := regexp.MustCompile(`https://track\.example\.com/t/` + m.Kind[:1] + `/v2/[A-Za-z0-9_/-]+`).FindString(out)
-		hash, kind, destination, verr := options.Links.verify(options.Origin, strings.TrimPrefix(link, options.Origin))
+		link := regexp.MustCompile(`https://track\.example\.com/t/` + m.Kind[:1] + `/v3/[A-Za-z0-9_/-]+`).FindString(out)
+		hash, kind, destination, verr := options.Links.verify(strings.TrimPrefix(link, options.Origin))
 		want, _ := HashToken(m.Token)
 		if link == "" || verr != nil || hash != want || kind != m.Kind || destination != m.Destination {
 			t.Fatal("link does not carry its mapping", m.Kind, verr)

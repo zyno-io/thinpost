@@ -356,6 +356,9 @@ type Domain struct {
 	BounceDomain      *BounceDomain `json:"bounce_domain,omitempty"`
 	CNAMETarget       *string       `json:"cname_target,omitempty"`
 	CNAMETargetStatus string        `json:"cname_target_status,omitempty"`
+	// TrackingDomain is the domain's own tracking address, if it has one
+	// (removed ones are not shown here).
+	TrackingDomain *TrackingDomain `json:"tracking_domain,omitempty"`
 }
 
 // DKIMKey is a key Thinpost generated and the TXT record that publishes it.
@@ -456,7 +459,13 @@ type Handler struct {
 	ReverseDNS ReverseResolver
 	// CNAME serves the bounce-domain check; without it that check is
 	// unavailable.
-	CNAME          customdomain.Resolver
+	CNAME customdomain.Resolver
+	// TrackingChecker serves the tracking-domain check; without it that check
+	// is unavailable. Only replicas with tracking configured have one.
+	TrackingChecker TrackingDomainChecker
+	// AdminHost is the hostname of THINPOST_ADMIN_ORIGIN, which a tracking
+	// domain may never use. Empty when not set.
+	AdminHost      string
 	Webhooks       WebhookAdmin
 	WebhookHistory WebhookHistoryStore
 	PolicyHolds    PolicyHoldStore
@@ -523,7 +532,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := strings.Split(r.URL.Path, "/")
-	if h.operationsRoute(w, r, principal.Subject) || h.feedbackRoute(w, r, principal.Subject) || h.sendingIPRoute(w, r, principal.Subject) {
+	if h.operationsRoute(w, r, principal.Subject) || h.feedbackRoute(w, r, principal.Subject) || h.sendingIPRoute(w, r, principal.Subject) || h.trackingDomainsRoute(w, r) {
 		return
 	}
 	if r.URL.Path == "/api/v1/apps" {
@@ -679,6 +688,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				storeError(w, err)
 				return
 			}
+			if err = h.attachTrackingDomains(r.Context(), appID, domains); err != nil {
+				storeError(w, err)
+				return
+			}
 			respond(w, http.StatusOK, map[string]any{"domains": domains})
 		case http.MethodPost:
 			var req struct {
@@ -705,7 +718,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(path) >= 8 && len(path) <= 10 && path[5] == "domains" {
-		if h.bounceDomainRoute(w, r, principal.Subject, appID, path[6:]) || h.domainKeyRoute(w, r, principal.Subject, appID, path[6:]) {
+		if h.bounceDomainRoute(w, r, principal.Subject, appID, path[6:]) || h.trackingDomainRoute(w, r, principal.Subject, appID, path[6:]) || h.domainKeyRoute(w, r, principal.Subject, appID, path[6:]) {
 			return
 		}
 	}

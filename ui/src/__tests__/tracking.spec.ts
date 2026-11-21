@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
     getRuntime: vi.fn(),
     getTrackingQuota: vi.fn(),
     setTrackingQuota: vi.fn(),
+    listAppDomains: vi.fn(),
     getListUnsubscribe: vi.fn(),
     setListUnsubscribe: vi.fn(),
     getTrackingDefaults: vi.fn(),
@@ -91,7 +92,12 @@ describe('tracking rules', () => {
 
     it('accepts only contract-valid responses', () => {
         expect(parseRuntimeInfo(disabled).tracking).toBeUndefined();
-        expect(parseRuntimeInfo(enabled).tracking).toEqual({ origin: 'https://t.example.com', link_event_limit: 25 });
+        // A server that predates custom tracking domains omits the new fields: no custom domains.
+        expect(parseRuntimeInfo(enabled).tracking).toEqual({ origin: 'https://t.example.com', link_event_limit: 25, custom_domains: false, cname_target: '' });
+        const custom = { ...enabled, tracking: { ...enabled.tracking, custom_domains: true, cname_target: 'links.example.net' } };
+        expect(parseRuntimeInfo(custom).tracking).toEqual({ origin: 'https://t.example.com', link_event_limit: 25, custom_domains: true, cname_target: 'links.example.net' });
+        // Only a literal true turns custom domains on, and a malformed target is dropped.
+        expect(parseRuntimeInfo({ ...enabled, tracking: { ...enabled.tracking, custom_domains: 'yes', cname_target: 5 } }).tracking).toMatchObject({ custom_domains: false, cname_target: '' });
         for (const body of [null, '<html>', {}, { features: { submission: true } }, { ...enabled, tracking: { origin: '', link_event_limit: 5 } }, { ...enabled, tracking: { origin: 'x', link_event_limit: 0 } }]) {
             expect(() => parseRuntimeInfo(body)).toThrow("something the console didn't understand");
         }
@@ -121,6 +127,56 @@ describe('tracking tab', () => {
         expect(facts).toContain('Over limit7');
         expect(facts).toContain('2026-11-11');
         expect(await openHelp(wrapper!, 'daily tracking limit')).toContain('Tracked links always work and redirect');
+    });
+
+    describe('own tracking address summary', () => {
+        const withCustom = { ...enabled, tracking: { ...enabled.tracking, custom_domains: true, cname_target: 'links.example.net' } };
+        const domain = (name: string, patch: object = {}) => ({ name, active: true, created_at: '2026-10-02T12:00:00Z', ...patch });
+        const summary = () => wrapper!.find('[data-testid="tracking-domains-summary"]');
+
+        it('says it is not turned on when the installation does not offer it, and does not load domains', async () => {
+            await mountTab();
+            expect(summary().text()).toContain("isn't turned on for this Thinpost installation");
+            expect(api.listAppDomains).not.toHaveBeenCalled();
+        });
+
+        it('is hidden when tracking itself is off', async () => {
+            api.getRuntime.mockResolvedValue({ data: disabled });
+            await mountTab();
+            expect(summary().exists()).toBe(false);
+        });
+
+        it('lists each verified domain read-only, with where its tracking address stands', async () => {
+            api.getRuntime.mockResolvedValue({ data: withCustom });
+            api.listAppDomains.mockResolvedValue({
+                data: {
+                    domains: [
+                        domain('a.example.com', { tracking_domain: { name: 'links.a.example.com', state: 'active', checking: false, https_result: 'ok', created_at: 'x' } }),
+                        domain('b.example.com', { tracking_domain: { name: 'links.b.example.com', state: 'pending', checking: false, created_at: 'x' } }),
+                        domain('c.example.com'),
+                        domain('d.example.com', { active: false })
+                    ]
+                }
+            });
+            await mountTab();
+            expect(api.listAppDomains).toHaveBeenCalledWith({ path: { appId: APP_ID } });
+            expect(summary().find('[data-testid="tracking-summary-a.example.com"]').text()).toContain('links.a.example.com');
+            expect(summary().find('[data-testid="tracking-summary-a.example.com"]').text()).toContain('In use');
+            expect(summary().find('[data-testid="tracking-summary-b.example.com"]').text()).toContain('Waiting for setup');
+            expect(summary().find('[data-testid="tracking-summary-c.example.com"]').text()).toContain('Standard tracking address');
+            expect(summary().find('[data-testid="tracking-summary-d.example.com"]').exists()).toBe(false);
+            // Read-only: it links to the Sending domains tab and has no editing controls.
+            expect(summary().findAll('button').filter(b => /Add|Change|Remove|Check/.test(b.text()))).toHaveLength(0);
+            expect(summary().find('a').text()).toContain('Manage on Sending domains');
+        });
+
+        it('shows a load failure as unavailable, not as no domains', async () => {
+            api.getRuntime.mockResolvedValue({ data: withCustom });
+            api.listAppDomains.mockRejectedValue(httpError(503));
+            await mountTab();
+            expect(summary().text()).toContain("couldn't be loaded right now");
+            expect(summary().text()).not.toContain('No sending domain has its own tracking address');
+        });
     });
 
     it('says what disabled tracking means and invents nothing', async () => {
