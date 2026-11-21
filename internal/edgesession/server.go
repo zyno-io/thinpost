@@ -336,6 +336,9 @@ func (s *Server) Connect(stream grpc.BidiStreamingServer[controlv1.ControlFrame,
 		capabilities = append(capabilities, edgeprotocol.CapSubmission)
 		submissionPorts = s.submission.reportedPorts()
 	}
+	// Edge-only: this worker accepts b+<token> bounces at any recipient domain.
+	// Control never sends it in Open and does not need to negotiate it.
+	capabilities = append(capabilities, edgeprotocol.CapAnyBounceDomain)
 	journalID, err := s.journal.Identity()
 	if err != nil || !journal.ValidIdentity(journalID) || open.JournalId != journalID {
 		return status.Error(codes.FailedPrecondition, "journal identity mismatch")

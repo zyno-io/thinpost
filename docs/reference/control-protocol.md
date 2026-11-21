@@ -160,6 +160,8 @@ First frame, control plane to Edge.
 
 A capability list holds at most 8 entries of at most 32 characters from `a-z 0-9 / - _ .`. Unknown capabilities are ignored.
 
+`bounce-any-domain/1` is edge-only: the Edge always lists it in `Ready.capabilities` and the control plane never sends it in `Open`. It means the Edge accepts a bounce recipient `b+<32 lowercase hex>` at any recipient domain, not only at its own host names. A domain with an inbound route is still routed as inbound, and a bounce still gets `250` only after the control plane has stored and committed it. No frames depend on it, so there is nothing to negotiate and the protocol version stays 7.
+
 ### Ready
 
 | Field | Type | Meaning |
@@ -167,7 +169,7 @@ A capability list holds at most 8 entries of at most 32 characters from `a-z 0-9
 | `worker_id`, `epoch`, `session_id`, `protocol_version`, `journal_id` | | Echo `Open`. The control plane rejects any mismatch. |
 | `source_addresses` | repeated string | The addresses the Edge can send from, primary first. |
 | `bounce_domains` | repeated string | Deprecated and unused. The Edge no longer sends it and the control plane ignores it; a source's bounce domain is its `source_hostnames` entry. The field number stays reserved for older control planes that still parse it. |
-| `capabilities` | repeated string | Optional features the Edge supports (`inbound/1`, `submission/1`). |
+| `capabilities` | repeated string | Optional features the Edge supports (`inbound/1`, `submission/1`, `bounce-any-domain/1`). |
 | `source_hostnames` | repeated string | The SMTP name each source address greets with, one per `source_addresses` entry in the same order. Required for deliveries. This name is both the HELO name and the return-path domain for the address. |
 | `submission_ports` | repeated uint32 | Public ports on which the Edge currently accepts SMTP AUTH (465 and 587). Observed availability only; never used to tell clients where to connect. Meaningful only with `submission/1`. |
 

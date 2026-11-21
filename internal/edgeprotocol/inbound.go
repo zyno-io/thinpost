@@ -15,6 +15,11 @@ import (
 // control, Ready.capabilities from the worker) before any inbound frame is sent.
 const CapInbound = "inbound/1"
 
+// CapAnyBounceDomain is advertised by the edge only (Ready.capabilities): it
+// accepts a b+<32 lowercase hex> recipient at any domain that is not an inbound
+// route, not just its own HELO names. Control never sends it in Open.
+const CapAnyBounceDomain = "bounce-any-domain/1"
+
 const (
 	// MaxInboundAssembleBytes is the largest body an assembler will hold. The
 	// SMTP receiver limits inbound mail to MaxInboundBytes; control rejects

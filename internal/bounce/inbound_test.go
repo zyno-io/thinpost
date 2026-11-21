@@ -139,6 +139,82 @@ func TestInboundRoutingDecisionTable(t *testing.T) {
 	}
 }
 
+func TestBounceTokenAtAnyDomain(t *testing.T) {
+	const tok = "b+0123456789abcdef0123456789abcdef"
+	for _, tc := range []struct {
+		name, rcpt string
+		code       int
+		enhanced   string
+		counter    string // expected to be 1; empty for none
+	}{
+		{"own HELO name", tok + "@bounce.example", 250, "", ""},
+		{"own HELO name, bad token stays strict", "b+XYZ@bounce.example", 550, "5.1.1", ""},
+		{"inbound route accepts", "user@a.example", 250, "", "rcpt_accept"},
+		{"inbound route tempfail", "user@paused.test", 451, "4.3.0", "rcpt_tempfail_state"},
+		{"inbound route no session", "user@nosession.te", 451, "4.3.0", "rcpt_tempfail_no_session"},
+		{"token at unknown domain", tok + "@custom.example", 250, "", "rcpt_bounce_other_domain"},
+		{"token at unknown domain, case-insensitive domain", tok + "@Custom.Example", 250, "", "rcpt_bounce_other_domain"},
+		{"inbound wins over a token", tok + "@a.example", 250, "", "rcpt_accept"},
+		{"inbound tempfail wins over a token", tok + "@paused.test", 451, "4.3.0", "rcpt_tempfail_state"},
+		{"plain local part at unknown domain", "user@custom.example", 550, "5.7.1", "rcpt_relay_denied"},
+		{"uppercase hex is not a bounce", "b+0123456789ABCDEF0123456789abcdef@custom.example", 550, "5.7.1", "rcpt_relay_denied"},
+		{"short token is not a bounce", "b+0123456789abcdef@custom.example", 550, "5.7.1", "rcpt_relay_denied"},
+		{"long token is not a bounce", tok + "00@custom.example", 550, "5.7.1", "rcpt_relay_denied"},
+		{"non-hex token is not a bounce", "b+0123456789abcdef0123456789abcdeg@custom.example", 550, "5.7.1", "rcpt_relay_denied"},
+		{"missing b+ prefix", "0123456789abcdef0123456789abcdef@custom.example", 550, "5.7.1", "rcpt_relay_denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, _, stats := setupInbound(t, newFake())
+			if err := client.Mail("sender@example.org"); err != nil {
+				t.Fatal(err)
+			}
+			code, text := smtpReply(t, client.Rcpt(tc.rcpt))
+			if code != tc.code || tc.enhanced != "" && !strings.Contains(text, tc.enhanced) {
+				t.Fatalf("%s: got %d %q", tc.rcpt, code, text)
+			}
+			if tc.counter != "" && stats.get(tc.counter) != 1 {
+				t.Fatalf("%s: counter %s = %d", tc.rcpt, tc.counter, stats.get(tc.counter))
+			}
+			if tc.counter != "rcpt_bounce_other_domain" && stats.get("rcpt_bounce_other_domain") != 0 {
+				t.Fatal("bounce-other-domain counted for a non-bounce recipient")
+			}
+		})
+	}
+}
+
+// A bounce at a custom domain is one recipient, never mixed with inbound mail.
+func TestBounceAtOtherDomainTransactionRules(t *testing.T) {
+	const tok = "b+0123456789abcdef0123456789abcdef"
+	client, _, _ := setupInbound(t, newFake())
+	if err := client.Mail("sender@example.org"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Rcpt(tok + "@custom.example"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Rcpt("user@a.example"); smtpCode(err) != 452 {
+		t.Fatalf("inbound after bounce: %v", err)
+	}
+	if err := client.Rcpt(tok + "@other.example"); smtpCode(err) != 452 {
+		t.Fatalf("second bounce: %v", err)
+	}
+}
+
+// With no inbound feature, a token at another domain is still a bounce and
+// anything else stays "unknown recipient".
+func TestBounceAtOtherDomainWithoutInbound(t *testing.T) {
+	client, _ := setup(t, 1<<20)
+	if err := client.Mail("sender@example.org"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := smtpReply(t, client.Rcpt("user@custom.example")); code != 550 {
+		t.Fatalf("plain: %d", code)
+	}
+	if err := client.Rcpt("b+0123456789abcdef0123456789abcdef@custom.example"); err != nil {
+		t.Fatalf("token: %v", err)
+	}
+}
+
 func TestInboundClassMixingAndRecipientCaps(t *testing.T) {
 	client, _, _ := setupInbound(t, newFake())
 	if err := client.Mail("sender@example.org"); err != nil {

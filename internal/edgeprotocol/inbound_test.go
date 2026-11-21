@@ -118,6 +118,9 @@ func TestCapabilities(t *testing.T) {
 	if !ValidCapabilities([]string{CapInbound, "future/2"}) || !ValidCapabilities(nil) {
 		t.Fatal("valid capabilities refused")
 	}
+	if !ValidCapabilities([]string{CapInbound, CapSubmission, CapAnyBounceDomain}) {
+		t.Fatal("the edge's capability list must be valid")
+	}
 	if ValidCapabilities([]string{""}) || ValidCapabilities([]string{"Has Space"}) || ValidCapabilities(make([]string, MaxCapabilities+1)) || ValidCapabilities([]string{strings.Repeat("a", 33)}) {
 		t.Fatal("malformed capabilities accepted")
 	}

@@ -38,9 +38,10 @@ type Config struct {
 	MaxConcurrent  int
 	ForwardTimeout time.Duration
 	Forwarder      Forwarder
-	// Inbound is optional. Without it only the bounce domains are accepted and
-	// every other domain is refused as before. The limits below apply to inbound
-	// mail only; zero values take the defaults.
+	// Inbound is optional. Without it the bounce domains and bounce addresses
+	// (b+<token>) at any domain are accepted and every other recipient is
+	// refused. The limits below apply to inbound mail only; zero values take
+	// the defaults.
 	Inbound               Inbound
 	InboundMaxBytes       int64
 	InboundConcurrent     int
@@ -153,9 +154,8 @@ func (l redactedLogger) Printf(format string, _ ...any) {
 }
 func (l redactedLogger) Println(...any) { l.logf("bounce SMTP connection error") }
 
-// acceptsDomain is the one place that decides whether a recipient domain takes
-// bounces. A later change to accept b+<token> at any domain (per-app bounce
-// domains) edits only this function.
+// acceptsDomain reports whether a recipient domain is one of the edge's own
+// bounce (HELO) names. Bounce tokens at other domains are classified in Rcpt.
 func (b *backend) acceptsDomain(domain string) bool {
 	for _, accepted := range b.config.Domains {
 		if strings.EqualFold(domain, accepted) {
@@ -201,27 +201,59 @@ func (s *session) Rcpt(address string, _ *smtp.RcptOptions) error {
 	if !ok {
 		return s.invalidRecipient(unknownRecipient())
 	}
+	// 1. The edge's own HELO names: bounce, with the strict token rules.
 	if s.backend.acceptsDomain(domain) {
-		// The bounce path is unchanged: one recipient, b+<token> only.
-		if s.txn.class != classNone {
-			return &smtp.SMTPError{Code: 452, EnhancedCode: smtp.EnhancedCode{4, 5, 3}, Message: "One recipient per message"}
-		}
-		if !strings.HasPrefix(local, "b+") {
-			return s.invalidRecipient(unknownRecipient())
-		}
-		token := strings.TrimPrefix(local, "b+")
-		decoded, err := hex.DecodeString(token)
-		if err != nil || len(decoded) != 16 || token != strings.ToLower(token) {
-			return s.invalidRecipient(unknownRecipient())
-		}
-		s.token = token
-		s.txn.class = classBounce
-		return nil
+		return s.bounceRecipient(local)
 	}
-	if s.backend.config.Inbound == nil {
+	// 2. A domain with a live inbound route (any state but unknown) is inbound,
+	// including its tempfail states: inbound wins over a b+ local part.
+	inbound := s.backend.config.Inbound
+	if inbound != nil {
+		if group, state := inbound.Lookup(domain); state != RouteUnknown {
+			return s.inboundRecipient(local, domain, group, state)
+		}
+	}
+	// 3. b+<32 lowercase hex> at any other domain is a bounce: the Return-Path
+	// domain is the sender's choice (control decides it), and the token is still
+	// validated by control before anything is acknowledged.
+	if isBounceLocal(local) {
+		// Counted only once accepted, so a refused mix of classes isn't.
+		err := s.bounceRecipient(local)
+		if err == nil {
+			s.count("rcpt_bounce_other_domain")
+		}
+		return err
+	}
+	if inbound == nil {
 		return s.invalidRecipient(unknownRecipient())
 	}
-	return s.inboundRecipient(local, domain)
+	s.count("rcpt_relay_denied")
+	return s.invalidRecipient(relayDenied())
+}
+
+// isBounceLocal reports whether a local part is b+ followed by exactly 32
+// lowercase hex digits (a 128-bit bounce token).
+func isBounceLocal(local string) bool {
+	token, ok := strings.CutPrefix(local, "b+")
+	if !ok || len(token) != 32 {
+		return false
+	}
+	decoded, err := hex.DecodeString(token)
+	return err == nil && len(decoded) == 16 && token == strings.ToLower(token)
+}
+
+// bounceRecipient accepts one b+<token> recipient. The bounce path allows a
+// single recipient and nothing else in the transaction.
+func (s *session) bounceRecipient(local string) error {
+	if s.txn.class != classNone {
+		return &smtp.SMTPError{Code: 452, EnhancedCode: smtp.EnhancedCode{4, 5, 3}, Message: "One recipient per message"}
+	}
+	if !isBounceLocal(local) {
+		return s.invalidRecipient(unknownRecipient())
+	}
+	s.token = strings.TrimPrefix(local, "b+")
+	s.txn.class = classBounce
+	return nil
 }
 func (s *session) Data(reader io.Reader) error {
 	switch s.txn.class {
