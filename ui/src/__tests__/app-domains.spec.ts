@@ -15,6 +15,10 @@ const api = vi.hoisted(() => ({
     setAppBounceDomain: vi.fn(),
     checkAppBounceDomain: vi.fn(),
     deleteAppBounceDomain: vi.fn(),
+    setAppTrackingDomain: vi.fn(),
+    checkAppTrackingDomain: vi.fn(),
+    deleteAppTrackingDomain: vi.fn(),
+    getRuntime: vi.fn(),
     getPublicConfig: vi.fn()
 }));
 vi.mock('@/openapi-client-generated', () => ({ DefaultApi: api }));
@@ -30,6 +34,7 @@ vi.mock('@zyno-io/vue-foundation', async importOriginal => {
 
 const { authState } = await import('@/auth');
 const { default: AppDomains } = await import('@/screens/app-domains.vue');
+const { resetRuntimeFeatures } = await import('@/runtime-features');
 
 const APP_ID = '0123456789abcdef0123456789abcdef';
 const app = { id: APP_ID, name: 'Billing', active: true, created_at: '2026-10-01T12:00:00Z' };
@@ -80,6 +85,7 @@ beforeEach(() => {
     authState.status = 'signed-in';
     localStorage.clear();
     sessionStorage.clear();
+    resetRuntimeFeatures();
     api.listApps.mockResolvedValue({ data: { apps: [app] } });
 });
 
@@ -492,5 +498,181 @@ describe('bounce domains', () => {
         await mountAt(`/apps/${APP_ID}/domains`);
         const change = bouncePanel().findAll('button').find(b => b.text().includes('Change'))!;
         expect(change.attributes('disabled')).toBeDefined();
+    });
+});
+
+describe('tracking domains', () => {
+    const runtime = (patch: object = {}) => ({
+        data: { features: { submission: true, tracking: true }, tracking: { origin: 'https://links.example.net', link_event_limit: 25, custom_domains: true, cname_target: 'links.example.net', ...patch } }
+    });
+    const tracking = (patch: object = {}) => ({ name: 'links.mail.example.com', state: 'pending', checking: false, created_at: '2026-11-21T12:00:00Z', ...patch });
+    const withTracking = (patch: object = {}) => ({ ...verified, tracking_domain: tracking(patch) });
+
+    function trackingPanel() {
+        return wrapper!.find('[data-testid="tracking-mail.example.com"]');
+    }
+    const panelButton = (label: string) => trackingPanel().findAll('button').find(b => b.text().includes(label))!;
+
+    beforeEach(() => {
+        api.getRuntime.mockResolvedValue(runtime());
+    });
+
+    it('offers a tracking domain on a verified domain, and not on one that is not verified', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [pending, { ...verified, name: 'ok.example.com' }] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.find('[data-testid="tracking-mail.example.com"]').exists()).toBe(false);
+        expect(wrapper!.find('[data-testid="tracking-ok.example.com"]').exists()).toBe(true);
+        expect(wrapper!.text()).toContain("use Thinpost's standard tracking address");
+        const help = await openHelp(wrapper!, 'tracking domains');
+        expect(help).toContain('Cloudflare');
+        expect(help).toContain('One-click unsubscribe');
+        expect(help).toContain('certificate');
+    });
+
+    it('shows no tracking panel when tracking is off or the runtime is unknown', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.getRuntime.mockResolvedValue({ data: { features: { submission: true, tracking: false } } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(trackingPanel().exists()).toBe(false);
+        wrapper!.unmount();
+        resetRuntimeFeatures();
+        api.getRuntime.mockRejectedValue(networkError());
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(trackingPanel().exists()).toBe(false);
+    });
+
+    it('offers no add button when custom domains are off, but still shows an existing one', async () => {
+        api.getRuntime.mockResolvedValue(runtime({ custom_domains: false }));
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(trackingPanel().exists()).toBe(false);
+        wrapper!.unmount();
+        resetRuntimeFeatures();
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withTracking({ state: 'active', https_result: 'ok' })] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(trackingPanel().exists()).toBe(true);
+        expect(hasButton('Add tracking domain')).toBe(false);
+        expect(panelButton('Change')).toBeUndefined();
+        expect(panelButton('Remove')).toBeDefined();
+        // Even an active row is not in use, and no record to add is offered.
+        expect(trackingPanel().find('[data-testid="tracking-status"]').text()).toBe('Not in use');
+        expect(trackingPanel().find('[data-testid="tracking-message"]').text()).toContain("this installation doesn't use your own tracking address right now");
+        expect(inputValues()).toEqual([]);
+        expect(trackingPanel().text()).not.toContain('CNAME record');
+        wrapper!.unmount();
+        resetRuntimeFeatures();
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withTracking({ state: 'pending' })] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(trackingPanel().find('[data-testid="tracking-status"]').text()).toBe('Not in use');
+        expect(inputValues()).toEqual([]);
+    });
+
+    it('adds a tracking domain after checking the name against the sending domain', async () => {
+        api.listAppDomains.mockResolvedValueOnce({ data: { domains: [verified] } }).mockResolvedValue({ data: { domains: [withTracking()] } });
+        api.setAppTrackingDomain.mockResolvedValue({ data: tracking() });
+        await mountAt(`/apps/${APP_ID}/domains`);
+
+        await panelButton('Add tracking domain').trigger('click');
+        const input = () => wrapper!.find<HTMLInputElement>('input[placeholder="links.mail.example.com"]');
+        await input().setValue('links.example.org');
+        await wrapper!.find('form').trigger('submit');
+        await flushPromises();
+        expect(api.setAppTrackingDomain).not.toHaveBeenCalled();
+        expect(wrapper!.text()).toContain('Use a subdomain of mail.example.com');
+
+        await input().setValue(' Links.Mail.Example.com ');
+        await wrapper!.find('form').trigger('submit');
+        await flushPromises();
+        expect(api.setAppTrackingDomain).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' }, body: { name: 'links.mail.example.com' } });
+        expect(vf.showToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Tracking domain saved for mail.example.com' }));
+        expect(api.listAppDomains).toHaveBeenCalledTimes(2);
+        // The record to add shows the deployment's tracking host.
+        expect(trackingPanel().text()).toContain('Waiting for DNS record');
+        expect(inputValues()).toContain('links.example.net');
+        expect(inputValues()).toContain('links.mail.example.com');
+    });
+
+    it.each([
+        [400, 'Use a subdomain of mail.example.com, such as links.mail.example.com'],
+        [409, "can't be used"],
+        [503, 'temporarily unavailable']
+    ])('explains a %s answer when saving', async (status, expected) => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.setAppTrackingDomain.mockRejectedValue(httpError(status));
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await panelButton('Add tracking domain').trigger('click');
+        await wrapper!.find<HTMLInputElement>('input[placeholder="links.mail.example.com"]').setValue('links.mail.example.com');
+        await wrapper!.find('form').trigger('submit');
+        await flushPromises();
+        expect(wrapper!.text()).toContain(expected);
+        expect(vf.showToast).not.toHaveBeenCalled();
+    });
+
+    it('tells the waiting-for-a-secure-connection story once the DNS record is right', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withTracking({ dns_result: 'ok', https_result: 'certificate' })] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(trackingPanel().find('[data-testid="tracking-status"]').text()).toBe('Waiting for a secure connection');
+        const message = trackingPanel().find('[data-testid="tracking-message"]').text();
+        expect(message).toContain('Your DNS record is right; your Thinpost administrator still needs to finish setting up this address.');
+        expect(message).toContain('Links will start using it on their own once it works.');
+    });
+
+    it('shows an active domain as in use, with its certificate expiry, without the record to add', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withTracking({ state: 'active', dns_result: 'wrong_target', https_result: 'ok', certificate_expires_at: '2027-01-02T03:04:05Z', checked_at: '2026-11-21T12:30:00Z' })] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(trackingPanel().find('[data-testid="tracking-status"]').text()).toBe('In use');
+        // A proxied name never matches the DNS record and is still in use.
+        expect(trackingPanel().find('[data-testid="tracking-message"]').text()).toContain("One-click unsubscribe links keep using Thinpost's standard address");
+        expect(inputValues()).toEqual([]);
+        expect(trackingPanel().text()).toContain('certificate expires');
+        expect(trackingPanel().text()).toContain('Last checked');
+    });
+
+    it('checks now and reads the list again', async () => {
+        api.listAppDomains.mockResolvedValueOnce({ data: { domains: [withTracking()] } }).mockResolvedValue({ data: { domains: [withTracking({ state: 'active', https_result: 'ok' })] } });
+        api.checkAppTrackingDomain.mockResolvedValue({ data: tracking({ state: 'active', https_result: 'ok' }) });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await panelButton('Check now').trigger('click');
+        await flushPromises();
+        expect(api.checkAppTrackingDomain).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' } });
+        expect(trackingPanel().find('[data-testid="tracking-status"]').text()).toBe('In use');
+    });
+
+    it.each([
+        [503, "couldn't run the check just now"],
+        [409, 'Another check was already running']
+    ])('explains a %s answer from a check', async (status, expected) => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withTracking()] } });
+        api.checkAppTrackingDomain.mockRejectedValue(httpError(status));
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await panelButton('Check now').trigger('click');
+        await flushPromises();
+        expect(trackingPanel().text()).toContain(expected);
+    });
+
+    it('removes a tracking domain only after confirming, and warns that old links need the DNS record and certificate', async () => {
+        api.listAppDomains.mockResolvedValueOnce({ data: { domains: [withTracking({ state: 'active', https_result: 'ok' })] } }).mockResolvedValue({ data: { domains: [verified] } });
+        api.deleteAppTrackingDomain.mockResolvedValue({});
+        await mountAt(`/apps/${APP_ID}/domains`);
+
+        vf.showConfirm.mockResolvedValueOnce(false);
+        await panelButton('Remove').trigger('click');
+        await flushPromises();
+        expect(api.deleteAppTrackingDomain).not.toHaveBeenCalled();
+
+        vf.showConfirm.mockResolvedValueOnce(true);
+        await panelButton('Remove').trigger('click');
+        await flushPromises();
+        expect(vf.showConfirm).toHaveBeenLastCalledWith('Remove the tracking domain?', expect.stringContaining('Links already sent keep working only while the DNS record'));
+        expect(vf.showConfirm.mock.lastCall?.[1]).toContain('New mail will use the standard tracking address');
+        expect(api.deleteAppTrackingDomain).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' } });
+        expect(trackingPanel().text()).toContain("use Thinpost's standard tracking address");
+    });
+
+    it('does not let a paused app change its tracking domain', async () => {
+        api.listApps.mockResolvedValue({ data: { apps: [{ ...app, active: false }] } });
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withTracking()] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(panelButton('Change').attributes('disabled')).toBeDefined();
     });
 });

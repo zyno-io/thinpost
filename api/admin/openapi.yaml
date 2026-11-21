@@ -826,6 +826,120 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/BounceDomainView' }
         default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/domains/{domain}/tracking-domain:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: domain
+        in: path
+        required: true
+        description: The verified sender domain the tracking domain belongs to.
+        schema: { type: string }
+    get:
+      operationId: getAppTrackingDomain
+      description: The sender domain's own tracking domain. 404 when it has none (a removed one counts as none).
+      responses:
+        '200':
+          description: The tracking domain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrackingDomain' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: setAppTrackingDomain
+      description: >-
+        Gives the sender domain its own tracking domain, or replaces the one it has
+        in the same transaction (the old one stays as a removed tombstone). The name
+        must be a strict subdomain of the sender domain (links.example.com for
+        example.com), and the sender domain must be verified. The new domain starts
+        pending: new links keep using the deployment's tracking address until a
+        check finds that an HTTPS request to the name, with a normal certificate
+        check, reaches this deployment (https_result ok); then it turns active. The
+        DNS result is informational and never blocks that, so a name behind a proxy
+        works. Setting the name it already has changes nothing, and a name that was
+        removed is revived as pending. 400 for a name that is not a strict
+        subdomain, is invalid, longer than 253 bytes, or is the deployment's tracking
+        or console host, and for a sender domain that is not verified. 409 when this
+        deployment does not offer custom tracking domains (runtime tracking.custom_domains
+        is false: THINPOST_ADMIN_ORIGIN is not set), when the name is already the live
+        tracking domain of another of the app's sender domains, or when the app is
+        paused. Several apps may use the same name. Audited as tracking_domain.added
+        (and tracking_domain.removed for a replaced one).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 253, description: ASCII DNS name under the sender domain; use punycode for IDNs. }
+      responses:
+        '200':
+          description: The tracking domain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrackingDomain' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteAppTrackingDomain
+      description: >-
+        Removes the tracking domain. New mail uses the deployment's tracking address
+        from the next message on. The row stays as a tombstone (state removed) that is
+        still checked daily and listed by GET /tracking-domains, because links already
+        sent keep working only while the route and certificate stay in place.
+        Audited as tracking_domain.removed.
+      responses:
+        '204': { description: Removed }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/domains/{domain}/tracking-domain/check:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: domain
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: checkAppTrackingDomain
+      description: >-
+        Checks the tracking domain now (at most 20 seconds) and records the result,
+        which can turn the domain active or failing. A check started here replaces
+        any background check in flight for the same domain. A check that fails is
+        recorded and answers 200 with the result. 409 when a newer check or a removal
+        took the row while this one ran (nothing was recorded); 503 when this replica
+        has no tracking configured, is deploying (gate closed) or the store failed.
+        A change of state is audited as tracking_domain.activated or
+        tracking_domain.failing.
+      responses:
+        '200':
+          description: The tracking domain after the check
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrackingDomain' }
+        default: { $ref: '#/components/responses/Error' }
+  /tracking-domains:
+    get:
+      operationId: listTrackingDomains
+      description: >-
+        Every tracking domain of every app, removed tombstones included, for the
+        operator who runs the routes and certificates (and for automation that
+        issues certificates): which names exist, which pass the HTTPS check, which
+        have DNS in place but are waiting for a route or certificate (dns_result ok
+        with state pending or failing), when each certificate expires, and which
+        removed names still need their route kept while old links matter.
+      responses:
+        '200':
+          description: All tracking domains, ordered by name
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tracking_domains]
+                properties:
+                  tracking_domains:
+                    type: array
+                    items: { $ref: '#/components/schemas/TrackingDomainListing' }
+        default: { $ref: '#/components/responses/Error' }
   /apps/{appId}/inbound-limits:
     parameters:
       - { $ref: '#/components/parameters/AppId' }
@@ -1958,11 +2072,13 @@ components:
             smtp_submission: { type: boolean, description: This replica accepts mail over SMTP (the console shows the SMTP tab only then). }
         tracking:
           type: object
-          required: [origin, link_event_limit]
+          required: [origin, link_event_limit, custom_domains, cname_target]
           description: Present only when tracking is enabled.
           properties:
             origin: { type: string }
             link_event_limit: { type: integer, minimum: 1, maximum: 1000, description: Events recorded per tracking link. }
+            custom_domains: { type: boolean, description: Apps may use their own tracking domains. True exactly when THINPOST_ADMIN_ORIGIN is set. }
+            cname_target: { type: string, description: The deployment's tracking host, which a custom tracking domain's DNS record should point at (where it can; a proxied name needs no record at this name). }
     RetryPolicy:
       type: object
       required: [max_attempts, initial_delay_ms, max_delay_ms, max_age_ms, revision, changed_at]
@@ -2231,6 +2347,8 @@ components:
           $ref: '#/components/schemas/DkimRetiredKey'
         bounce_domain:
           $ref: '#/components/schemas/BounceDomain'
+        tracking_domain:
+          $ref: '#/components/schemas/TrackingDomain'
         cname_target:
           type: string
           description: >-
@@ -2278,6 +2396,57 @@ components:
             cname_target_status:
               type: string
               enum: [ok, not_reported, dns_unconfirmed]
+    TrackingDomain:
+      type: object
+      description: >-
+        A sender domain's own tracking address. New links in the app's mail use it only
+        while state is active, a check passed within the last 3 hours and the deployment
+        offers custom tracking domains (THINPOST_ADMIN_ORIGIN is set); the decision is
+        made for each message when it is prepared. Otherwise links use the deployment's
+        tracking address. It applies to the sender domain and to the app's verified
+        subdomains of it; the most specific wins. One-click unsubscribe links always use
+        the deployment's address. Links already sent open at any name that still routes
+        to the deployment.
+      required: [name, state, checking, created_at]
+      properties:
+        name: { type: string }
+        state:
+          type: string
+          enum: [pending, active, failing, removed]
+          description: >-
+            pending has not passed a check yet; active is in use; failing was active and its last
+            checks failed (the deployment's address is used); removed is a tombstone that is never
+            used but is still checked daily.
+        checking: { type: boolean, description: A check is in flight. }
+        dns_result:
+          type: string
+          enum: [ok, missing, wrong_target, lookup_failed]
+          description: >-
+            Informational, never blocks use. ok means the name is a CNAME to the deployment's tracking
+            host (or resolves to its addresses). wrong_target is expected behind a proxy such as Cloudflare.
+        https_result:
+          type: string
+          enum: [ok, unreachable, certificate, redirected, not_thinpost, not_found]
+          description: >-
+            Decides use. ok means an HTTPS request to the name, with normal certificate validation, returned
+            this deployment's proof. unreachable: no connection, a timeout, no public address, a DNS error other than NXDOMAIN, or a 5xx or 429 answer (usually transient; an active domain needs two in a row to stop being used). certificate:
+            the certificate did not validate (or the host does not speak TLS). redirected: the route answered
+            with a redirect instead of serving /t/. not_thinpost: the answer was not this deployment's proof (a 4xx other than 429, or the wrong body). not_found: the name no longer exists in DNS (NXDOMAIN), so the domain stops being used at once.
+        observed_target: { type: string, description: The name DNS pointed at when it was not the tracking host. }
+        certificate_expires_at: { type: string, format: date-time, description: The expiry of the certificate the last completed handshake presented. }
+        checked_at: { type: string, format: date-time }
+        last_ok_at: { type: string, format: date-time }
+        verified_at: { type: string, format: date-time, description: When it first passed. }
+        removed_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+    TrackingDomainListing:
+      allOf:
+        - $ref: '#/components/schemas/TrackingDomain'
+        - type: object
+          required: [app_id, sender_domain]
+          properties:
+            app_id: { type: string }
+            sender_domain: { type: string }
     DkimKey:
       type: object
       required: [selector, dns_name, dns_value]

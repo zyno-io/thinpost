@@ -173,6 +173,12 @@ Schema 47 adds `bounce_domains` and a nullable `delivery_attempts.return_path_do
 
 A custom return address needs an edge that accepts bounces at any domain (it lists `bounce-any-domain/1` in its Ready message). Upgrade the edge first. Control never chooses a custom domain for an edge without it, so the order is safe either way. Don't roll an edge back to a release without that capability while custom bounce domains are in use: deliveries already holding a custom return path would be refused. Every control replica runs the recheck loop that keeps these domains honest; it needs outbound DNS and nothing else.
 
+## Custom tracking domains
+
+Schema 48 adds `tracking_domains`, an empty table (a catalog-only change; nothing else changes). Nothing changes for existing mail: until a customer adds a tracking domain, every message keeps using the deployment's tracking origin. See [Your own tracking domain](/guide/tracking#your-own-tracking-domain).
+
+Deploy the release that serves tracking links at any hostname (links not bound to an origin) to every replica before activating any domain; a replica that predates it cannot open links at a custom name. Apps can use their own tracking domains only where `THINPOST_ADMIN_ORIGIN` is set, and each custom host needs a route, a certificate and an unchanged `Host` at your gateway. Every replica with tracking configured runs the check loop that keeps these domains honest; it needs outbound DNS and HTTPS to the custom names. Don't roll the control plane back past this release while custom tracking domains are in use: mail already sent with custom links would stop opening where an older replica answers.
+
 ## Upgrading the edge
 
 The edge release is independent. Its Deployment uses `Recreate`, so an upgrade stops the old pod and starts a new one, and sending pauses briefly. Bounce senders retry. The control plane reconnects and the edge replays any results it has not had acknowledged.

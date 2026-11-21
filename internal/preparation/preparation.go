@@ -50,6 +50,11 @@ type Claim struct {
 	// toggle that races preparation is harmless: either state is a valid
 	// outcome for a message accepted around the change.
 	ListUnsubscribe bool
+	// TrackingDomain is the app's own tracking domain for this message's sender
+	// domain, when one is active and was checked recently (the most specific
+	// match wins); empty otherwise. It is used only when the deployment has
+	// custom domains enabled (TrackingConfig.CustomDomains).
+	TrackingDomain string
 }
 
 func (c Claim) date() time.Time {
@@ -112,10 +117,28 @@ type TrackingObjects interface {
 // TrackingConfig must be supplied explicitly. New links have no expiry; only
 // bounded analytics records depend on the protected object and database.
 type TrackingConfig struct {
-	Origin     string
-	Links      *tracking.LinkKeys
-	EventLimit int
-	Objects    TrackingObjects
+	Origin string
+	// CustomDomains lets a claim's TrackingDomain replace Origin in body links
+	// and the open pixel. It is true exactly when THINPOST_ADMIN_ORIGIN is set.
+	// One-click unsubscribe always uses Origin.
+	CustomDomains bool
+	Links         *tracking.LinkKeys
+	EventLimit    int
+	Objects       TrackingObjects
+}
+
+// originFor is the origin for the message's tracked links and open pixel: the
+// app's own tracking domain when the claim names one and custom domains are
+// enabled, otherwise the deployment's origin. One-click unsubscribe never calls
+// this: the compliance link stays on the deployment's origin so it does not
+// depend on a customer's DNS.
+func (c *TrackingConfig) originFor(claim Claim) string {
+	if c.CustomDomains && claim.TrackingDomain != "" {
+		if origin, err := tracking.NormalizeOrigin("https://" + claim.TrackingDomain); err == nil {
+			return origin
+		}
+	}
+	return c.Origin
 }
 
 // Production lease settings. The claim lease is short so a crashed worker's
@@ -311,6 +334,10 @@ func (s *Service) PrepareNext(ctx context.Context) (resultErr error) {
 			return errors.New("one-click unsubscribe origin is invalid")
 		}
 	}
+	trackingOrigin := ""
+	if s.Tracking != nil {
+		trackingOrigin = s.Tracking.originFor(claim)
+	}
 	deliveries := make([]Delivery, 0, len(payload.Message.Envelope()))
 	for index, recipient := range payload.Message.Envelope() {
 		reason = "internal"
@@ -329,7 +356,7 @@ func (s *Service) PrepareNext(ctx context.Context) (resultErr error) {
 		var preparedTracking *Tracking
 		if payload.Message.Tracking != nil {
 			reason = "mime_build"
-			html, mappings, rewriteErr := tracking.Rewrite(payload.Message.HTML, tracking.Options{Origin: s.Tracking.Origin, Links: s.Tracking.Links, Opens: payload.Message.Tracking.Opens, Clicks: payload.Message.Tracking.Clicks})
+			html, mappings, rewriteErr := tracking.Rewrite(payload.Message.HTML, tracking.Options{Origin: trackingOrigin, Links: s.Tracking.Links, Opens: payload.Message.Tracking.Opens, Clicks: payload.Message.Tracking.Clicks})
 			if rewriteErr != nil {
 				return errors.New("tracking HTML preparation failed")
 			}

@@ -31,6 +31,12 @@ export const smtpSubmissionEnabled = computed(() => runtime.value?.features.smtp
 /** The loaded report, or null while unknown. */
 export const runtimeFeatures = computed(() => runtime.value?.features ?? null);
 
+/**
+ * What the server reports about tracking: null while unknown or when tracking is off. `custom_domains` says whether
+ * apps may use their own tracking domain, and `cname_target` is the host a DNS record should point at.
+ */
+export const runtimeTracking = computed(() => runtime.value?.tracking ?? null);
+
 /** Forgets the shared report; for tests and for sign-out. */
 export function resetRuntimeFeatures(): void {
     runtime.value = null;

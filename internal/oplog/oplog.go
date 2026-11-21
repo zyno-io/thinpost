@@ -253,7 +253,7 @@ var domainStates = map[string]bool{"pending": true, "active": true, "failing": t
 var domainResults = map[string]bool{
 	"ok": true, "missing": true, "not_cname": true, "other_ip": true, "wrong_target": true,
 	"lookup_failed": true, "no_sending_ip": true, "unreachable": true, "certificate": true,
-	"redirected": true, "not_thinpost": true,
+	"redirected": true, "not_thinpost": true, "not_found": true,
 }
 
 // DomainCheck logs `domain_check app=<id> kind=<enum> state=<enum> result=<enum>`
