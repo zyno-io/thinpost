@@ -260,7 +260,7 @@ async function submit() {
 .field {
     gap: 4px;
 
-    label {
+    label:not(:has(input[type='checkbox'])) {
         color: var(--text);
         font-weight: 600;
     }

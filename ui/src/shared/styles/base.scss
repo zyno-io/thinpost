@@ -339,6 +339,13 @@ code,
     cursor: pointer;
 }
 
+// Multi-line inputs size from their rows and pad evenly on every side.
+textarea.input {
+    height: auto;
+    padding: 10px;
+    line-height: 1.45;
+}
+
 input[type='checkbox'] {
     width: 15px;
     height: 15px;

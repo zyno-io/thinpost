@@ -428,7 +428,7 @@ function submit() {
     gap: 8px;
     width: min(560px, calc(100vw - 72px));
 
-    > label {
+    > label:not(:has(input[type='checkbox'])) {
         margin-top: 4px;
         color: var(--text);
         font-weight: 600;
@@ -445,7 +445,7 @@ function submit() {
     gap: 6px;
     margin-top: 4px;
 
-    label {
+    label:not(:has(input[type='checkbox'])) {
         color: var(--text);
         font-weight: 600;
     }
