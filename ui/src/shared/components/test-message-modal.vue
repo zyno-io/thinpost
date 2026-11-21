@@ -83,7 +83,7 @@
                 <p v-if="subjectProblem" class="hint invalid">{{ subjectProblem }}</p>
 
                 <label :for="`${id}-text`">Text</label>
-                <textarea :id="`${id}-text`" v-model="text" class="input body" rows="4" />
+                <textarea :id="`${id}-text`" v-model="text" class="input body" rows="6" />
 
                 <label class="acknowledge">
                     <input v-model="includeHtml" type="checkbox" />
@@ -91,7 +91,7 @@
                 </label>
                 <template v-if="includeHtml">
                     <label :for="`${id}-html`">HTML</label>
-                    <textarea :id="`${id}-html`" v-model="html" class="input body" rows="5" spellcheck="false" />
+                    <textarea :id="`${id}-html`" v-model="html" class="input body" rows="8" spellcheck="false" />
                 </template>
 
                 <label class="acknowledge">
@@ -266,7 +266,7 @@ async function submit() {
     gap: 8px;
     width: min(540px, calc(100vw - 72px));
 
-    label {
+    label:not(:has(input[type='checkbox'])) {
         color: var(--text);
         font-weight: 600;
     }
@@ -303,7 +303,7 @@ async function submit() {
 
 .acknowledge {
     align-items: flex-start;
-    font-weight: 400;
+    color: var(--text);
 
     .option-hint {
         display: block;

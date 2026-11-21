@@ -640,7 +640,7 @@ onBeforeUnmount(() => {
     gap: 6px;
     max-width: 420px;
 
-    label {
+    label:not(:has(input[type='checkbox'])) {
         color: var(--text);
         font-weight: 600;
     }
