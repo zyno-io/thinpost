@@ -8,9 +8,9 @@
                     <ul>
                         <li>The <strong>main IP</strong> is used unless you choose another.</li>
                         <li>A change applies to mail sent from now on, including messages already waiting. A delivery already with the sending worker finishes from the address it started with.</li>
-                        <li>If the chosen IP isn't available on the sending worker, this app's mail waits. It is never sent from a different address.</li>
+                        <li>You can only choose an IP the sending worker has right now. If the chosen IP is later removed from the sending worker, this app's mail waits until you move it. It is never sent from a different address.</li>
                     </ul>
-                    <p>Your Thinpost administrator names and manages the IPs on the Operations page.</p>
+                    <p>The IPs and their names are set up on the sending worker. To add or change one, ask your Thinpost administrator. The Operations page lists them.</p>
                 </HelpButton>
             </div>
             <button type="button" class="btn sm" :disabled="isLoading || isSaving || !isSignedIn" @click="load">
@@ -24,21 +24,20 @@
                 <p class="line" data-testid="current-ip">
                     <span>Sends from</span>
                     <strong>{{ currentLabel }}</strong>
-                    <span v-if="currentRow" class="muted">· HELO name <code>{{ currentRow.helo_name }}</code></span>
+                    <span v-if="currentRow" class="muted">· <code>{{ currentRow.address }}</code></span>
                     <span v-if="workerState" class="tag" :class="workerState.tone" data-testid="worker-state" :title="workerState.title">{{ workerState.text }}</span>
                 </p>
                 <p v-if="currentRow && workerNote(currentRow)" class="hint warn" data-testid="worker-note">{{ workerNote(currentRow) }}</p>
 
                 <p v-if="!pool" class="hint" data-testid="pool-unavailable">The list of sending IPs couldn't be loaded, so the IP can't be changed here right now.</p>
                 <p v-else-if="!choices.length" class="hint" data-testid="no-ips">
-                    No other sending IPs are named yet, so this app uses the main IP.
-                    <RouterLink to="/operations">Name more on the Operations page.</RouterLink>
+                    There are no other sending IPs to choose from, so this app uses the main IP. To add one, ask your Thinpost administrator.
                 </p>
                 <div v-else class="line">
                     <label for="sending-ip-select" class="sr-only">Sending IP for this app</label>
                     <select id="sending-ip-select" v-model="choice" class="input" :disabled="isSaving || !isSignedIn" data-testid="sending-ip-select">
                         <option value="">{{ MAIN_IP_LABEL }} (default)</option>
-                        <option v-for="ip in choices" :key="ip.id" :value="ip.id">{{ ip.name }}</option>
+                        <option v-for="ip in choices" :key="ip.id" :value="ip.id" :disabled="ip.on_edge === false && ip.id !== currentId">{{ ipLabel(ip) }}{{ ip.on_edge === false ? ' (not on the sending worker)' : '' }}</option>
                     </select>
                     <button type="button" class="btn sm primary" :disabled="!changed || isSaving || !isSignedIn" data-testid="save-sending-ip" @click="save">
                         {{ isSaving ? 'Saving…' : 'Change IP' }}
@@ -60,11 +59,10 @@ import { apiErrorStatus, describeApiError, InvalidResponseError, type ApiErrorDe
 import { useAppContext } from '@/app-context';
 import { authState } from '@/auth';
 import { DefaultApi, type AppSendingIp, type SendingIp, type SendingIps } from '@/openapi-client-generated';
-import { MAIN_IP_LABEL, onWorker, parseSendingIps, workerNote } from '@/sending-ips';
+import { ipLabel, isAppSendingIp, MAIN_IP_LABEL, onWorker, parseSendingIps, workerNote } from '@/sending-ips';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import HelpButton from '@/shared/components/help-button.vue';
 import Loader from '@/shared/components/loader.vue';
-import { isOpaqueId } from '@/validation';
 
 const { app, appId } = useAppContext();
 
@@ -80,24 +78,24 @@ const savedNote = ref<string | null>(null);
 const isSignedIn = computed(() => authState.status === 'signed-in');
 
 const currentId = computed(() => current.value?.sending_ip_id ?? '');
-// An app with no assignment uses the main IP, so its record (if the main IP has one) is the row that counts.
+// An app with no choice uses the main IP, so that row is the one that counts.
 const currentRow = computed<SendingIp | null>(() => pool.value?.ips.find(ip => (currentId.value ? ip.id === currentId.value : ip.is_primary)) ?? null);
 const currentLabel = computed(() => {
     if (!current.value) return '';
-    if (current.value.sending_ip_id === null) return MAIN_IP_LABEL;
-    return current.value.name ?? 'Unknown';
+    if (current.value.sending_ip_id === null) return currentRow.value ? `${MAIN_IP_LABEL}: ${ipLabel(currentRow.value)}` : MAIN_IP_LABEL;
+    return current.value.helo_name !== null && current.value.address !== null ? ipLabel({ helo_name: current.value.helo_name, address: current.value.address }) : 'Unknown';
 });
-// The main IP is the default choice, so its own record isn't a second entry, unless the app is pinned to it.
+// The main IP is the default choice, so its own row isn't a second entry, unless the app is pinned to it.
 const choices = computed(() => (pool.value?.ips ?? []).filter(ip => !ip.is_primary || ip.id === currentId.value));
 const changed = computed(() => choice.value !== currentId.value);
 
-/** Where the chosen IP stands on the sending worker; the main IP with no record is by definition there. */
+/** Where the chosen IP stands on the sending worker. */
 const workerState = computed(() => {
     const row = currentRow.value;
-    if (!row) return current.value?.sending_ip_id === null && pool.value?.edge_reports_sources ? { text: 'Available', tone: 'success', title: 'The main IP is the sending worker\'s own address.' } : null;
+    if (!row) return null;
     const state = onWorker(row);
-    if (state === 'yes') return row.bounce_on_edge === false ? { text: 'Mail is waiting', tone: 'warning', title: workerNote(row) } : { text: 'Available', tone: 'success', title: 'The sending worker reported this address.' };
-    if (state === 'no') return { text: 'Mail is waiting', tone: 'warning', title: 'The sending worker doesn\'t have this address.' };
+    if (state === 'yes') return { text: 'Available', tone: 'success', title: 'The sending worker reported this IP when it last connected.' };
+    if (state === 'no') return { text: 'Mail is waiting', tone: 'warning', title: 'The sending worker doesn\'t have this IP.' };
     return { text: 'Not known', tone: '', title: 'The sending worker hasn\'t reported its addresses.' };
 });
 
@@ -112,7 +110,7 @@ async function load() {
     const target = appId.value;
     try {
         const { data } = await DefaultApi.getAppSendingIp({ path: { appId: target } });
-        if (!data || !(data.sending_ip_id === null || isOpaqueId(data.sending_ip_id)) || !(data.name === null || typeof data.name === 'string')) throw new InvalidResponseError();
+        if (!isAppSendingIp(data)) throw new InvalidResponseError();
         if (isUnmounted || mine !== seq) return;
         current.value = data;
         choice.value = data.sending_ip_id ?? '';
@@ -150,8 +148,8 @@ async function save() {
     isLoading.value = false;
     try {
         const { data } = await DefaultApi.setAppSendingIp({ path: { appId: target.id }, body: { sending_ip_id: sendingIpId } });
-        if (!data || !(data.sending_ip_id === null || isOpaqueId(data.sending_ip_id))) throw new InvalidResponseError();
-        const label = data.sending_ip_id === null ? MAIN_IP_LABEL : (data.name ?? 'the chosen IP');
+        if (!isAppSendingIp(data)) throw new InvalidResponseError();
+        const label = data.sending_ip_id === null ? MAIN_IP_LABEL : data.helo_name !== null && data.address !== null ? ipLabel({ helo_name: data.helo_name, address: data.address }) : 'the chosen IP';
         if (isUnmounted) {
             showToast({ message: `The sending IP for “${target.name}” was changed to ${label} after you left the page.`, durationSecs: 8 });
             return;
@@ -169,6 +167,7 @@ async function save() {
         saveError.value = describeApiError(err, {
             mutation: true,
             notFound: 'The app or that sending IP was not found. It may have been removed. Reload to check. Nothing was changed.',
+            conflict: 'The sending worker doesn\'t have that IP right now, so it can\'t be chosen. Reload and pick another. Nothing was changed.',
             unavailable: 'Changing the sending IP is unavailable right now. Mail intake may be closed. Try again in a moment.'
         });
         // Without a definitive refusal the stored value may differ from the one shown.

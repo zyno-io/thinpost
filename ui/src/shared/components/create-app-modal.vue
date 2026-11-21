@@ -13,7 +13,7 @@
             <label :for="`${id}-ip`">Sending IP</label>
             <select :id="`${id}-ip`" v-model="choice" class="input" :aria-describedby="`${id}-ip-hint`" data-testid="sending-ip-picker">
                 <option value="">{{ MAIN_IP_LABEL }} (default)</option>
-                <option v-for="ip in options" :key="ip.id" :value="ip.id">{{ ip.name }}</option>
+                <option v-for="ip in options" :key="ip.id" :value="ip.id">{{ ipLabel(ip) }}</option>
             </select>
             <p :id="`${id}-ip-hint`" class="hint">The address this app's mail is sent from. You can change it later.</p>
         </template>
@@ -25,12 +25,12 @@ import { computed, ref, useId } from 'vue';
 
 import type { ApiErrorDescription } from '@/api-errors';
 import type { SendingIp } from '@/openapi-client-generated';
-import { MAIN_IP_LABEL } from '@/sending-ips';
+import { ipLabel, MAIN_IP_LABEL } from '@/sending-ips';
 
 import NameModal from './name-modal.vue';
 
 const props = defineProps<{
-    /** Named sending IPs; the picker is hidden when there are none (or they couldn't be loaded). */
+    /** Sending IPs; the picker is hidden when there are none (or they couldn't be loaded). */
     ips: readonly SendingIp[];
     isSubmitting: boolean;
     error: ApiErrorDescription | null;
@@ -43,8 +43,8 @@ const emit = defineEmits<{
 
 const id = useId();
 const choice = ref('');
-// The main IP is the default choice, so its own record isn't listed twice.
-const options = computed(() => props.ips.filter(ip => !ip.is_primary));
+// The main IP is the default choice, so its own row isn't listed twice. An IP the sending worker doesn't have can't be chosen.
+const options = computed(() => props.ips.filter(ip => !ip.is_primary && ip.on_edge !== false));
 </script>
 
 <style lang="scss" scoped>

@@ -1,12 +1,15 @@
 // Package oplog writes one stdout line per message lifecycle event. It accepts
 // only 32-character lowercase hex IDs, fixed enum statuses and numeric SMTP
-// codes, so no subject, address, domain or other free text can reach the log.
+// codes, so no subject, address or other free text can reach the log. The one
+// exception is a delivery's sending IP, logged by its operator-owned HELO name
+// (see Delivery); no recipient, sender or customer domain is ever logged.
 package oplog
 
 import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -126,9 +129,12 @@ func PreparationLeaseLost(appID, messageID string) {
 }
 
 // Delivery logs `delivery app=<id> message=<id> delivery=<id> status=<outcome> smtp=<code> ip=<name>`.
-// Unknown outcomes are logged as "other" and codes outside 0-999 as 0. ip is the
-// sending IP's name (never its address); empty means the worker's primary
-// address, logged as "primary". Anything that is not a valid name is logged as "other".
+// Unknown outcomes are logged as "other" and codes outside 0-999 as 0. ip is
+// the HELO name of the sending IP (an operator-owned name from the Edge's
+// configuration, the one deliberate exception to "no domains in logs"); it is
+// never an address. Empty means a pre-schema-45 attempt that had no recorded
+// source, logged as "primary". Anything that is not a valid name is logged as
+// "other".
 func Delivery(appID, messageID, deliveryID string, outcome Status, smtpCode int, ip string) {
 	if !deliveryOutcomes[outcome] {
 		outcome = StatusOther
@@ -139,20 +145,42 @@ func Delivery(appID, messageID, deliveryID string, outcome Status, smtpCode int,
 	emit("delivery app=%s message=%s delivery=%s status=%s smtp=%s ip=%s", ID(appID), ID(messageID), ID(deliveryID), outcome, strconv.Itoa(smtpCode), IPName(ip))
 }
 
-// IPName returns name if it is a valid sending IP name (a lowercase slug of at
-// most 32 characters), "primary" for the empty name, and "other" otherwise, so
-// an address or free text can never reach a log through it.
+// IPName returns name if it is a plausible host name (lowercase letters,
+// digits, dots and hyphens; non-empty labels of at most 63 characters that do
+// not start or end with a hyphen; at most 253 characters in all), "primary" for
+// the empty name, and "other" otherwise. A name whose last label is all digits,
+// or that holds four consecutive all-digit labels anywhere, is "other": that is
+// how an IPv4 address (or one embedded in a name such as 45.0.1.22.example)
+// looks, and dotted digits pass the character set, so an address can never
+// reach a log through it. The same goes for free text.
 func IPName(name string) string {
 	if name == "" {
 		return "primary"
 	}
-	if len(name) > 32 || name[0] == '-' || name[len(name)-1] == '-' {
+	if len(name) > 253 {
 		return string(StatusOther)
 	}
-	for i := 0; i < len(name); i++ {
-		if c := name[i]; (c < '0' || c > '9') && (c < 'a' || c > 'z') && c != '-' {
+	last, digitRun := "", 0
+	for _, label := range strings.Split(name, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
 			return string(StatusOther)
 		}
+		for i := 0; i < len(label); i++ {
+			if c := label[i]; (c < '0' || c > '9') && (c < 'a' || c > 'z') && c != '-' {
+				return string(StatusOther)
+			}
+		}
+		last = label
+		if strings.Trim(label, "0123456789") == "" {
+			if digitRun++; digitRun == 4 {
+				return string(StatusOther)
+			}
+		} else {
+			digitRun = 0
+		}
+	}
+	if strings.Trim(last, "0123456789") == "" {
+		return string(StatusOther)
 	}
 	return name
 }

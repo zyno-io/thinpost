@@ -19,7 +19,7 @@ State lives in your PostgreSQL and in an S3-compatible object store. See [Archit
 - **Provider-compatible submission APIs.** Postmark, Resend, SendGrid and Mailgun send routes, tested against each provider's official Node SDK. See [Sending with SDKs](/guide/sending-with-sdks).
 - **Applications as security principals.** Each app has its own API keys, sender domains, quotas, webhooks, tracking defaults, suppression list and optional sending IP. A key can only act for its own app.
 - **Sender-domain verification and DKIM signing.** You prove control of a domain with a DNS TXT record and Thinpost signs every message. See [Sender domains](/guide/domains).
-- **Named sending IPs.** Separate apps can send from separate addresses, so one app's reputation does not affect another's. See [Sending IPs](/guide/sending-ips).
+- **Sending IPs.** Separate apps can send from separate addresses, so one app's reputation does not affect another's. See [Sending IPs](/guide/sending-ips).
 - **Webhooks.** Signed, retried, replayable delivery events in Thinpost-native, Postmark, Resend or Mailgun format. See [Webhooks](/guide/webhooks).
 - **Open and click tracking and one-click unsubscribe,** with encrypted self-contained links. See [Open and click tracking](/guide/tracking).
 - **Suppressions** that stop mail to addresses that bounced, complained or unsubscribed. See [Suppressions](/guide/suppressions).

@@ -518,7 +518,7 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 	smtpDialer := &integrationSMTPDialer{certificate: serverCert, completed: make(chan error, 3), received: make(chan []byte, 2), dkimRecord: dkimRecord}
 	controlPolicy := &integrationSwitchPolicy{}
 	controlPolicy.allowed.Store(true)
-	smtpWorker := &edgeworker.Worker{Journal: j, Dialer: smtpDialer, HeloName: "smtp.sender.example", Roots: roots}
+	smtpWorker := &edgeworker.Worker{Journal: j, Dialer: smtpDialer, HeloName: "smtp.sender.example", Roots: roots, Sources: []netip.Addr{netip.MustParseAddr("45.0.1.22")}}
 	edge, err := edgesession.New("worker", []string{controllerIdentity}, j, integrationExecutor{worker: smtpWorker, started: started}, authority, 2)
 	if err != nil {
 		t.Fatal(err)

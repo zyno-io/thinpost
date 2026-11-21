@@ -3,7 +3,6 @@ package admin
 import (
 	"context"
 	"net/http"
-	"net/netip"
 	"strings"
 	"time"
 )
@@ -19,6 +18,18 @@ const (
 const (
 	SMTPHostAppSendingIP = "app_sending_ip"
 	SMTPHostPrimary      = "primary"
+)
+
+// SMTP connection host statuses.
+const (
+	// SMTPHostOK: the host is the HELO name of the IP the app sends from.
+	SMTPHostOK = "ok"
+	// SMTPHostNotReported: the sending worker has not reported the IP, so no
+	// host is known yet.
+	SMTPHostNotReported = "not_reported"
+	// SMTPHostIPUnavailable: the app's chosen IP is no longer on the sending
+	// worker, so no host is offered.
+	SMTPHostIPUnavailable = "ip_unavailable"
 )
 
 // SMTPCredential is one SMTP login of an app. Username is what the client
@@ -70,14 +81,14 @@ type SMTPPort struct {
 	Security string `json:"security"`
 }
 
-// SMTPConnection tells clients where to connect. Host comes only from
-// operator-set sending-IP rows (never from an Edge report); PrimaryUnnamed is
-// set when the app uses the primary address and no row names it.
+// SMTPConnection tells clients where to connect. Host is the HELO name of the
+// IP the app sends from, as the sending worker last reported it; HostStatus
+// says why there is none when it is absent.
 type SMTPConnection struct {
-	Host           *string    `json:"host,omitempty"`
-	HostSource     *string    `json:"host_source"`
-	PrimaryUnnamed bool       `json:"primary_unnamed"`
-	Ports          []SMTPPort `json:"ports"`
+	Host       *string    `json:"host,omitempty"`
+	HostSource *string    `json:"host_source"`
+	HostStatus string     `json:"host_status"`
+	Ports      []SMTPPort `json:"ports"`
 	// ObservedPorts are the submission ports the Edge last reported listening
 	// on. They only drive an availability hint.
 	ObservedPorts []int      `json:"observed_ports"`
@@ -102,9 +113,9 @@ type SMTPStore interface {
 	ListSMTPCredentials(ctx context.Context, appID string) ([]SMTPCredential, error)
 	IssueSMTPCredential(ctx context.Context, actor, appID, name string) (IssuedSMTPCredential, error)
 	RevokeSMTPCredential(ctx context.Context, actor, appID, credentialID string) error
-	// SMTPConnection resolves the host: the app's assigned sending IP, else the
-	// sending-IP row whose address is primary.
-	SMTPConnection(ctx context.Context, appID string, primary netip.Addr) (SMTPConnection, error)
+	// SMTPConnection resolves the host: the app's chosen sending IP, else the
+	// main IP of the Edge's last report.
+	SMTPConnection(ctx context.Context, appID string) (SMTPConnection, error)
 }
 
 // SMTPPorts are the fixed submission ports: 465 wraps the connection in TLS
@@ -251,7 +262,7 @@ func (h *Handler) getAppSMTP(w http.ResponseWriter, r *http.Request, store SMTPS
 		storeError(w, err)
 		return
 	}
-	connection, err := store.SMTPConnection(r.Context(), appID, h.PrimarySource)
+	connection, err := store.SMTPConnection(r.Context(), appID)
 	if err != nil {
 		storeError(w, err)
 		return

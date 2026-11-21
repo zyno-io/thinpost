@@ -5,132 +5,77 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// A sending IP names one outbound address of the Edge, with the HELO name the
-// Edge greets with and the bounce domain whose SPF record must list the
-// address. The Edge's first declared address (its primary) is every app's
-// default; a row for it only names it. Names are logged, addresses never are.
-
-// SendingIPNamePattern is the log-safe slug a sending IP name must match.
-var SendingIPNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`)
+// A sending IP is one outbound address of the Edge. Its identity (address and
+// HELO name, which is also its bounce domain) is set in the Edge's own
+// configuration and mirrored here from what the Edge reports when it connects;
+// nothing in the console or API creates, edits or deletes one. The only thing
+// a user chooses is which IP an app sends from. IPs are shown by address and
+// HELO name. Logs name an IP by its HELO name, never its address.
 
 // SendingIP is one row plus what is known about it right now.
 type SendingIP struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Address      string    `json:"address"`
-	HeloName     string    `json:"helo_name"`
-	BounceDomain string    `json:"bounce_domain"`
-	CreatedAt    time.Time `json:"created_at"`
-	// AppCount is the apps pinned to this IP. For the primary's row the apps
-	// with no assignment send from it too (see SendingIPList.UnpinnedAppCount).
+	ID        string    `json:"id"`
+	Address   string    `json:"address"`
+	HeloName  string    `json:"helo_name"`
+	CreatedAt time.Time `json:"created_at"`
+	// AppCount is the apps pinned to this IP. For the main IP, apps with no
+	// choice send from it too (see SendingIPList.UnpinnedAppCount).
 	AppCount int `json:"app_count"`
 	// IsPrimary is true when the Edge's last report lists this address first.
 	IsPrimary bool `json:"is_primary"`
-	// OnEdge and BounceOnEdge are nil when the Edge's last Ready reported no
-	// sources (an older Edge, or no report yet): they are unknown, not false.
-	OnEdge       *bool `json:"on_edge"`
-	BounceOnEdge *bool `json:"bounce_on_edge"`
+	// OnEdge is nil when the Edge has not reported its addresses (no report
+	// yet, or a worker that reported none): unknown, not false. False means
+	// the Edge reported addresses and this one is not among them.
+	OnEdge *bool `json:"on_edge"`
 }
 
 // SendingIPList is the pool and what the Edge reported about it.
 type SendingIPList struct {
 	IPs []SendingIP `json:"ips"`
-	// UnpinnedAppCount is the apps with no assignment: they use the primary.
+	// UnpinnedAppCount is the apps with no choice: they use the main IP.
 	UnpinnedAppCount int `json:"unpinned_app_count"`
-	// EdgeReportedAt is when the Edge last reported its sources, nil if never.
+	// EdgeReportedAt is when the Edge last reported, nil if never.
 	EdgeReportedAt *time.Time `json:"edge_reported_at"`
-	// EdgeReportsSources is false for an Edge that reports no sources.
-	EdgeReportsSources bool `json:"edge_reports_sources"`
-	// EdgePrimaryAddress is the address the Edge reported first (its primary,
-	// every unassigned app's source); nil when it reported no sources.
+	// EdgeReportsIdentity is true when the last report listed addresses with
+	// their names. Without it the Edge is given no mail to send.
+	EdgeReportsIdentity bool `json:"edge_reports_identity"`
+	// EdgePrimaryAddress is the address the Edge reported first (the main IP);
+	// nil when it reported none.
 	EdgePrimaryAddress *string `json:"edge_primary_address"`
-	// UnnamedEdgeAddresses are reported addresses that have no row yet.
-	UnnamedEdgeAddresses []string `json:"unnamed_edge_addresses"`
-	// GlobalBounceDomain is the bounce domain the primary uses when it has no
-	// row; empty when this replica does not know it.
-	GlobalBounceDomain string `json:"global_bounce_domain,omitempty"`
 }
 
-// SendingIPInput creates a row; SendingIPPatch edits one. The address of a row
-// never changes: a different address is a new row.
-type SendingIPInput struct {
-	Name, Address, HeloName, BounceDomain string
-}
-type SendingIPPatch struct {
-	Name, HeloName, BounceDomain *string
-}
-
-// AppSendingIP is an app's assignment. A nil ID means no assignment: the app
-// sends from the Edge's primary address.
+// AppSendingIP is an app's choice. A nil ID means no choice: the app sends
+// from the Edge's main IP.
 type AppSendingIP struct {
 	SendingIPID *string `json:"sending_ip_id"`
-	Name        *string `json:"name"`
+	Address     *string `json:"address"`
+	HeloName    *string `json:"helo_name"`
 }
 
-// SendingIPStore is optional on the Store. Delete returns ErrConflict while an
-// app is assigned the IP. Every mutation is audited in its own transaction
-// (system scope for the pool, app scope for an assignment) and an identical
+// SendingIPStore is optional on the Store. The pool is read-only here (the
+// Edge's report writes it). SetAppSendingIP and CreateAppWithSendingIP return
+// ErrConflict for an IP the Edge is not reporting right now; choosing none is
+// always allowed. A change is audited in the same transaction and an identical
 // request changes and audits nothing.
 type SendingIPStore interface {
 	ListSendingIPs(ctx context.Context) (SendingIPList, error)
 	GetSendingIP(ctx context.Context, id string) (SendingIP, error)
-	CreateSendingIP(ctx context.Context, actor string, in SendingIPInput) (SendingIP, error)
-	UpdateSendingIP(ctx context.Context, actor, id string, patch SendingIPPatch) (SendingIP, error)
-	DeleteSendingIP(ctx context.Context, actor, id string) error
 	GetAppSendingIP(ctx context.Context, appID string) (AppSendingIP, error)
 	SetAppSendingIP(ctx context.Context, actor, appID string, sendingIPID *string) (AppSendingIP, error)
 	CreateAppWithSendingIP(ctx context.Context, actor, name string, sendingIPID *string) (App, error)
 }
 
-// ReverseResolver looks up reverse and forward DNS for the advisory check.
+// ReverseResolver looks up reverse, forward and mail-exchanger DNS for the
+// advisory check.
 type ReverseResolver interface {
 	LookupAddr(ctx context.Context, addr string) ([]string, error)
 	LookupHost(ctx context.Context, host string) ([]string, error)
-}
-
-// ValidSendingIPName, ValidSendingIPAddress and ValidSendingIPDomain are the
-// shared input rules; the store applies them again.
-func ValidSendingIPName(name string) bool {
-	return SendingIPNamePattern.MatchString(name) && !ReservedSendingIPNames[name]
-}
-
-// ReservedSendingIPNames are the words logs use for "no named IP" ("primary"), an
-// invalid name ("other") and a deleted row ("removed"); a real name must not
-// impersonate them.
-var ReservedSendingIPNames = map[string]bool{"primary": true, "other": true, "removed": true}
-
-// ValidSendingIPAddress accepts a canonical IPv4 literal that is not private,
-// loopback, link-local or unspecified. The store applies the stricter
-// egress.PublicSource rule (the same one the Edge and the Ready check use);
-// admin cannot import egress.
-func ValidSendingIPAddress(value string) bool {
-	address, err := netip.ParseAddr(value)
-	return err == nil && address.Is4() && address.String() == value && address.IsGlobalUnicast() && !address.IsPrivate() && !address.IsLoopback() && !address.IsLinkLocalUnicast()
-}
-
-// ValidSendingIPDomain accepts a normalized DNS name of at most max bytes.
-func ValidSendingIPDomain(value string, max int) bool {
-	normalized, ok := NormalizeDomain(value)
-	return ok && normalized == value && len(value) >= 3 && len(value) <= max
-}
-
-// HeloUnderBounceDomain reports whether the HELO name is the bounce domain or a
-// name beneath it. The Edge accepts bounces for the name each of its addresses
-// greets with, so an address's bounce domain must be that name or a parent of
-// it. Both arguments are already normalized.
-func HeloUnderBounceDomain(helo, bounce string) bool {
-	return helo == bounce || strings.HasSuffix(helo, "."+bounce)
-}
-
-// ValidSendingIPInput applies every field rule; the store calls it too.
-func ValidSendingIPInput(in SendingIPInput) bool {
-	return ValidSendingIPName(in.Name) && ValidSendingIPAddress(in.Address) && ValidSendingIPDomain(in.HeloName, 253) && ValidSendingIPDomain(in.BounceDomain, 219) && HeloUnderBounceDomain(in.HeloName, in.BounceDomain)
+	LookupMX(ctx context.Context, name string) ([]*net.MX, error)
 }
 
 // DNSCheckStatus values.
@@ -142,20 +87,26 @@ const (
 )
 
 // DNSCheck is advisory. It reads public DNS only and stores and logs nothing.
+// Every check is about the HELO name, which is also the bounce domain.
 type DNSCheck struct {
 	// Reverse: the address's PTR records include the HELO name.
 	Reverse      string   `json:"reverse"`
 	ReverseNames []string `json:"reverse_names"`
 	// Forward: the HELO name resolves back to the address.
 	Forward string `json:"forward"`
-	// HeloSPF: the HELO name publishes an SPF record.
-	HeloSPF string `json:"helo_spf"`
-	// BounceSPF: the bounce domain's SPF record covers the address through an
-	// ip4: entry or an a mechanism. Includes and redirects are not followed.
-	BounceSPF string `json:"bounce_spf"`
+	// MX: the HELO name's mail exchangers reach the address, so bounces for
+	// mail sent from it arrive. A name with no MX record counts as its own
+	// exchanger (RFC 5321).
+	MX string `json:"mx"`
+	// SPF: the HELO name's SPF record covers the address through an ip4:
+	// entry or an a mechanism. Includes and redirects are not followed.
+	SPF string `json:"spf"`
 }
 
-const maxReverseNames = 8
+const (
+	maxReverseNames = 8
+	maxMXHosts      = 4
+)
 
 func dnsStatus(err error, found int) string {
 	if err != nil {
@@ -170,7 +121,17 @@ func dnsStatus(err error, found int) string {
 	return DNSOK
 }
 
-// checkSendingIPDNS runs the four lookups under one deadline.
+// resolvesTo reports whether any of hosts is address.
+func resolvesTo(hosts []string, address netip.Addr) bool {
+	for _, host := range hosts {
+		if parsed, err := netip.ParseAddr(host); err == nil && parsed.Unmap() == address {
+			return true
+		}
+	}
+	return false
+}
+
+// checkSendingIPDNS runs the lookups under one deadline.
 func checkSendingIPDNS(ctx context.Context, reverse ReverseResolver, txt TXTResolver, ip SendingIP) DNSCheck {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
@@ -192,29 +153,64 @@ func checkSendingIPDNS(ctx context.Context, reverse ReverseResolver, txt TXTReso
 			}
 		}
 	}
-	hosts, err := reverse.LookupHost(ctx, ip.HeloName)
-	out.Forward = dnsStatus(err, len(hosts))
-	if out.Forward == DNSOK {
+	hosts, hostErr := reverse.LookupHost(ctx, ip.HeloName)
+	out.Forward = dnsStatus(hostErr, len(hosts))
+	if out.Forward == DNSOK && !resolvesTo(hosts, address) {
 		out.Forward = DNSMismatch
-		for _, host := range hosts {
-			if parsed, perr := netip.ParseAddr(host); perr == nil && parsed.Unmap() == address {
-				out.Forward = DNSOK
-			}
-		}
 	}
+	out.MX = checkMX(ctx, reverse, ip.HeloName, address, hosts, hostErr)
 	records, err := txt.LookupTXT(ctx, ip.HeloName)
-	out.HeloSPF = dnsStatus(err, countSPF(records))
-	records, err = txt.LookupTXT(ctx, ip.BounceDomain)
-	out.BounceSPF = dnsStatus(err, countSPF(records))
-	if out.BounceSPF == DNSOK {
-		out.BounceSPF = DNSMismatch
+	out.SPF = dnsStatus(err, countSPF(records))
+	if out.SPF == DNSOK {
+		out.SPF = DNSMismatch
 		for _, record := range records {
-			if spfListsAddress(record, address) || spfAMatches(ctx, reverse, record, ip.BounceDomain, address) {
-				out.BounceSPF = DNSOK
+			if spfListsAddress(record, address) || spfAMatches(ctx, reverse, record, ip.HeloName, address) {
+				out.SPF = DNSOK
 			}
 		}
 	}
 	return out
+}
+
+// checkMX resolves the name's mail exchangers (at most maxMXHosts) and reports
+// whether one is the address. With no MX record the name itself is the
+// exchanger, so its own A lookup (already done as the forward check) decides.
+func checkMX(ctx context.Context, resolver ReverseResolver, name string, address netip.Addr, ownHosts []string, ownErr error) string {
+	records, err := resolver.LookupMX(ctx, name)
+	if dnsErr, ok := err.(*net.DNSError); err != nil && !(ok && dnsErr.IsNotFound) {
+		return DNSUnavailable
+	}
+	if len(records) == 0 {
+		status := dnsStatus(ownErr, len(ownHosts))
+		if status == DNSOK && !resolvesTo(ownHosts, address) {
+			return DNSMismatch
+		}
+		return status
+	}
+	unavailable := false
+	for i, record := range records {
+		if i == maxMXHosts {
+			break
+		}
+		target := strings.TrimSuffix(strings.ToLower(record.Host), ".")
+		if target == "" || target == "." {
+			continue
+		}
+		hosts, err := resolver.LookupHost(ctx, target)
+		if err != nil {
+			if dnsErr, ok := err.(*net.DNSError); !ok || !dnsErr.IsNotFound {
+				unavailable = true
+			}
+			continue
+		}
+		if resolvesTo(hosts, address) {
+			return DNSOK
+		}
+	}
+	if unavailable {
+		return DNSUnavailable
+	}
+	return DNSMismatch
 }
 
 // maxSPFALookups bounds the a-mechanism lookups one check makes.
@@ -308,8 +304,9 @@ func spfListsAddress(record string, address netip.Addr) bool {
 	return false
 }
 
-// sendingIPRoute serves /api/v1/sending-ips and its sub-resources. It reports
-// false for any other path.
+// sendingIPRoute serves /api/v1/sending-ips and its sub-resources. The pool is
+// read-only: only listing and the DNS check exist. It reports false for any
+// other path.
 func (h *Handler) sendingIPRoute(w http.ResponseWriter, r *http.Request, actor string) bool {
 	rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/sending-ips")
 	if !ok || (rest != "" && rest[0] != '/') {
@@ -323,80 +320,22 @@ func (h *Handler) sendingIPRoute(w http.ResponseWriter, r *http.Request, actor s
 	parts := strings.Split(strings.TrimPrefix(rest, "/"), "/")
 	switch {
 	case rest == "" || rest == "/":
-		switch r.Method {
-		case http.MethodGet:
-			list, err := store.ListSendingIPs(r.Context())
-			if err != nil {
-				storeError(w, err)
-				return true
-			}
-			if list.IPs == nil {
-				list.IPs = []SendingIP{}
-			}
-			if list.UnnamedEdgeAddresses == nil {
-				list.UnnamedEdgeAddresses = []string{}
-			}
-			respond(w, http.StatusOK, list)
-		case http.MethodPost:
-			var req struct {
-				Name         string `json:"name"`
-				Address      string `json:"address"`
-				HeloName     string `json:"helo_name"`
-				BounceDomain string `json:"bounce_domain"`
-			}
-			in := SendingIPInput{}
-			if decode(r, &req) != nil {
-				fail(w, http.StatusBadRequest)
-				return true
-			}
-			in = SendingIPInput{Name: req.Name, Address: req.Address, HeloName: req.HeloName, BounceDomain: req.BounceDomain}
-			if !ValidSendingIPInput(in) {
-				fail(w, http.StatusBadRequest)
-				return true
-			}
-			created, err := store.CreateSendingIP(r.Context(), actor, in)
-			if err != nil {
-				storeError(w, err)
-				return true
-			}
-			respond(w, http.StatusCreated, created)
-		default:
-			method(w, "GET, POST")
+		if r.Method != http.MethodGet {
+			method(w, "GET")
+			return true
 		}
+		list, err := store.ListSendingIPs(r.Context())
+		if err != nil {
+			storeError(w, err)
+			return true
+		}
+		if list.IPs == nil {
+			list.IPs = []SendingIP{}
+		}
+		respond(w, http.StatusOK, list)
 	case len(parts) == 1 && opaqueID(parts[0]):
-		switch r.Method {
-		case http.MethodPatch:
-			var req struct {
-				Name         *string `json:"name"`
-				HeloName     *string `json:"helo_name"`
-				BounceDomain *string `json:"bounce_domain"`
-			}
-			if decode(r, &req) != nil || req.Name == nil && req.HeloName == nil && req.BounceDomain == nil ||
-				req.Name != nil && !ValidSendingIPName(*req.Name) ||
-				req.HeloName != nil && !ValidSendingIPDomain(*req.HeloName, 253) ||
-				req.BounceDomain != nil && !ValidSendingIPDomain(*req.BounceDomain, 219) {
-				fail(w, http.StatusBadRequest)
-				return true
-			}
-			updated, err := store.UpdateSendingIP(r.Context(), actor, parts[0], SendingIPPatch{Name: req.Name, HeloName: req.HeloName, BounceDomain: req.BounceDomain})
-			if err != nil {
-				storeError(w, err)
-				return true
-			}
-			respond(w, http.StatusOK, updated)
-		case http.MethodDelete:
-			if r.ContentLength > 0 || len(r.TransferEncoding) > 0 {
-				fail(w, http.StatusBadRequest)
-				return true
-			}
-			if err := store.DeleteSendingIP(r.Context(), actor, parts[0]); err != nil {
-				storeError(w, err)
-				return true
-			}
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			method(w, "PATCH, DELETE")
-		}
+		// A row cannot be read singly, edited or deleted.
+		method(w, "")
 	case len(parts) == 2 && opaqueID(parts[0]) && parts[1] == "check-dns":
 		if r.Method != http.MethodPost {
 			method(w, "POST")
@@ -438,7 +377,7 @@ func (h *Handler) appSendingIP(w http.ResponseWriter, r *http.Request, actor, ap
 		}
 		respond(w, http.StatusOK, current)
 	case http.MethodPut:
-		// The field is required: an explicit null means "back to the primary".
+		// The field is required: an explicit null means "back to the main IP".
 		var raw map[string]any
 		if decode(r, &raw) != nil || len(raw) != 1 {
 			fail(w, http.StatusBadRequest)

@@ -185,7 +185,7 @@ Rules and consequences:
 - The edge accepts every listener name, including the primary's, as a bounce domain. `additionalBounceDomains` (at most 7) is only for retired bounce domains that still receive late bounces.
 - Add each new address's network to `infrastructure-cidrs` in the recipient ConfigMap on the control plane. The edge reads no such list.
 - Changing the list restarts the worker. The pod carries a `checksum/public-network` annotation, so any change to an address, gateway or table rolls it.
-- Add the address in the console only after the release is up. See [Sending IPs](/guide/sending-ips) for DNS, PTR and the rollout order.
+- The console lists the address once the restarted edge connects; there is nothing to add there. See [Sending IPs](/guide/sending-ips) for DNS, PTR and the rollout order.
 
 ## SMTP submission
 

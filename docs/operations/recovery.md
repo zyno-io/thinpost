@@ -148,7 +148,7 @@ A restore reverts every table to the snapshot. Review these:
 - **Retry policy.** It reverts to the snapshot's value. Check it on the Operations page.
 - **Tracking defaults and budgets.** Per-app defaults revert. Check each app's Tracking tab.
 - **Receiving domains and limits.** Inbound domains verified after the snapshot must be verified again. Limits that were raised may be back at earlier values. Mail accepted after the snapshot is lost from Thinpost, although apps keep webhooks they already received.
-- **Sending IPs.** The pool and per-app assignments revert, and so does each attempt's recorded source. An app assigned to an IP after the snapshot is back on the primary. Check every app's Sending IP on Operations.
+- **Sending IPs.** Per-app assignments revert, and so does each attempt's recorded source. An app assigned to an IP after the snapshot is back on its earlier choice (or the main IP). The list of IPs itself is rebuilt from the edge's next report. Check every app's Sending IP on Operations.
 - **Sealed secrets.** Webhook signing secrets are readable only with the matching object keyring. Restore the keyring with the database.
 
 ## Reference

@@ -48,7 +48,7 @@ function smtpResponse(overrides: Record<string, unknown> = {}) {
         connection: {
             host: 'mail.example.com',
             host_source: 'primary',
-            primary_unnamed: false,
+            host_status: 'ok',
             ports: [
                 { port: 465, security: 'tls' },
                 { port: 587, security: 'starttls' }
@@ -227,15 +227,30 @@ describe('SMTP tab', () => {
         expect(connect.text()).toContain('STARTTLS');
     });
 
-    it('asks for a server name, with a link, when the main sending IP is unnamed', async () => {
+    it('says the sending worker has not connected yet when no server name is known', async () => {
         api.getAppSmtp.mockResolvedValue({
-            data: smtpResponse({ connection: { host_source: null, primary_unnamed: true, ports: [], observed_ports: [] } })
+            data: smtpResponse({ connection: { host_source: null, host_status: 'not_reported', ports: [], observed_ports: [] } })
         });
         await mountSmtp();
-        expect(wrapper!.find('[data-testid="smtp-host-unnamed"]').exists()).toBe(true);
-        expect(wrapper!.find('[data-testid="smtp-host-operations-link"]').attributes('href')).toBe('/operations');
+        const notice = wrapper!.find('[data-testid="smtp-host-not-reported"]');
+        expect(notice.text()).toContain("sending worker hasn't connected yet");
+        expect(wrapper!.find('[data-testid="smtp-host-unnamed"]').exists()).toBe(false);
         expect(wrapper!.find('[data-testid="smtp-port-465-status"]').text()).toBe('Not checked yet');
         expect(wrapper!.find('[data-testid="smtp-connect"]').text()).not.toMatch(/HELO|Edge|primary source/i);
+    });
+
+    it("points to the app's Keys page when its sending IP is no longer on the sending worker", async () => {
+        api.getAppSmtp.mockResolvedValue({
+            data: smtpResponse({ connection: { host_source: null, host_status: 'ip_unavailable', ports: [], observed_ports: [] } })
+        });
+        await mountSmtp();
+        expect(wrapper!.find('[data-testid="smtp-host-ip-unavailable"]').text()).toContain('no longer on the sending worker');
+        expect(wrapper!.find('[data-testid="smtp-host-ip-link"]').attributes('href')).toBe(`/apps/${APP_ID}`);
+        expect(wrapper!.find('[data-testid="smtp-connect"]').text()).not.toMatch(/HELO|Edge|primary source/i);
+    });
+
+    it('rejects a connection without a known host status', async () => {
+        expect(() => smtp.parseAppSmtp(smtpResponse({ connection: { host_source: null, ports: [], observed_ports: [] } }))).toThrow();
     });
 
     it('creates a credential, shows its username and password once, and never stores them', async () => {

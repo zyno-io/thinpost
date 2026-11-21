@@ -75,7 +75,7 @@ beforeEach(() => {
     api.getOperations.mockResolvedValue({ data: snapshot() });
     api.listOperationsAttention.mockResolvedValue({ data: { items: [attentionItem] } });
     api.getFeedbackLoops.mockResolvedValue({ data: { receiving: true, reporters: [], counts: [] } });
-    api.listSendingIps.mockResolvedValue({ data: { ips: [], unpinned_app_count: 0, edge_reported_at: null, edge_reports_sources: false, edge_primary_address: null, unnamed_edge_addresses: [] } });
+    api.listSendingIps.mockResolvedValue({ data: { ips: [], unpinned_app_count: 0, edge_reported_at: null, edge_reports_identity: false, edge_primary_address: null } });
     api.getRuntime.mockResolvedValue({ data: { features: { submission: true, tracking: false } } });
 });
 

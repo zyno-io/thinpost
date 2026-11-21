@@ -10,7 +10,7 @@ import (
 )
 
 // runtimeGrantSchemaVersion forces a privilege review when a migration is added.
-const runtimeGrantSchemaVersion = 44
+const runtimeGrantSchemaVersion = 45
 
 // GrantRuntimeRole grants only the reviewed runtime operations. It is an
 // explicit maintenance operation, not an application startup migration. The

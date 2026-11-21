@@ -14,7 +14,7 @@ Subjects, recipient and sender addresses and search terms never go to stdout, st
 Rules the code follows:
 
 - **SMTP errors** carry the stage and the reply code only. The remote reply text is discarded because it usually echoes the recipient.
-- **Sending IPs** appear by name, or as `primary` or `other`, never as an address.
+- **Sending IPs** appear by their HELO name, or as `primary`, `removed` or `other`, never as an address. The HELO name is an operator-owned name from the edge's configuration, the one domain the logs carry, and only a lowercase host name of at most 253 characters passes (anything shaped like an IP address becomes `other`). Recipient, sender and customer domains are never logged.
 - **Panics** log a route class and a stack, never the URL or the panic value. The bounce receiver replaces the SMTP library's default logger, which prints peer addresses.
 - **Search** uses `POST /api/v1/apps/{appId}/messages/search` with the term in a JSON body, so it never appears in an access log, a URL or a cursor. A query string on that route is rejected.
 - **Tracing is refused.** Both binaries refuse to start when `GRPC_BINARY_LOG_FILTER` is set. Do not enable client tracing for the S3 client, the database driver or HTTP clients.

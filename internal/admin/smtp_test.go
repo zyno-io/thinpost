@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +13,6 @@ type smtpTestStore struct {
 	*fakeStore
 	policy      SMTPFromPolicy
 	credentials []SMTPCredential
-	primary     netip.Addr
 	setErr      error
 	issueErr    error
 	revokeErr   error
@@ -49,10 +47,9 @@ func (s *smtpTestStore) RevokeSMTPCredential(_ context.Context, actor, app, id s
 	s.actor, s.app, s.revoked = actor, app, id
 	return s.revokeErr
 }
-func (s *smtpTestStore) SMTPConnection(_ context.Context, _ string, primary netip.Addr) (SMTPConnection, error) {
-	s.primary = primary
+func (s *smtpTestStore) SMTPConnection(context.Context, string) (SMTPConnection, error) {
 	host, source := "smtp.example.org", SMTPHostPrimary
-	return SMTPConnection{Host: &host, HostSource: &source, Ports: SMTPPorts(), ObservedPorts: []int{}}, nil
+	return SMTPConnection{Host: &host, HostSource: &source, HostStatus: SMTPHostOK, Ports: SMTPPorts(), ObservedPorts: []int{}}, nil
 }
 
 type fakeReadiness struct {
@@ -67,8 +64,7 @@ func (f *fakeReadiness) Ready(_ context.Context, app, domain string) error {
 
 func TestSMTPRoutes(t *testing.T) {
 	store := &smtpTestStore{fakeStore: &fakeStore{}, policy: SMTPFromPolicy{Mode: "off", OnlyUnauthorized: true}}
-	primary := netip.MustParseAddr("45.0.1.22")
-	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store, PrimarySource: primary}
+	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store}
 	app := strings.Repeat("a", 32)
 	base := "/api/v1/apps/" + app + "/smtp"
 
@@ -91,7 +87,7 @@ func TestSMTPRoutes(t *testing.T) {
 		Connection  SMTPConnection   `json:"connection"`
 	}
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.Settings.From.Mode != "off" || got.Settings.SigningReady != nil ||
-		got.Credentials == nil || len(got.Credentials) != 0 || *got.Connection.Host != "smtp.example.org" || len(got.Connection.Ports) != 2 || store.primary != primary {
+		got.Credentials == nil || len(got.Credentials) != 0 || *got.Connection.Host != "smtp.example.org" || len(got.Connection.Ports) != 2 || got.Connection.HostStatus != SMTPHostOK {
 		t.Fatal("read", w.Code, w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), `"signing_ready":null`) || !strings.Contains(w.Body.String(), `"credentials":[]`) {

@@ -117,7 +117,7 @@ The first admission line covers ports 465 and 587 and appears only when `THINPOS
 
 A rising `auth_invalid` or `auth_blocked` points to a client with a wrong or revoked credential. `data_budget_timeout` means submissions waited for the edge's buffer budget.
 
-`ip` is the name of the sending IP, `primary` for the Edge's primary address when it has no name, and `other` for anything that is not a valid name. Alert on `preparation_failed` and on spikes in non-success delivery outcomes, and use the IDs to look up the message in the console.
+`ip` is the HELO name of the sending IP the attempt used (never its address). It is `primary` for an attempt recorded before schema 45, which has no recorded source, `removed` when the IP's row no longer exists, and `other` for anything that is not a plausible host name (including anything shaped like an IP address). Alert on `preparation_failed` and on spikes in non-success delivery outcomes, and use the IDs to look up the message in the console.
 
 Rules that keep logs safe to ship to a shared log system:
 

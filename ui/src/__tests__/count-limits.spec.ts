@@ -134,8 +134,8 @@ beforeEach(() => {
     api.getSubmissionRate.mockResolvedValue({ data: { per_minute: 600, burst: 100 } });
     api.getRecipientQuota.mockResolvedValue({ data: cases[0]!.initial });
     api.getPendingQuota.mockResolvedValue({ data: cases[1]!.initial });
-    api.getAppSendingIp.mockResolvedValue({ data: { sending_ip_id: null, name: null } });
-    api.listSendingIps.mockResolvedValue({ data: { ips: [], unpinned_app_count: 0, edge_reported_at: null, edge_reports_sources: false, edge_primary_address: null, unnamed_edge_addresses: [] } });
+    api.getAppSendingIp.mockResolvedValue({ data: { sending_ip_id: null, address: null, helo_name: null } });
+    api.listSendingIps.mockResolvedValue({ data: { ips: [], unpinned_app_count: 0, edge_reported_at: null, edge_reports_identity: false, edge_primary_address: null } });
 });
 
 afterEach(() => {

@@ -263,7 +263,7 @@ export async function installMocks(page: Page, options: MockOptions = {}) {
             });
         }
         if (path === '/sending-ips' && method === 'GET') {
-            return json(route, { ips: [], unpinned_app_count: 2, edge_reported_at: null, edge_reports_sources: false, edge_primary_address: null, unnamed_edge_addresses: [] });
+            return json(route, { ips: [], unpinned_app_count: 2, edge_reported_at: null, edge_reports_identity: false, edge_primary_address: null });
         }
         if (path === '/retry-policy' && method === 'PUT') {
             return json(route, { ...(request.postDataJSON() as object), revision: 4, changed_at: new Date().toISOString(), changed_by: 'operator' });
@@ -280,7 +280,7 @@ export async function installMocks(page: Page, options: MockOptions = {}) {
                 connection: {
                     host: 'smtp.example.test',
                     host_source: 'primary',
-                    primary_unnamed: false,
+                    host_status: 'ok',
                     ports: [
                         { port: 465, security: 'tls' },
                         { port: 587, security: 'starttls' }
@@ -308,7 +308,7 @@ export async function installMocks(page: Page, options: MockOptions = {}) {
         if (rest === '/submission-rate') return json(route, { per_minute: 6, burst: 4 });
         if (rest === '/recipient-quota') return json(route, method === 'PUT' ? { ...(request.postDataJSON() as object), used: 12, day: '2026-11-11' } : { daily_limit: 1000, used: 12, day: '2026-11-11' });
         if (rest === '/pending-quota') return json(route, method === 'PUT' ? { ...(request.postDataJSON() as object), pending: 3, truncated: false } : { limit: 500, pending: 3, truncated: false });
-        if (rest === '/sending-ip') return json(route, { sending_ip_id: null, name: null });
+        if (rest === '/sending-ip') return json(route, { sending_ip_id: null, address: null, helo_name: null });
         if (rest === '/tracking-defaults') return json(route, method === 'PUT' ? (request.postDataJSON() as object) : { opens: false, clicks: true });
         if (rest === '/tracking-quota') return json(route, { daily_limit: 500, used: 120, suppressed: 7, day: '2026-11-11' });
         if (rest === '/domains') {

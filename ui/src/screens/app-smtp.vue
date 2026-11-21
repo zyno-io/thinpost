@@ -34,12 +34,17 @@
                     </div>
                 </div>
                 <div class="card-body connect-body">
-                    <div v-if="data.connection.primary_unnamed" class="notice warning" data-testid="smtp-host-unnamed">
+                    <div v-if="hostStatus === 'not_reported'" class="notice warning" data-testid="smtp-host-not-reported">
                         <i class="fa-solid fa-triangle-exclamation" aria-hidden="true" />
                         <p class="notice-body">
-                            <strong>No server name yet.</strong> Thinpost doesn't have a server name to give you for this app. Ask your Thinpost administrator to
-                            name the main sending IP on
-                            <RouterLink to="/operations" data-testid="smtp-host-operations-link">Operations → Sending IPs</RouterLink>.
+                            <strong>No server name yet.</strong> The sending worker hasn't connected yet, so Thinpost doesn't have a server name to give you. Try again in a few minutes, or ask your Thinpost administrator.
+                        </p>
+                    </div>
+                    <div v-else-if="hostStatus === 'ip_unavailable'" class="notice warning" data-testid="smtp-host-ip-unavailable">
+                        <i class="fa-solid fa-triangle-exclamation" aria-hidden="true" />
+                        <p class="notice-body">
+                            <strong>No server name for this app's IP.</strong> The sending IP chosen for this app is no longer on the sending worker, so its mail is waiting.
+                            Choose another IP for the app on its <RouterLink :to="{ name: 'app-keys', params: { appId } }" data-testid="smtp-host-ip-link">Keys page</RouterLink>.
                         </p>
                     </div>
                     <div v-else-if="!hostName" class="notice warning" data-testid="smtp-host-missing">
@@ -356,6 +361,7 @@ const issueHint = computed(() => {
 const canIssue = computed(() => !issueHint.value && authState.status === 'signed-in' && !isIssuing.value);
 
 const hostName = computed(() => data.value?.connection['host'] ?? '');
+const hostStatus = computed(() => data.value?.connection['host_status']);
 const domainChoices = computed(() => {
     const names = [...(domains.value ?? [])];
     // Keep a saved domain that is no longer verified visible so the form shows what is stored.

@@ -247,7 +247,7 @@
 
         <FeedbackLoopsCard :gate-mode="ops?.gate.mode ?? null" />
 
-        <SendingIpsCard :gate-mode="ops?.gate.mode ?? null" />
+       <SendingIpsCard />
 
         <section class="card" aria-labelledby="ops-runtime-heading">
             <div class="card-header">

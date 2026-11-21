@@ -60,10 +60,35 @@ type Work interface {
 	Next(context.Context, postgres.ControllerLease, delivery.EdgeCapabilities) (*controlv1.DeliveryStart, []byte, error)
 }
 
-// Reports records the sources a worker reported, best effort and for display
-// only: it never gates delivery, and its failure never ends the session.
+// Reports records the sources a worker reported in the sending-IP rows, best
+// effort: delivery is addressed from the session's own report and never waits
+// on it, and its failure never ends the session.
 type Reports interface {
 	RecordEdgeSources(context.Context, postgres.ControllerLease, delivery.EdgeCapabilities) error
+}
+
+// reportRetryDelays are the waits between the (at most three) tries to record a
+// report.
+var reportRetryDelays = []time.Duration{time.Second, 5 * time.Second}
+
+// recordReport writes a report with a bounded retry. It stops at once when ctx
+// is done or the lease is no longer valid.
+func recordReport(ctx context.Context, reports Reports, lease postgres.ControllerLease, caps delivery.EdgeCapabilities) error {
+	err := reports.RecordEdgeSources(ctx, lease, caps)
+	for _, delay := range reportRetryDelays {
+		if err == nil || errors.Is(err, delivery.ErrLeaseInvalid) || ctx.Err() != nil {
+			return err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		err = reports.RecordEdgeSources(ctx, lease, caps)
+	}
+	return err
 }
 
 // Bounces must return nil only after the untrusted body and its receipt have
@@ -453,11 +478,12 @@ func (r *Runner) RunDraining(parent context.Context, drain <-chan struct{}) erro
 				}
 				ready, caps = true, reported
 				if r.Reports != nil {
-					// Display only, off the session's path: a slow or failed
-					// write must not stall or end the stream.
+					// Off the session's path: a slow or failed write must not
+					// stall or end the stream. The write is retried a few times
+					// because rows are how a new IP becomes pinnable.
 					snapshot := lease
 					go func() {
-						if err := r.Reports.RecordEdgeSources(ctx, snapshot, reported); err != nil && ctx.Err() == nil {
+						if err := recordReport(ctx, r.Reports, snapshot, reported); err != nil && ctx.Err() == nil && !errors.Is(err, delivery.ErrLeaseInvalid) {
 							log.Print("failed to record edge sources")
 						}
 					}()

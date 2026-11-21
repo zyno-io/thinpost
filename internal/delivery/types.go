@@ -63,17 +63,17 @@ type Claim struct {
 	// recheck then does not apply the allowlist; the egress policy still runs.
 	RecipientPolicyOverride bool
 	// The sending IP chosen at claim time, always from the live session's
-	// report. SourceAddress and HeloName are set only for an app pinned to an
-	// IP; both are empty for an app on the primary address, which the worker
-	// sends from under its own name. SourceName is the log-safe name of the
-	// pinned IP's record. BounceDomain is the return-path domain: the
-	// reported name of the address the delivery leaves from, never empty on a
-	// claim. It stays separate from HeloName so a later change can give an app
-	// its own.
+	// report and always set: the app's pinned IP, else the main IP.
+	// SourceAddress and HeloName are what the worker is asked to send from and
+	// greet with. SourceName is the log-safe name of that IP (its HELO name).
+	// BounceDomain is the return-path domain: the reported name of the address
+	// the delivery leaves from, never empty on a claim. It stays separate from
+	// HeloName so a later change can give an app its own.
 	SourceAddress, HeloName, SourceName, BounceDomain string
 	// ResolvedAddress is the address of the app's pinned sending IP; empty for
-	// an app on the primary. The provider checks it against the worker's
-	// reported addresses independently of the claim query.
+	// an app on the main IP (its SourceAddress is still explicit). The provider
+	// checks it against the worker's reported addresses independently of the
+	// claim query.
 	ResolvedAddress string
 }
 
@@ -124,8 +124,9 @@ func (c EdgeCapabilities) Has(address string) bool {
 // callers can emit lifecycle logs without a second lookup.
 type Committed struct {
 	AppID, MessageID string
-	// SourceName is the log-safe name of the sending IP the attempt used, or
-	// "primary" when it used the worker's primary address.
+	// SourceName is the log-safe name of the sending IP the attempt used: its
+	// HELO name, "removed" when its row is gone, or "primary" for an attempt
+	// recorded before schema 45 without a source.
 	SourceName string
 	// Replayed is true when the exact result had already been committed.
 	Replayed bool

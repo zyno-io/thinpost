@@ -5,39 +5,53 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"net/netip"
 	"slices"
+	"sort"
 	"strconv"
 
 	"github.com/zyno-io/thinpost/internal/admin"
 	"github.com/zyno-io/thinpost/internal/delivery"
-	"github.com/zyno-io/thinpost/internal/egress"
 )
 
-// Sending IPs name the Edge's outbound addresses and assign them to apps. None
-// of the code here logs, and no error it returns carries database text, so an
-// address (which unique-violation details would quote) never leaves the store.
+// Sending IPs mirror the Edge's report so the console can list the addresses
+// and pin apps to them by a stable id. Nothing here lets a caller create, edit
+// or delete a row: they are written only from the report. None of the code
+// here logs, and no error it returns carries database text, so an address
+// never leaves the store.
 
-// maxSendingIPs bounds the pool: the Edge can advertise at most 16 addresses.
+// maxSendingIPs bounds the list: the Edge can advertise at most 16 addresses
+// and pinned rows it no longer reports stay.
 const maxSendingIPs = 64
 
-// RecordEdgeSources stores what the worker reported in Ready, for the console
-// only: delivery is addressed from the live session's report, never from this
-// copy. Only the live lease holder may write, and a stale epoch cannot
-// overwrite a newer one. The names are stored in the bounce_domains column,
-// since a source's name is its bounce domain. A worker that reports no usable
-// sources is stored with NULL lists (unknown, not empty).
+// RecordEdgeSources stores what the worker reported in Ready and mirrors it
+// into sending_ips. Delivery is addressed from the live session's report, never
+// from this copy. Only the live lease holder may write, and a stale epoch
+// writes nothing (not even rows). In one transaction, with report writers
+// serialized by a table lock that does not block pins:
+//
+//   - each reported address is upserted by address, refreshing its HELO name;
+//     the address of a row never changes;
+//   - rows that are neither reported nor pinned by an app are deleted, inside
+//     a savepoint: if a concurrent pin wins the race the foreign key refuses
+//     the delete, the savepoint is rolled back, the row is kept and the report
+//     still commits (the next report prunes it);
+//   - apps are never touched, so a report cannot move an app to another
+//     address, and a pinned row is never deleted.
+//
+// A worker that reports no usable sources is stored with a NULL address list
+// (unknown, not empty) and prunes every unpinned row.
 func (r *Repository) RecordEdgeSources(ctx context.Context, lease ControllerLease, caps delivery.EdgeCapabilities) error {
 	if !leaseID(lease.WorkerID) || !leaseID(lease.ControllerID) || lease.Epoch == 0 {
 		return errors.New("invalid controller lease")
 	}
-	var addresses, domains any
-	if len(caps.Sources) > 0 {
-		list, names := make([]string, 0, len(caps.Sources)), make([]string, 0, len(caps.Sources))
-		for _, source := range caps.Sources {
-			list, names = append(list, source.Address.String()), append(names, source.Hostname)
-		}
-		addresses, domains = list, names
+	var addresses any
+	reported := make([]string, 0, len(caps.Sources))
+	names := make([]string, 0, len(caps.Sources))
+	for _, source := range caps.Sources {
+		reported, names = append(reported, source.Address.String()), append(names, source.Hostname)
+	}
+	if len(reported) > 0 {
+		addresses = reported
 	}
 	var ports any
 	if caps.SubmissionPorts != nil {
@@ -67,34 +81,75 @@ func (r *Repository) RecordEdgeSources(ctx context.Context, lease ControllerLeas
 	if !live {
 		return delivery.ErrLeaseInvalid
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO edge_source_reports(worker_id,epoch,addresses,bounce_domains,reported_at,submission_ports)
-		VALUES ($1,$2,$3::text[]::inet[],$4::text[],clock_timestamp(),$5::text[]::integer[])
-		ON CONFLICT (worker_id) DO UPDATE SET epoch=EXCLUDED.epoch,addresses=EXCLUDED.addresses,bounce_domains=EXCLUDED.bounce_domains,reported_at=EXCLUDED.reported_at,submission_ports=EXCLUDED.submission_ports
-		WHERE edge_source_reports.epoch<=EXCLUDED.epoch`, lease.WorkerID, lease.Epoch, addresses, domains, ports); err != nil {
+	var written string
+	err = tx.QueryRowContext(ctx, `INSERT INTO edge_source_reports(worker_id,epoch,addresses,reported_at,submission_ports)
+		VALUES ($1,$2,$3::text[]::inet[],clock_timestamp(),$4::text[]::integer[])
+		ON CONFLICT (worker_id) DO UPDATE SET epoch=EXCLUDED.epoch,addresses=EXCLUDED.addresses,reported_at=EXCLUDED.reported_at,submission_ports=EXCLUDED.submission_ports
+		WHERE edge_source_reports.epoch<=EXCLUDED.epoch RETURNING worker_id`, lease.WorkerID, lease.Epoch, addresses, ports).Scan(&written)
+	if errors.Is(err, sql.ErrNoRows) {
+		// A newer epoch already reported: this write is stale, so it must not
+		// touch the rows either.
+		return nil
+	}
+	if err != nil {
 		return err
+	}
+	// SHARE ROW EXCLUSIVE serializes report writers against each other. It does
+	// not conflict with the key-share locks that pinning an app takes.
+	if _, err = tx.ExecContext(ctx, `LOCK TABLE sending_ips IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		return err
+	}
+	for i, address := range reported {
+		id, idErr := newOpaqueID()
+		if idErr != nil {
+			return idErr
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO sending_ips(id,address,helo_name) VALUES ($1,$2::text::inet,$3)
+			ON CONFLICT (address) DO UPDATE SET helo_name=EXCLUDED.helo_name WHERE sending_ips.helo_name<>EXCLUDED.helo_name`, id, address, names[i]); err != nil {
+			return errors.New("record sending ip failed")
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `SAVEPOINT prune_sending_ips`); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM sending_ips s WHERE NOT (host(s.address)=ANY($1::text[]))
+		AND NOT EXISTS (SELECT 1 FROM apps a WHERE a.sending_ip_id=s.id)`, reported)
+	switch {
+	case err == nil:
+		if _, err = tx.ExecContext(ctx, `RELEASE SAVEPOINT prune_sending_ips`); err != nil {
+			return err
+		}
+	case sqlState(err) == "23503":
+		// An app was pinned to a row between the check and the delete. The pin
+		// wins; the row is pruned by a later report if it is unpinned again.
+		if _, err = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT prune_sending_ips`); err != nil {
+			return err
+		}
+	default:
+		return errors.New("prune sending ips failed")
 	}
 	return tx.Commit()
 }
 
-// ListSendingIPs reads the pool with the Edge's last report, without the
-// runtime gate, so the console works during a deploy.
+// ListSendingIPs reads the rows with the Edge's last report, without the
+// runtime gate, so the console works during a deploy. The main IP is first.
 func (r *Repository) ListSendingIPs(ctx context.Context) (admin.SendingIPList, error) {
-	out := admin.SendingIPList{IPs: []admin.SendingIP{}, UnnamedEdgeAddresses: []string{}}
+	out := admin.SendingIPList{IPs: []admin.SendingIP{}}
 	tx, err := r.beginOperationsRead(ctx)
 	if err != nil {
 		return out, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT ip.id,ip.name,host(ip.address),ip.helo_name,ip.bounce_domain,ip.created_at,
+	rows, err := tx.QueryContext(ctx, `SELECT ip.id,host(ip.address),ip.helo_name,ip.created_at,
 		(SELECT count(*) FROM apps a WHERE a.sending_ip_id=ip.id)
-		FROM sending_ips ip ORDER BY ip.name LIMIT $1`, maxSendingIPs)
+		FROM sending_ips ip ORDER BY ip.helo_name,ip.address LIMIT $1`, maxSendingIPs)
 	if err != nil {
 		return out, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var ip admin.SendingIP
-		if err = rows.Scan(&ip.ID, &ip.Name, &ip.Address, &ip.HeloName, &ip.BounceDomain, &ip.CreatedAt, &ip.AppCount); err != nil {
+		if err = rows.Scan(&ip.ID, &ip.Address, &ip.HeloName, &ip.CreatedAt, &ip.AppCount); err != nil {
 			return out, err
 		}
 		out.IPs = append(out.IPs, ip)
@@ -107,11 +162,11 @@ func (r *Repository) ListSendingIPs(ctx context.Context) (admin.SendingIPList, e
 		return out, err
 	}
 	var reportedAt sql.NullTime
-	var legacy sql.NullBool
-	var addressJSON, domainJSON []byte
+	var unknown sql.NullBool
+	var addressJSON []byte
 	err = tx.QueryRowContext(ctx, `SELECT reported_at,addresses IS NULL,
-		to_json(ARRAY(SELECT host(x) FROM unnest(addresses) WITH ORDINALITY AS t(x,n) ORDER BY n)),to_json(bounce_domains)
-		FROM edge_source_reports ORDER BY reported_at DESC LIMIT 1`).Scan(&reportedAt, &legacy, &addressJSON, &domainJSON)
+		to_json(ARRAY(SELECT host(x) FROM unnest(addresses) WITH ORDINALITY AS t(x,n) ORDER BY n))
+		FROM edge_source_reports ORDER BY reported_at DESC LIMIT 1`).Scan(&reportedAt, &unknown, &addressJSON)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return out, err
 	}
@@ -119,34 +174,24 @@ func (r *Repository) ListSendingIPs(ctx context.Context) (admin.SendingIPList, e
 		return out, tx.Commit()
 	}
 	out.EdgeReportedAt = &reportedAt.Time
-	if legacy.Bool {
+	if unknown.Bool {
 		return out, tx.Commit()
 	}
-	var addresses, domains []string
-	if json.Unmarshal(addressJSON, &addresses) != nil || (len(domainJSON) > 0 && json.Unmarshal(domainJSON, &domains) != nil) {
+	var addresses []string
+	if json.Unmarshal(addressJSON, &addresses) != nil {
 		return out, errors.New("unreadable edge report")
 	}
-	out.EdgeReportsSources = true
+	out.EdgeReportsIdentity = true
 	if len(addresses) > 0 {
 		out.EdgePrimaryAddress = &addresses[0]
 	}
-	named := make(map[string]bool, len(out.IPs))
 	for i := range out.IPs {
 		ip := &out.IPs[i]
-		// Mail is addressed from the edge's report: the bounce domain is the
-		// reported name of the address it leaves from, so nothing waits on the
-		// stored bounce domain any more.
 		onEdge := slices.Contains(addresses, ip.Address)
-		bounceOnEdge := onEdge
-		ip.OnEdge, ip.BounceOnEdge = &onEdge, &bounceOnEdge
+		ip.OnEdge = &onEdge
 		ip.IsPrimary = len(addresses) > 0 && addresses[0] == ip.Address
-		named[ip.Address] = true
 	}
-	for _, address := range addresses {
-		if !named[address] {
-			out.UnnamedEdgeAddresses = append(out.UnnamedEdgeAddresses, address)
-		}
-	}
+	sort.SliceStable(out.IPs, func(i, j int) bool { return out.IPs[i].IsPrimary && !out.IPs[j].IsPrimary })
 	return out, tx.Commit()
 }
 
@@ -156,215 +201,61 @@ func (r *Repository) GetSendingIP(ctx context.Context, id string) (admin.Sending
 	if !opaqueID(id) {
 		return ip, admin.ErrNotFound
 	}
-	err := r.DB.QueryRowContext(ctx, `SELECT id,name,host(address),helo_name,bounce_domain,created_at,(SELECT count(*) FROM apps a WHERE a.sending_ip_id=sending_ips.id) FROM sending_ips WHERE id=$1`, id).
-		Scan(&ip.ID, &ip.Name, &ip.Address, &ip.HeloName, &ip.BounceDomain, &ip.CreatedAt, &ip.AppCount)
+	err := r.DB.QueryRowContext(ctx, `SELECT id,host(address),helo_name,created_at,(SELECT count(*) FROM apps a WHERE a.sending_ip_id=sending_ips.id) FROM sending_ips WHERE id=$1`, id).
+		Scan(&ip.ID, &ip.Address, &ip.HeloName, &ip.CreatedAt, &ip.AppCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ip, admin.ErrNotFound
 	}
 	return ip, err
 }
 
-func validSendingIPInput(in admin.SendingIPInput) bool {
-	if !admin.ValidSendingIPInput(in) {
-		return false
-	}
-	address, err := netip.ParseAddr(in.Address)
-	return err == nil && egress.PublicSource(address)
-}
-
-// auditSystem writes a system-scoped audit row (app_id NULL). Details never
-// hold an address.
-func auditSystem(ctx context.Context, tx *sql.Tx, actor, action, resource string, details map[string]any) error {
-	id, err := newOpaqueID()
-	if err != nil {
-		return err
-	}
-	encoded, err := json.Marshal(details)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO audit_events(id,actor_id,app_id,action,resource_id,details) VALUES ($1,$2,NULL,$3,$4,$5::jsonb)`, id, actor, action, resource, string(encoded))
-	return err
-}
-
-// CreateSendingIP adds a row. A duplicate name or address is admin.ErrConflict.
-func (r *Repository) CreateSendingIP(ctx context.Context, actor string, in admin.SendingIPInput) (admin.SendingIP, error) {
-	if !adminText(actor, 256) || !validSendingIPInput(in) {
-		return admin.SendingIP{}, admin.ErrInvalidInput
-	}
-	id, err := newOpaqueID()
-	if err != nil {
-		return admin.SendingIP{}, err
-	}
-	tx, err := r.beginRuntime(ctx)
-	if err != nil {
-		return admin.SendingIP{}, err
-	}
-	defer tx.Rollback()
-	// Serialize pool edits with each other and with assignments.
-	if _, err = tx.ExecContext(ctx, `LOCK TABLE sending_ips IN SHARE ROW EXCLUSIVE MODE`); err != nil {
-		return admin.SendingIP{}, err
-	}
-	var count int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM sending_ips`).Scan(&count); err != nil {
-		return admin.SendingIP{}, err
-	}
-	if count >= maxSendingIPs {
-		return admin.SendingIP{}, admin.ErrConflict
-	}
-	var ip admin.SendingIP
-	err = tx.QueryRowContext(ctx, `INSERT INTO sending_ips(id,name,address,helo_name,bounce_domain) VALUES ($1,$2,$3::text::inet,$4,$5)
-		RETURNING id,name,host(address),helo_name,bounce_domain,created_at`, id, in.Name, in.Address, in.HeloName, in.BounceDomain).
-		Scan(&ip.ID, &ip.Name, &ip.Address, &ip.HeloName, &ip.BounceDomain, &ip.CreatedAt)
-	if sqlState(err) == "23505" {
-		return admin.SendingIP{}, admin.ErrConflict
-	}
-	if err != nil {
-		return admin.SendingIP{}, errors.New("create sending ip failed")
-	}
-	if err = auditSystem(ctx, tx, actor, "sending_ip.created", id, map[string]any{"name": in.Name}); err != nil {
-		return admin.SendingIP{}, err
-	}
-	if err = tx.Commit(); err != nil {
-		return admin.SendingIP{}, err
-	}
-	return ip, nil
-}
-
-// UpdateSendingIP edits the name, HELO name or bounce domain. The address never
-// changes. An identical request changes and audits nothing.
-func (r *Repository) UpdateSendingIP(ctx context.Context, actor, id string, patch admin.SendingIPPatch) (admin.SendingIP, error) {
-	if !adminText(actor, 256) || !opaqueID(id) || patch.Name == nil && patch.HeloName == nil && patch.BounceDomain == nil ||
-		patch.Name != nil && !admin.ValidSendingIPName(*patch.Name) ||
-		patch.HeloName != nil && !admin.ValidSendingIPDomain(*patch.HeloName, 253) ||
-		patch.BounceDomain != nil && !admin.ValidSendingIPDomain(*patch.BounceDomain, 219) {
-		return admin.SendingIP{}, admin.ErrInvalidInput
-	}
-	tx, err := r.beginRuntime(ctx)
-	if err != nil {
-		return admin.SendingIP{}, err
-	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `LOCK TABLE sending_ips IN SHARE ROW EXCLUSIVE MODE`); err != nil {
-		return admin.SendingIP{}, err
-	}
-	var ip admin.SendingIP
-	err = tx.QueryRowContext(ctx, `SELECT id,name,host(address),helo_name,bounce_domain,created_at,(SELECT count(*) FROM apps a WHERE a.sending_ip_id=sending_ips.id) FROM sending_ips WHERE id=$1 FOR UPDATE`, id).
-		Scan(&ip.ID, &ip.Name, &ip.Address, &ip.HeloName, &ip.BounceDomain, &ip.CreatedAt, &ip.AppCount)
+// lockSendingIPForPin key-share locks a row, which blocks a concurrent prune of
+// it until the caller's transaction ends, and reports whether the Edge's last
+// report lists its address. A missing row is admin.ErrNotFound.
+func lockSendingIPForPin(ctx context.Context, tx *sql.Tx, id string) (address, helo string, onEdge bool, err error) {
+	err = tx.QueryRowContext(ctx, `SELECT host(ip.address),ip.helo_name,
+		COALESCE(ip.address=ANY(r.addresses),false)
+		FROM sending_ips ip
+		LEFT JOIN LATERAL (SELECT addresses FROM edge_source_reports ORDER BY reported_at DESC LIMIT 1) r ON true
+		WHERE ip.id=$1 FOR KEY SHARE OF ip`, id).Scan(&address, &helo, &onEdge)
 	if errors.Is(err, sql.ErrNoRows) {
-		return admin.SendingIP{}, admin.ErrNotFound
+		return "", "", false, admin.ErrNotFound
 	}
-	if err != nil {
-		return admin.SendingIP{}, err
-	}
-	next := ip
-	var changed []string
-	if patch.Name != nil && *patch.Name != ip.Name {
-		next.Name = *patch.Name
-		changed = append(changed, "name")
-	}
-	if patch.HeloName != nil && *patch.HeloName != ip.HeloName {
-		next.HeloName = *patch.HeloName
-		changed = append(changed, "helo_name")
-	}
-	if patch.BounceDomain != nil && *patch.BounceDomain != ip.BounceDomain {
-		next.BounceDomain = *patch.BounceDomain
-		changed = append(changed, "bounce_domain")
-	}
-	if len(changed) == 0 {
-		return ip, tx.Commit()
-	}
-	// A row saved before this rule may not satisfy it; only a change to the HELO
-	// name or bounce domain has to.
-	if (next.HeloName != ip.HeloName || next.BounceDomain != ip.BounceDomain) && !admin.HeloUnderBounceDomain(next.HeloName, next.BounceDomain) {
-		return admin.SendingIP{}, admin.ErrInvalidInput
-	}
-	_, err = tx.ExecContext(ctx, `UPDATE sending_ips SET name=$2,helo_name=$3,bounce_domain=$4 WHERE id=$1`, id, next.Name, next.HeloName, next.BounceDomain)
-	if sqlState(err) == "23505" {
-		return admin.SendingIP{}, admin.ErrConflict
-	}
-	if err != nil {
-		return admin.SendingIP{}, errors.New("update sending ip failed")
-	}
-	if err = auditSystem(ctx, tx, actor, "sending_ip.updated", id, map[string]any{"name": next.Name, "fields": changed}); err != nil {
-		return admin.SendingIP{}, err
-	}
-	if err = tx.Commit(); err != nil {
-		return admin.SendingIP{}, err
-	}
-	return next, nil
+	return address, helo, onEdge, err
 }
 
-// DeleteSendingIP removes an unused row. It is admin.ErrConflict while any app
-// is assigned the IP; the foreign key backs that check against a concurrent
-// assignment. Attempt history keeps the raw address, so nothing is lost.
-func (r *Repository) DeleteSendingIP(ctx context.Context, actor, id string) error {
-	if !adminText(actor, 256) || !opaqueID(id) {
-		return admin.ErrInvalidInput
-	}
-	tx, err := r.beginRuntime(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `LOCK TABLE sending_ips IN SHARE ROW EXCLUSIVE MODE`); err != nil {
-		return err
-	}
-	var name string
-	var apps int
-	err = tx.QueryRowContext(ctx, `SELECT name,(SELECT count(*) FROM apps a WHERE a.sending_ip_id=sending_ips.id) FROM sending_ips WHERE id=$1 FOR UPDATE`, id).Scan(&name, &apps)
-	if errors.Is(err, sql.ErrNoRows) {
-		return admin.ErrNotFound
-	}
-	if err != nil {
-		return err
-	}
-	if apps > 0 {
-		return admin.ErrConflict
-	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM sending_ips WHERE id=$1`, id); err != nil {
-		if sqlState(err) == "23503" {
-			return admin.ErrConflict
-		}
-		return errors.New("delete sending ip failed")
-	}
-	if err = auditSystem(ctx, tx, actor, "sending_ip.deleted", id, map[string]any{"name": name}); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-// GetAppSendingIP returns the app's assignment; a nil ID is the primary.
+// GetAppSendingIP returns the app's choice; a nil ID is the main IP.
 func (r *Repository) GetAppSendingIP(ctx context.Context, appID string) (admin.AppSendingIP, error) {
 	var out admin.AppSendingIP
 	if !opaqueID(appID) {
 		return out, admin.ErrNotFound
 	}
-	var id, name sql.NullString
-	err := r.DB.QueryRowContext(ctx, `SELECT a.sending_ip_id,ip.name FROM apps a LEFT JOIN sending_ips ip ON ip.id=a.sending_ip_id WHERE a.id=$1`, appID).Scan(&id, &name)
+	var id, address, helo sql.NullString
+	err := r.DB.QueryRowContext(ctx, `SELECT a.sending_ip_id,host(ip.address),ip.helo_name FROM apps a LEFT JOIN sending_ips ip ON ip.id=a.sending_ip_id WHERE a.id=$1`, appID).Scan(&id, &address, &helo)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, admin.ErrNotFound
 	}
 	if err != nil {
 		return out, err
 	}
-	return appSendingIP(id, name), nil
+	return appSendingIP(id, address, helo), nil
 }
 
-func appSendingIP(id, name sql.NullString) admin.AppSendingIP {
+func appSendingIP(id, address, helo sql.NullString) admin.AppSendingIP {
 	var out admin.AppSendingIP
 	if id.Valid {
-		out.SendingIPID = &id.String
-		out.Name = &name.String
+		out.SendingIPID, out.Address, out.HeloName = &id.String, &address.String, &helo.String
 	}
 	return out
 }
 
-// SetAppSendingIP assigns the app's sending IP (nil: back to the primary).
+// SetAppSendingIP sets the app's sending IP (nil: back to the main IP).
 // Queued and retried deliveries use the new IP at their next claim; an attempt
 // already with the worker finishes on the old one. The IP is a routing choice,
-// not an authorization, so there is no permit-time recheck. An identical
-// assignment changes and audits nothing.
+// not an authorization, so there is no permit-time recheck. Choosing an IP the
+// Edge is not reporting right now is admin.ErrConflict (an app pinned to one
+// would have its mail wait); choosing none is always allowed. An identical
+// choice changes and audits nothing, even for an IP no longer reported.
 func (r *Repository) SetAppSendingIP(ctx context.Context, actor, appID string, sendingIPID *string) (admin.AppSendingIP, error) {
 	if !adminText(actor, 256) || !opaqueID(appID) || sendingIPID != nil && !opaqueID(*sendingIPID) {
 		return admin.AppSendingIP{}, admin.ErrInvalidInput
@@ -375,14 +266,11 @@ func (r *Repository) SetAppSendingIP(ctx context.Context, actor, appID string, s
 	}
 	defer tx.Rollback()
 	var target any
-	var name sql.NullString
+	var address, helo string
+	var onEdge bool
 	if sendingIPID != nil {
-		// A key-share lock blocks a concurrent delete of the target row.
-		err = tx.QueryRowContext(ctx, `SELECT name FROM sending_ips WHERE id=$1 FOR KEY SHARE`, *sendingIPID).Scan(&name)
-		if errors.Is(err, sql.ErrNoRows) {
-			return admin.AppSendingIP{}, admin.ErrNotFound
-		}
-		if err != nil {
+		// The key-share lock blocks a concurrent prune of the target row.
+		if address, helo, onEdge, err = lockSendingIPForPin(ctx, tx, *sendingIPID); err != nil {
 			return admin.AppSendingIP{}, err
 		}
 		target = *sendingIPID
@@ -395,9 +283,12 @@ func (r *Repository) SetAppSendingIP(ctx context.Context, actor, appID string, s
 	if err != nil {
 		return admin.AppSendingIP{}, err
 	}
-	result := appSendingIP(sql.NullString{String: stringValue(sendingIPID), Valid: sendingIPID != nil}, name)
+	result := appSendingIP(sql.NullString{String: stringValue(sendingIPID), Valid: sendingIPID != nil}, sql.NullString{String: address, Valid: sendingIPID != nil}, sql.NullString{String: helo, Valid: sendingIPID != nil})
 	if current.Valid == (sendingIPID != nil) && (!current.Valid || current.String == *sendingIPID) {
 		return result, tx.Commit()
+	}
+	if sendingIPID != nil && !onEdge {
+		return admin.AppSendingIP{}, admin.ErrConflict
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE apps SET sending_ip_id=$2 WHERE id=$1`, appID, target); err != nil {
 		if sqlState(err) == "23503" {

@@ -64,7 +64,7 @@ func newFixture(t *testing.T) *fixture {
 	if err = postgres.Migrate(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	// Revert migrations 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29 and 28 to leave the exact schema-27 shape.
+	// Revert migrations 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29 and 28 to leave the exact schema-27 shape.
 	// Migration 44: the messages constraints and columns are removed first (messages_smtp_not_console
 	// references console_test, and the credential FK precedes the DROP TABLE);
 	// edge_source_reports.submission_ports is dropped with that table below.
@@ -121,7 +121,7 @@ ALTER TABLE webhook_deliveries DROP COLUMN lane;
 		DROP TABLE message_recipients; DROP INDEX deliveries_id_prefix_idx, messages_app_id_prefix_idx;
 		ALTER TABLE messages DROP CONSTRAINT messages_id_app_key, DROP COLUMN subject, DROP COLUMN recipient_count, DROP COLUMN sender_domain, DROP COLUMN sender_domain_rev;
 		ALTER TABLE messages RENAME COLUMN enhanced_protection TO require_tls;
-		DELETE FROM thinpost_schema_migrations WHERE version IN (28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44);
+		DELETE FROM thinpost_schema_migrations WHERE version IN (28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45);
 		UPDATE runtime_gate SET generation='`+testGeneration+`',mode='open',revision=5,quarantine_complete=true,changed_by='fixture' WHERE singleton`); err != nil {
 		t.Fatal(err)
 	}
