@@ -70,6 +70,11 @@ type Claim struct {
 	// the delivery leaves from, never empty on a claim. It stays separate from
 	// HeloName so a later change can give an app its own.
 	SourceAddress, HeloName, SourceName, BounceDomain string
+	// BounceTarget is set only when BounceDomain is an app's custom bounce
+	// domain rather than the HELO name: the HELO name of the source address
+	// that domain was verified to point at. The provider accepts the custom
+	// domain only if this still equals the reported name of the source.
+	BounceTarget string
 	// ResolvedAddress is the address of the app's pinned sending IP; empty for
 	// an app on the main IP (its SourceAddress is still explicit). The provider
 	// checks it against the worker's reported addresses independently of the
@@ -94,6 +99,21 @@ type EdgeCapabilities struct {
 	// SubmissionPorts are the SMTP submission ports the worker reported
 	// listening on; nil means it reported none. They only drive a console hint.
 	SubmissionPorts []int
+	// AnyBounceDomain is set when the worker reported bounce-any-domain/1: it
+	// accepts bounces addressed to any domain, so a delivery may use a custom
+	// bounce domain. Without it every Return-Path is the source's HELO name.
+	AnyBounceDomain bool
+}
+
+// HasHostname reports whether name is the reported name of one of the
+// worker's own addresses. Those names are never a customer's bounce domain.
+func (c EdgeCapabilities) HasHostname(name string) bool {
+	for _, candidate := range c.Sources {
+		if candidate.Hostname == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Primary is the source that apps with no assigned sending IP send from.

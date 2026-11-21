@@ -276,7 +276,10 @@ func (r *Repository) SetAppSendingIP(ctx context.Context, actor, appID string, s
 		target = *sendingIPID
 	}
 	var current sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT sending_ip_id FROM apps WHERE id=$1 FOR UPDATE`, appID).Scan(&current)
+	// NO KEY UPDATE, not UPDATE: audit inserts by bounce-domain checks (which
+	// hold a bounce row) take a KEY SHARE lock on the app, and must not wait
+	// here while this waits for their row.
+	err = tx.QueryRowContext(ctx, `SELECT sending_ip_id FROM apps WHERE id=$1 FOR NO KEY UPDATE`, appID).Scan(&current)
 	if errors.Is(err, sql.ErrNoRows) {
 		return admin.AppSendingIP{}, admin.ErrNotFound
 	}
@@ -294,6 +297,13 @@ func (r *Repository) SetAppSendingIP(ctx context.Context, actor, appID string, s
 		if sqlState(err) == "23503" {
 			return admin.AppSendingIP{}, admin.ErrNotFound
 		}
+		return admin.AppSendingIP{}, err
+	}
+	// The app's bounce domains must now point at the new IP's HELO name. Check
+	// them at the next tick, and drop any check already in flight: it was run
+	// against the old name. Claims stop using a domain whose verified target is
+	// not the live name immediately, without waiting for this.
+	if _, err = tx.ExecContext(ctx, `UPDATE bounce_domains SET next_check_at=clock_timestamp(),check_token=NULL,check_until=NULL WHERE app_id=$1`, appID); err != nil {
 		return admin.AppSendingIP{}, err
 	}
 	auditID, err := newOpaqueID()

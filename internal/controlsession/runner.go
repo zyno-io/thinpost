@@ -476,6 +476,10 @@ func (r *Runner) RunDraining(parent context.Context, drain <-chan struct{}) erro
 						reported.SubmissionPorts = append(reported.SubmissionPorts, int(port))
 					}
 				}
+				// Whether the edge takes bounces at any domain is the edge's own
+				// statement; control never offers it. Without it no custom
+				// Return-Path is ever chosen.
+				reported.AnyBounceDomain = edgeprotocol.HasCapability(body.Ready.GetCapabilities(), edgeprotocol.CapAnyBounceDomain)
 				ready, caps = true, reported
 				if r.Reports != nil {
 					// Off the session's path: a slow or failed write must not

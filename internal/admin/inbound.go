@@ -149,6 +149,10 @@ func CheckMX(ctx context.Context, resolver MXResolver, domain, host string) stri
 	return ClassifyMX(records, host)
 }
 
+// bounceClashMessage answers a receiving domain that an app already uses as
+// its bounce domain.
+const bounceClashMessage = "This domain is already used as a bounce domain, so it can't also receive mail. Remove the bounce domain first."
+
 // inboundDomainReserved reports whether domain is a HELO name the sending
 // worker reported (which is also its bounce domain and the inbound mail host),
 // or a subdomain of one. Those names carry Thinpost's own mail and can never be
@@ -256,6 +260,10 @@ func (h *Handler) inboundDomains(w http.ResponseWriter, r *http.Request, store I
 		}
 		challenge, err := store.RequestInboundDomain(r.Context(), actor, appID, domain)
 		if err != nil {
+			if errors.Is(err, ErrBounceDomainClash) {
+				respond(w, http.StatusBadRequest, map[string]string{"error": bounceClashMessage})
+				return
+			}
 			storeError(w, err)
 			return
 		}
@@ -298,6 +306,10 @@ func (h *Handler) inboundDomainAction(w http.ResponseWriter, r *http.Request, st
 		var status *statusError
 		if errors.As(err, &status) {
 			fail(w, status.code)
+			return
+		}
+		if errors.Is(err, ErrBounceDomainClash) {
+			respond(w, http.StatusBadRequest, map[string]string{"error": bounceClashMessage})
 			return
 		}
 		storeError(w, err)

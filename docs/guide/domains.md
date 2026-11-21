@@ -75,13 +75,39 @@ See [Key and certificate rotation](/operations/rotation).
 
 ## SPF and bounces
 
-You do not add Thinpost to your own domain's SPF record. Every message uses `b+<token>@<bounce domain>` as its envelope sender, so receivers check SPF against the **bounce domain**, which belongs to the sending IP. See [Sending IPs](/guide/sending-ips#dns-for-a-sending-ip).
+You do not add Thinpost to your own domain's SPF record. Every message uses `b+<token>@<bounce domain>` as its envelope sender, so receivers check SPF against the **bounce domain**. By default that is the HELO name of the sending IP (see [Sending IPs](/guide/sending-ips#dns-for-a-sending-ip)). If you want SPF to pass for your own domain too, give the sending domain [its own bounce domain](#your-own-bounce-domain).
+
+## Your own bounce domain
+
+A bounce domain is a name under your sending domain, such as `bounces.example.com`, that Thinpost uses as the return address (the SMTP envelope sender, also called the Return-Path) instead of the sending IP's HELO name. Receivers then check SPF against a name in your own domain, which lines up with the `From` domain for DMARC's usual (relaxed) SPF check. It is optional. Without it, mail is sent exactly as before.
+
+**Set it up** on the Sending domains tab, in the bounce-domain panel under a verified domain (API: `PUT /api/v1/apps/{appId}/domains/{domain}/bounce-domain` with `{"name": "bounces.example.com"}`).
+
+1. **Choose a name.** It must be a subdomain of the sending domain (not the sending domain itself) and not used for anything else. It can't be a name Thinpost uses itself, or a [receiving domain](/guide/inbound) that is active or disabled. Several apps may use the same name. A sending domain has at most one bounce domain, and setting a new name replaces the old one in one step.
+2. **Add one CNAME record** at your DNS provider: `bounces.example.com` pointing at the HELO name of the IP the app sends from. The console shows the exact name (it is the name of the app's [sending IP](/guide/sending-ips), or of the default IP when the app has none). The name is shown only once public DNS confirms it, because Thinpost does not trust the sending worker's report on its own.
+3. **Make it DNS only.** The record must be **DNS only, not proxied**. If your DNS provider offers a proxy for records (Cloudflare's orange cloud, for example), turn it off: a proxied record answers with the proxy's addresses and no CNAME, so the check reports `not_cname`.
+4. **Check it.** Thinpost looks at the record every 10 minutes for the first 48 hours while it waits, then every 6 hours, and you can choose **Check now** (API: `POST .../bounce-domain/check`). When the CNAME points at the expected name, the domain is **In use**.
+
+**What mail does.** The return address is decided for each delivery at the moment it is claimed, from the current state, never from a remembered one. A message from the sending domain (or from one of the app's verified subdomains of it: a subdomain uses the most specific *active* bounce domain, so if its own is pending or failing it falls back to the parent's) uses the custom domain only when **all** of these hold, and otherwise uses the HELO name as before:
+
+- the domain is active and a check passed within the last 3 hours (active domains are rechecked every 30 minutes);
+- the CNAME still points at the HELO name of the IP that delivery is sent from, so changing the app's sending IP stops using the domain at once, until the CNAME is updated;
+- the name is not a receiving domain, and not the name of any of the sending worker's addresses;
+- the sending worker accepts bounces at any domain.
+
+If a record is removed or changed, mail falls back to the standard bounce address on its own and nothing is lost. A domain whose checks keep failing shows **Not in use** with the reason, and is checked again every 10 minutes for a day, then hourly. After you change the app's sending IP the console shows the new name to point at, and the domain is rechecked within about a minute.
+
+**States and reasons.** `pending` (waiting for a first passing check), `active`, `failing`. The last result is one of: `ok`; `missing` (the name doesn't exist); `not_cname` (it exists but isn't a CNAME, which is also what a proxied record looks like); `other_ip` (it points at another of Thinpost's sending names, so the app now sends from a different IP); `wrong_target` (it points elsewhere, including a CNAME that goes through another name first: point it straight at the HELO name); `lookup_failed` and `no_sending_ip` (Thinpost couldn't tell; an active domain is used until two checks in a row fail this way). Changes of state are in the audit trail as `bounce_domain.added`, `activated`, `failing` and `removed`.
+
+**Removing it** (API: `DELETE .../bounce-domain`) sends the next delivery with the standard address. Bounces already on their way to the old name are still received, as long as its DNS still points at Thinpost's sending IP; delete the CNAME when your longest retry window has passed.
+
+**DMARC.** The bounce domain gives **relaxed** SPF alignment only: `bounces.example.com` and `example.com` share an organizational domain. If your DMARC record asks for strict SPF alignment (`aspf=s`), SPF does not align, and DMARC still passes through DKIM, which signs with the exact `From` domain. Feedback-loop reports and other bounces to the custom name arrive and are matched the same way as before; the [feedback mailbox](/guide/suppressions#spam-complaints-and-feedback-loops) address does not change.
 
 ## DMARC
 
 Thinpost does not publish or check your DMARC policy. Messages are DKIM-signed with `d=` set to the exact `From` domain, so they align on DKIM even when your DMARC record asks for strict alignment (`adkim=s`). Publish a DMARC record on the sender domain, starting with `p=none` and aggregate reporting, and tighten it as you confirm all your mail authenticates.
 
-SPF alignment depends on the bounce domain, which belongs to the sending IP and is not your domain, so mail passes DMARC through DKIM. If your DMARC record asks for strict SPF (`aspf=s`), DKIM still carries it.
+By default SPF alignment depends on the bounce domain, which belongs to the sending IP and is not your domain, so mail passes DMARC through DKIM. With [your own bounce domain](#your-own-bounce-domain), SPF also aligns under DMARC's usual relaxed check. If your DMARC record asks for strict SPF (`aspf=s`), DKIM still carries it.
 
 ## Next
 
