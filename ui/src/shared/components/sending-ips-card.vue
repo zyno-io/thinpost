@@ -6,7 +6,7 @@
                 <HelpButton topic="sending IPs">
                     <p>Mail leaves Thinpost from an IP address. Giving different apps different IPs keeps one app's reputation with mailbox providers from affecting another's.</p>
                     <ul>
-                        <li>The <strong>main IP</strong> is the sending worker's first address. Every app uses it unless you choose another IP for it.</li>
+                        <li>The <strong>default IP</strong> is the sending worker's first address. Every app uses it unless you choose another IP for it.</li>
                         <li>The IPs and their names are set up on the sending worker and appear here when it connects. To add or change one, ask your Thinpost administrator.</li>
                         <li>If an app uses an IP the sending worker no longer has, its mail waits. It is never sent from a different address. Move those apps to another IP.</li>
                         <li>Changes to which IP an app uses apply to mail sent from now on. A delivery already with the sending worker finishes from the address it started with.</li>
@@ -30,7 +30,7 @@
                 <p v-else-if="!data.edge_reports_identity" class="hint" data-testid="no-sources">The sending worker didn't report any IPs with names (it may be an older version), so it isn't sending mail. Update it to a version that reports them.</p>
                 <p v-else class="hint" data-testid="reported-at">The sending worker last reported its IPs <time :datetime="data.edge_reported_at">{{ formatDateTime(data.edge_reported_at) }}</time>.</p>
 
-                <p v-if="!data.ips.length" class="muted" data-testid="empty">No sending IPs are known yet. Every app sends from the main IP once the sending worker connects.</p>
+                <p v-if="!data.ips.length" class="muted" data-testid="empty">No sending IPs are known yet. Every app sends from the default IP once the sending worker connects.</p>
 
                 <div v-else class="table-wrap">
                     <table class="data compact" data-testid="sending-ips">
@@ -50,7 +50,7 @@
                                     <th scope="row" class="nowrap">
                                         <span class="ip-cell">
                                             <code>{{ ip.address }}</code>
-                                            <span v-if="ip.is_primary" class="tag" data-testid="main-tag">Main IP</span>
+                                            <span v-if="ip.is_primary" class="tag" data-testid="main-tag">Default IP</span>
                                         </span>
                                     </th>
                                     <td class="nowrap"><code>{{ ip.helo_name }}</code></td>

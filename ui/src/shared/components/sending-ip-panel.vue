@@ -6,7 +6,7 @@
                 <HelpButton topic="sending IP">
                     <p>The IP address this app's email is sent from. Mailbox providers judge mail partly by the address it comes from, so apps that must not affect each other's reputation can use different IPs.</p>
                     <ul>
-                        <li>The <strong>main IP</strong> is used unless you choose another.</li>
+                        <li>The <strong>default IP</strong> is used unless you choose another.</li>
                         <li>A change applies to mail sent from now on, including messages already waiting. A delivery already with the sending worker finishes from the address it started with.</li>
                         <li>You can only choose an IP the sending worker has right now. If the chosen IP is later removed from the sending worker, this app's mail waits until you move it. It is never sent from a different address.</li>
                     </ul>
@@ -31,12 +31,12 @@
 
                 <p v-if="!pool" class="hint" data-testid="pool-unavailable">The list of sending IPs couldn't be loaded, so the IP can't be changed here right now.</p>
                 <p v-else-if="!choices.length" class="hint" data-testid="no-ips">
-                    There are no other sending IPs to choose from, so this app uses the main IP. To add one, ask your Thinpost administrator.
+                    There are no other sending IPs to choose from, so this app uses the default IP. To add one, ask your Thinpost administrator.
                 </p>
                 <div v-else class="line">
                     <label for="sending-ip-select" class="sr-only">Sending IP for this app</label>
                     <select id="sending-ip-select" v-model="choice" class="input" :disabled="isSaving || !isSignedIn" data-testid="sending-ip-select">
-                        <option value="">{{ MAIN_IP_LABEL }} (default)</option>
+                        <option value="">{{ defaultLabel }}</option>
                         <option v-for="ip in choices" :key="ip.id" :value="ip.id" :disabled="ip.on_edge === false && ip.id !== currentId">{{ ipLabel(ip) }}{{ ip.on_edge === false ? ' (not on the sending worker)' : '' }}</option>
                     </select>
                     <button type="button" class="btn sm primary" :disabled="!changed || isSaving || !isSignedIn" data-testid="save-sending-ip" @click="save">
@@ -59,7 +59,7 @@ import { apiErrorStatus, describeApiError, InvalidResponseError, type ApiErrorDe
 import { useAppContext } from '@/app-context';
 import { authState } from '@/auth';
 import { DefaultApi, type AppSendingIp, type SendingIp, type SendingIps } from '@/openapi-client-generated';
-import { ipLabel, isAppSendingIp, MAIN_IP_LABEL, onWorker, parseSendingIps, workerNote } from '@/sending-ips';
+import { defaultIpLabel, ipLabel, isAppSendingIp, onWorker, parseSendingIps, workerNote } from '@/sending-ips';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import HelpButton from '@/shared/components/help-button.vue';
 import Loader from '@/shared/components/loader.vue';
@@ -78,14 +78,15 @@ const savedNote = ref<string | null>(null);
 const isSignedIn = computed(() => authState.status === 'signed-in');
 
 const currentId = computed(() => current.value?.sending_ip_id ?? '');
-// An app with no choice uses the main IP, so that row is the one that counts.
+// An app with no choice uses the default IP, so that row is the one that counts.
 const currentRow = computed<SendingIp | null>(() => pool.value?.ips.find(ip => (currentId.value ? ip.id === currentId.value : ip.is_primary)) ?? null);
 const currentLabel = computed(() => {
     if (!current.value) return '';
-    if (current.value.sending_ip_id === null) return currentRow.value ? `${MAIN_IP_LABEL}: ${ipLabel(currentRow.value)}` : MAIN_IP_LABEL;
+    if (current.value.sending_ip_id === null) return defaultLabel.value;
     return current.value.helo_name !== null && current.value.address !== null ? ipLabel({ helo_name: current.value.helo_name, address: current.value.address }) : 'Unknown';
 });
-// The main IP is the default choice, so its own row isn't a second entry, unless the app is pinned to it.
+// The default IP is shown as the "no choice" entry, so its own row isn't a second entry, unless the app is pinned to it.
+const defaultLabel = computed(() => defaultIpLabel(pool.value?.ips));
 const choices = computed(() => (pool.value?.ips ?? []).filter(ip => !ip.is_primary || ip.id === currentId.value));
 const changed = computed(() => choice.value !== currentId.value);
 
@@ -149,7 +150,7 @@ async function save() {
     try {
         const { data } = await DefaultApi.setAppSendingIp({ path: { appId: target.id }, body: { sending_ip_id: sendingIpId } });
         if (!isAppSendingIp(data)) throw new InvalidResponseError();
-        const label = data.sending_ip_id === null ? MAIN_IP_LABEL : data.helo_name !== null && data.address !== null ? ipLabel({ helo_name: data.helo_name, address: data.address }) : 'the chosen IP';
+        const label = data.sending_ip_id === null ? defaultLabel.value : data.helo_name !== null && data.address !== null ? ipLabel({ helo_name: data.helo_name, address: data.address }) : 'the chosen IP';
         if (isUnmounted) {
             showToast({ message: `The sending IP for “${target.name}” was changed to ${label} after you left the page.`, durationSecs: 8 });
             return;

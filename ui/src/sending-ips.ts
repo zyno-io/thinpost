@@ -2,7 +2,13 @@ import { InvalidResponseError } from './api-errors';
 import type { AppSendingIp, SendingIp, SendingIpDnsCheck, SendingIps } from './openapi-client-generated';
 
 /** The sending IP name a person sees for an app that has no choice. */
-export const MAIN_IP_LABEL = 'Main IP';
+export const DEFAULT_IP_LABEL = 'Default IP';
+
+/** How an app with no chosen IP is shown: the default IP like any other, or a plain label before the worker has reported it. */
+export function defaultIpLabel(ips: readonly SendingIp[] | null | undefined): string {
+    const row = ips?.find(ip => ip.is_primary);
+    return row ? ipLabel(row) : DEFAULT_IP_LABEL;
+}
 
 export const MAX_SENDING_IPS = 64;
 
@@ -93,7 +99,7 @@ export function workerNote(ip: Pick<SendingIp, 'on_edge' | 'app_count'>): string
     return `The sending worker no longer has this IP, so mail from ${apps} is waiting. Move ${ip.app_count === 1 ? 'it' : 'them'} to another IP. Mail is never sent from a different address.`;
 }
 
-/** Apps whose mail leaves from this row: those pinned to it, plus those with no choice when it is the main IP. */
+/** Apps whose mail leaves from this row: those pinned to it, plus those with no choice when it is the default IP. */
 export function appsUsing(ip: Pick<SendingIp, 'app_count' | 'is_primary'>, unpinned: number): number {
     return ip.app_count + (ip.is_primary ? unpinned : 0);
 }
