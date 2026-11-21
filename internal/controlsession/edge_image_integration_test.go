@@ -341,7 +341,7 @@ func imageFixtureBounce(roots *x509.CertPool) error {
 	if err = client.Mail(""); err != nil {
 		return err
 	}
-	if err = client.Rcpt("b+0123456789abcdef0123456789abcdef@bounce.fixture.invalid"); err != nil {
+	if err = client.Rcpt("b+0123456789abcdef0123456789abcdef@smtp.fixture.invalid"); err != nil {
 		return err
 	}
 	writer, err := client.Data()

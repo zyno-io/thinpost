@@ -38,9 +38,12 @@ type Worker struct {
 	// Sources are the outbound addresses this worker owns, the primary first.
 	// A delivery may name one of them; anything else is refused before a permit
 	// is requested.
-	Sources      []netip.Addr
-	Roots        *x509.CertPool
-	SMTPTimeouts *smtptransport.Timeouts
+	Sources []netip.Addr
+	// SourceHostnames holds each source's configured hostname (its HELO name),
+	// in Sources order. A delivery that names a source must carry that name.
+	SourceHostnames []string
+	Roots           *x509.CertPool
+	SMTPTimeouts    *smtptransport.Timeouts
 	// smtpTimeout is private so callers cannot accidentally disable the bound.
 	// Tests shorten it; production uses the fixed deadline below.
 	smtpTimeout time.Duration
@@ -173,10 +176,11 @@ func (w *Worker) Execute(ctx context.Context, fence journal.Fence, start *contro
 }
 
 // chooseSource resolves the delivery's source address and HELO name. Both empty
-// means the primary address and the worker's own hostname. Otherwise both must
-// be set, the source must be one this worker owns, and the name must be a
-// normalized DNS name. The returned error is generic: it never names the
-// address.
+// means the primary address and the worker's own hostname (older controls).
+// Otherwise both must be set, the source must be one this worker owns, and the
+// HELO name must equal that source's configured hostname: control cannot make
+// the worker greet a receiver under a name the address does not carry. The
+// returned error is generic: it never names the address or the name.
 func (w *Worker) chooseSource(start *controlv1.DeliveryStart) (netip.Addr, string, error) {
 	if start.SourceAddress == "" && start.HeloName == "" {
 		return netip.Addr{}, w.HeloName, nil
@@ -189,9 +193,13 @@ func (w *Worker) chooseSource(start *controlv1.DeliveryStart) (netip.Addr, strin
 		return netip.Addr{}, "", errors.New("invalid delivery source")
 	}
 	owned := false
-	for _, candidate := range w.Sources {
+	hostname := ""
+	for i, candidate := range w.Sources {
 		if candidate == source {
 			owned = true
+			if i < len(w.SourceHostnames) {
+				hostname = w.SourceHostnames[i]
+			}
 			break
 		}
 	}
@@ -200,6 +208,9 @@ func (w *Worker) chooseSource(start *controlv1.DeliveryStart) (netip.Addr, strin
 	}
 	if name, ok := admin.NormalizeDomain(start.HeloName); !ok || name != start.HeloName {
 		return netip.Addr{}, "", errors.New("invalid delivery HELO name")
+	}
+	if hostname == "" || start.HeloName != hostname {
+		return netip.Addr{}, "", errors.New("delivery HELO name does not match the source")
 	}
 	return source, start.HeloName, nil
 }

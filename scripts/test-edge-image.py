@@ -83,7 +83,6 @@ def main():
             settings = {
                 "THINPOST_EDGE_WORKER_ID": "fixture-worker",
                 "THINPOST_EDGE_SMTP_HOSTNAME": "smtp.fixture.invalid",
-                "THINPOST_EDGE_BOUNCE_DOMAIN": "bounce.fixture.invalid",
                 "THINPOST_EDGE_CONTROL_LISTEN": "127.0.0.1:7443",
                 "THINPOST_EDGE_SMTP_LISTEN": SOURCE + ":25",
                 "THINPOST_EDGE_CONTROLLER_IDENTITIES": "spiffe://thinpost.fixture/control",

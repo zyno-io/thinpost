@@ -361,7 +361,7 @@ func newSubmissionRig(t *testing.T, opts rigOptions) *subRig {
 		t.Fatal(err)
 	}
 	dialer := &e2eDialer{certificate: serverCert, dkimRecord: dkimRecord, received: r.received, failures: r.failures}
-	worker := &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Roots: roots, Sources: []netip.Addr{netip.MustParseAddr("45.0.1.22")}}
+	worker := &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Roots: roots, Sources: []netip.Addr{netip.MustParseAddr("45.0.1.22")}, SourceHostnames: []string{"bounce.example.com"}}
 	r.edge, err = edgesession.New("worker", []string{controllerIdentity}, j, integrationExecutor{worker: worker, started: r.started}, authority, 2)
 	if err != nil {
 		t.Fatal(err)

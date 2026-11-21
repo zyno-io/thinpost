@@ -13,7 +13,7 @@ Three places each own one part of a sending IP:
 
 | Owner | Decides |
 | --- | --- |
-| **Deployment (Helm values)** | Which addresses exist on the edge: the primary `sourceAddress` and any `additionalSources`. Each entry needs a `hostname` (the name it greets with, its PTR and HELO) and a certificate Secret for that name. |
+| **Deployment (Helm values)** | Which addresses exist on the edge: the `addresses` list, whose first entry is the main IP. Each entry needs a `hostname` (the name it greets with, its PTR and HELO) and a certificate Secret for that name. |
 | **Database (console)** | A read-only copy of what the edge last reported: each address and its HELO name, so the console can list them. Rows are created from the edge's report, never by hand. The only thing the console stores is which app uses which IP. |
 | **Edge (runtime)** | What it can actually bind. At session start it reports its addresses and the name each one greets with. Control sends every delivery with that name as the HELO name and the return-path domain. An edge that reports no names is sent no mail. A delivery for an address the edge did not report stays queued and is never sent from another address. |
 
@@ -53,8 +53,8 @@ None of these records are published by Thinpost. Set them at the address owner (
 - The **HELO name** is the PTR of the address. The edge greets with it and control sends it as the outbound HELO, so the banner, the HELO and the PTR agree.
 - `v=spf1 a -all` uses the name's own A record, so it follows the address. Do not use `ptr`, which RFC 7208 deprecates.
 - The **MX** record makes bounces and inbound mail for the address arrive at the address itself.
-- The **bounce domain** is the HELO name. Every message leaves with a return path like `b+<token>@<HELO name>`, using the name the edge reported for the address the message is sent from. The edge accepts bounces for every one of its own names automatically, so the MX record above is all bounces need. There is no separate bounce domain to set.
-- If you rename an address's HELO name, messages sent under the old name can still bounce for days, and the edge refuses bounces addressed to a name it no longer has. Keep the old name in `additionalBounceDomains` (below) so the edge still accepts those bounces.
+- The **bounce domain** is the HELO name. Every message leaves with a return path like `b+<token>@<HELO name>`, using the name the edge reported for the address the message is sent from. The edge accepts bounces at every one of its own names, so the MX record above is all bounces need. There is no separate bounce domain to set.
+- If you rename an address's HELO name, messages sent under the old name can still bounce for days, and the edge refuses bounces addressed to a name it no longer has. To rename one, move its apps to another IP first, wait out your longest retry window, then rename it: certificate first, then DNS and PTR, then the Helm values.
 
 A customer's own SPF record does not need to mention Thinpost.
 
@@ -80,19 +80,17 @@ Do these in order. Each step is safe on its own, and none changes mail flow unti
 3. **Route it.** Configure your network so the address reaches the edge interface and TCP 25 passes in both directions. Every address listens, so inbound 25 must be open. A new network also needs its gateway. See [Direct public networking](/deploy/direct-public-networking).
 4. **Issue a certificate** for the address's HELO name, in its own Secret in the edge namespace. Create it **before** you change the Helm values: a missing or wrong certificate stops the edge at its next start, and with it all mail.
 5. **Publish DNS** as above and set the PTR.
-6. **Add the address** to `additionalSources` with its `hostname` and `certificateSecret`, then upgrade the edge release. The edge restarts, so sending pauses briefly and bounce senders retry. See [Helm: Edge](/deploy/helm-edge).
+6. **Add the address** to the end of `addresses` with its `hostname` and `certificateSecret`, then upgrade the edge release. The edge restarts, so sending pauses briefly and bounce senders retry. See [Helm: Edge](/deploy/helm-edge).
 7. **In the console,** open **Operations → Sending IPs**. The new address appears once the restarted edge connects. Run **Check DNS**, and then choose it for one low-volume app.
 8. **Verify from outside.** Check the greeting, the STARTTLS certificate and an inbound test message on the new address.
 9. **Warm it up.** Watch the first app's deliveries, then move more apps one at a time.
-
-A retired bounce domain stays in `additionalBounceDomains` so the edge keeps accepting it. Keep its MX record for at least five days plus your maximum retry age so late bounces still arrive.
 
 ### Adding the first additional IP
 
 This order keeps mail flowing on a running install:
 
 1. In the console, run the DNS check on the main IP.
-2. Add the addresses to `additionalSources` and upgrade the edge. When it reconnects, the new IPs appear in the console, and you can choose them for apps.
+2. Add the addresses to `addresses`, after the main IP, and upgrade the edge. When it reconnects, the new IPs appear in the console, and you can choose them for apps.
 
 Never roll the control plane back with Helm; roll forward with a fix. See [Upgrades](/deploy/upgrades).
 

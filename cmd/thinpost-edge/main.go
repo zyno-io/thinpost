@@ -117,7 +117,7 @@ func run() error {
 	// THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE are not read here, so an Edge that
 	// still has them set starts normally. Network controls on the Edge are the
 	// boundary against a compromised control plane.
-	worker := &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: c.Hostname, Sources: c.Sources(), SMTPTimeouts: &c.OutboundSMTPTimeouts}
+	worker := &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: c.Hostname, Sources: c.Sources(), SourceHostnames: sourceHostnames(listeners), SMTPTimeouts: &c.OutboundSMTPTimeouts}
 	edge, err := edgesession.New(c.WorkerID, c.ControllerIdentities, j, worker, authority, 2)
 	if err != nil {
 		return errors.New("invalid edge session configuration")
@@ -128,13 +128,13 @@ func run() error {
 		sources = append(sources, l.Address.String())
 		hostnames = append(hostnames, l.Hostname)
 	}
-	edge.Advertise(sources, hostnames, c.BounceDomains)
+	edge.Advertise(sources, hostnames, c.BounceDomains())
 	// Inbound mail for app receiving domains: the routing snapshot and the
 	// message handoff come from the control plane over the existing stream; the
 	// worker holds no spool and logs only fixed counters.
 	edge.EnableInbound()
 	inboundCounters := &inboundStats{}
-	smtpServers, err := bounce.NewServers(bounce.Config{Hostname: c.Hostname, Domains: c.BounceDomains, MaxBytes: 16 << 20, MaxConcurrent: 1, ForwardTimeout: 20 * time.Second, Forwarder: edge,
+	smtpServers, err := bounce.NewServers(bounce.Config{Hostname: c.Hostname, Domains: c.BounceDomains(), MaxBytes: 16 << 20, MaxConcurrent: 1, ForwardTimeout: 20 * time.Second, Forwarder: edge,
 		Inbound: edge.Inbound(), InboundMaxBytes: 10 << 20, InboundConcurrent: 4, InboundForwardTimeout: 60 * time.Second, Stats: inboundCounters}, bounceListeners)
 	if err != nil {
 		return errors.New("invalid SMTP listener configuration")
@@ -235,4 +235,13 @@ func run() error {
 		grpcServer.Stop()
 		return errors.New("edge listener stopped")
 	}
+}
+
+// sourceHostnames lists each listener's name in listener (source) order.
+func sourceHostnames(listeners []edgeapp.Listener) []string {
+	out := make([]string, 0, len(listeners))
+	for _, l := range listeners {
+		out = append(out, l.Hostname)
+	}
+	return out
 }

@@ -2,7 +2,7 @@
 """Fail when docs/reference/helm-values.md and the chart schema disagree.
 
 Walks every property path of resources/helm/chart/values.schema.json (nested
-objects use dots, list items use "[]", for example additionalSources[].address)
+objects use dots, list items use "[]", for example addresses[].address)
 and requires each one as a code span in the first column of a table in
 docs/reference/helm-values.md. A documented path that is not in the schema is
 also reported.

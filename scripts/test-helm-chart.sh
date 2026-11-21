@@ -5,6 +5,7 @@ set -eu
 
 chart=${1:-resources/helm/chart}
 image=example.invalid/control:test
+base=scripts/testdata/helm-edge/base.yaml
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -19,12 +20,12 @@ render() { # name args...
   helm template thinpost "$chart" -n thinpost-control "$@" >"$tmp/$name.yaml"
 }
 
-helm lint "$chart" --set workload=edge
+helm lint "$chart" --set workload=edge -f "$base"
 helm lint "$chart" --set workload=control --set control.image=$image
 helm lint "$chart" --set workload=control --set control.image=$image --set control.migrations.enabled=false
 
 render control --set workload=control --set control.image=$image
-render edge --set workload=edge
+render edge --set workload=edge -f "$base"
 render disabled --set workload=control --set control.image=$image --set control.migrations.enabled=false
 render scaled_down --set workload=control --set control.image=$image --set control.replicas=0
 render bootstrap --set workload=control
@@ -32,10 +33,10 @@ render bootstrap --set workload=control
 # Additional addresses: one attachment, interface and routing table each, and
 # one SMTP listener each with its own hostname and certificate Secret; none
 # changes the primary attachment.
-render edge_extra --set workload=edge --set 'additionalSources[0].address=203.0.113.10' --set 'additionalSources[0].range=203.0.113.0/24' \
-  --set 'additionalSources[0].gateway=203.0.113.1' --set 'additionalSources[0].hostname=smtp.hosting.example' \
-  --set 'additionalSources[0].certificateSecret=thinpost-smtp-hosting' \
-  --set 'additionalSources[1].address=192.0.2.77' --set 'additionalSources[1].hostname=smtp.second.example' --set 'additionalBounceDomains[0]=bounce.hosting.example'
+render edge_extra --set workload=edge -f "$base" --set 'addresses[1].address=203.0.113.10' --set 'addresses[1].range=203.0.113.0/24' \
+  --set 'addresses[1].gateway=203.0.113.1' --set 'addresses[1].hostname=smtp.hosting.example' \
+  --set 'addresses[1].certificateSecret=thinpost-smtp-hosting' \
+  --set 'addresses[2].address=192.0.2.77' --set 'addresses[2].hostname=smtp.second.example' 
 [ "$(grep -c '^kind: NetworkAttachmentDefinition$' "$tmp/edge.yaml")" = 1 ] || fail "edge with no additional sources must render one attachment"
 [ "$(grep -c '^kind: NetworkAttachmentDefinition$' "$tmp/edge_extra.yaml")" = 3 ] || fail "two additional sources must render three attachments"
 grep -q "k8s.v1.cni.cncf.io/networks: '\[{\"name\":\"thinpost-public\",\"interface\":\"net1\"},{\"name\":\"thinpost-public-1\",\"interface\":\"net2\"},{\"name\":\"thinpost-public-2\",\"interface\":\"net3\"}\]'" "$tmp/edge_extra.yaml" || fail "networks annotation"
@@ -43,17 +44,17 @@ grep -q '{"type": "sbr", "table": 101 }' "$tmp/edge_extra.yaml" || fail "second 
 grep -q '{"type": "sbr", "table": 102 }' "$tmp/edge_extra.yaml" || fail "third attachment table"
 [ "$(grep -c '"type": "ipvlan",' "$tmp/edge_extra.yaml")" = 3 ] || fail "default ipvlan CNI type on every attachment"
 [ "$(grep -c '{"type": "sbr", "table"' "$tmp/edge_extra.yaml")" = 3 ] || fail "default sbr CNI type on every attachment"
-render edge_cni --set workload=edge --set 'additionalSources[0].address=203.0.113.10' --set 'additionalSources[0].hostname=smtp.hosting.example' \
+render edge_cni --set workload=edge -f "$base" --set 'addresses[1].address=203.0.113.10' --set 'addresses[1].hostname=smtp.hosting.example' \
   --set publicNetwork.cniTypes.sbr=sbr-custom --set publicNetwork.cniTypes.ipvlan=ipvlan-custom
 [ "$(grep -c '"type": "ipvlan-custom",' "$tmp/edge_cni.yaml")" = 2 ] || fail "ipvlan CNI type override on every attachment"
 [ "$(grep -c '{"type": "sbr-custom", "table"' "$tmp/edge_cni.yaml")" = 2 ] || fail "sbr CNI type override on every attachment"
 if grep -q '"type": "ipvlan",\|{"type": "sbr",' "$tmp/edge_cni.yaml"; then fail "default CNI type leaked into an override render"; fi
 
 # NetworkAttachmentDefinition labels: none by default, applied to every attachment when set.
-helm template thinpost "$chart" --set workload=edge --set 'additionalSources[0].address=203.0.113.10' --set 'additionalSources[0].hostname=smtp.hosting.example' \
+helm template thinpost "$chart" --set workload=edge -f "$base" --set 'addresses[1].address=203.0.113.10' --set 'addresses[1].hostname=smtp.hosting.example' \
   --show-only templates/network-attachment.yaml >"$tmp/nad.yaml" || fail "attachments must render alone"
 if grep -q 'labels:' "$tmp/nad.yaml"; then fail "attachments must carry no labels by default"; fi
-render edge_labels --set workload=edge --set 'additionalSources[0].address=203.0.113.10' --set 'additionalSources[0].hostname=smtp.hosting.example' \
+render edge_labels --set workload=edge -f "$base" --set 'addresses[1].address=203.0.113.10' --set 'addresses[1].hostname=smtp.hosting.example' \
   --set 'publicNetwork.attachmentLabels.example\.test/approved=granted' --set publicNetwork.attachmentLabels.tier=public
 [ "$(grep -c '^    example.test/approved: granted$' "$tmp/edge_labels.yaml")" = 2 ] || fail "attachment label on both attachments"
 [ "$(grep -c '^    tier: public$' "$tmp/edge_labels.yaml")" = 2 ] || fail "second attachment label on both attachments"
@@ -64,7 +65,8 @@ grep -q 'name: THINPOST_EDGE_SMTP_ADDITIONAL_HOSTNAMES' "$tmp/edge_extra.yaml" |
 grep -q 'value: "smtp.hosting.example,smtp.second.example"' "$tmp/edge_extra.yaml" || fail "additional hostnames env value"
 grep -q 'name: THINPOST_EDGE_SMTP_ADDITIONAL_CERT_ROOT' "$tmp/edge_extra.yaml" || fail "additional certificate root env"
 grep -q 'value: /run/thinpost/smtp-sources$' "$tmp/edge_extra.yaml" || fail "additional certificate root value"
-grep -q 'value: "bounce.hosting.example"' "$tmp/edge_extra.yaml" || fail "additional bounce domains env"
+# Bounces arrive at each hostname: the chart renders no bounce domain setting.
+if grep -q 'BOUNCE' "$tmp/edge.yaml" "$tmp/edge_extra.yaml"; then fail "the Edge must not render a bounce domain env"; fi
 # One whole-directory secret volume per entry: its own Secret (the default for
 # an entry that names none), mounted without subPath so renewals propagate.
 grep -q 'mountPath: /run/thinpost/smtp-sources/0$' "$tmp/edge_extra.yaml" || fail "first additional certificate mount"
@@ -74,30 +76,91 @@ grep -q 'secretName: "thinpost-smtp-hosting"' "$tmp/edge_extra.yaml" || fail "na
 [ "$(grep -c 'secretName: thinpost-smtp-public' "$tmp/edge_extra.yaml")" = 1 ] || fail "primary certificate secret"
 if grep -q 'subPath' "$tmp/edge_extra.yaml"; then fail "certificate volumes must not use subPath"; fi
 if grep -q 'ADDITIONAL\|smtp-sources' "$tmp/edge.yaml"; then fail "an Edge with no additional sources must not set the additional env or mounts"; fi
-for bad in 'additionalSources[0].address=192.0.2.1' 'additionalSources[0].address=not-an-ip' 'additionalBounceDomains[0]=Bad.Example.com'; do
-  if helm template thinpost "$chart" --set workload=edge --set 'additionalSources[0].hostname=smtp.a.example' --set "$bad" >/dev/null 2>&1; then fail "accepted invalid $bad"; fi
+for bad in 'addresses[1].address=192.0.2.1' 'addresses[1].address=not-an-ip' 'addresses[1].address=203.0.113.300'; do
+  if helm template thinpost "$chart" --set workload=edge -f "$base" --set 'addresses[1].hostname=smtp.a.example' --set "$bad" >/dev/null 2>&1; then fail "accepted invalid $bad"; fi
 done
 # Each entry needs a valid, unique hostname and a sane certificate Secret name.
-valid_source='additionalSources[0].address=203.0.113.10'
-for bad in 'additionalSources[0].hostname=' 'additionalSources[0].hostname=Smtp.Example.com' 'additionalSources[0].hostname=localhost' \
-  'additionalSources[0].hostname=smtp.example.invalid' 'additionalSources[0].certificateSecret=Bad_Name' 'additionalSources[0].certificateSecret=-x'; do
-  if helm template thinpost "$chart" --set workload=edge --set "$valid_source" --set 'additionalSources[0].hostname=smtp.a.example' --set "$bad" >/dev/null 2>&1; then fail "accepted invalid $bad"; fi
+valid_source='addresses[1].address=203.0.113.10'
+for bad in 'addresses[1].hostname=' 'addresses[1].hostname=Smtp.Example.com' 'addresses[1].hostname=localhost' \
+  'addresses[1].hostname=smtp.example.invalid' 'addresses[1].certificateSecret=Bad_Name' 'addresses[1].certificateSecret=-x'; do
+  if helm template thinpost "$chart" --set workload=edge -f "$base" --set "$valid_source" --set 'addresses[1].hostname=smtp.a.example' --set "$bad" >/dev/null 2>&1; then fail "accepted invalid $bad"; fi
 done
-if helm template thinpost "$chart" --set workload=edge --set "$valid_source" >/dev/null 2>&1; then fail "accepted an additional source with no hostname"; fi
-if helm template thinpost "$chart" --set workload=edge --set "$valid_source" --set 'additionalSources[0].hostname=smtp.a.example' \
-  --set 'additionalSources[1].address=203.0.113.11' --set 'additionalSources[1].hostname=smtp.a.example' >/dev/null 2>&1; then fail "accepted duplicate hostnames"; fi
-if helm template thinpost "$chart" --set workload=edge --set "$valid_source" --set 'additionalSources[0].hostname=smtp.example.invalid' >/dev/null 2>&1; then fail "accepted the primary hostname"; fi
-if helm template thinpost "$chart" --set workload=edge --set "$valid_source" --set 'additionalSources[0].hostname=smtp.a.example' \
-  --set 'additionalBounceDomains[0]=smtp.a.example' >/dev/null 2>&1; then fail "accepted a bounce domain that repeats a listener hostname"; fi
+if helm template thinpost "$chart" --set workload=edge -f "$base" --set "$valid_source" >/dev/null 2>&1; then fail "accepted an additional source with no hostname"; fi
+if helm template thinpost "$chart" --set workload=edge -f "$base" --set "$valid_source" --set 'addresses[1].hostname=smtp.a.example' \
+  --set 'addresses[2].address=203.0.113.11' --set 'addresses[2].hostname=smtp.a.example' >/dev/null 2>&1; then fail "accepted duplicate hostnames"; fi
+if helm template thinpost "$chart" --set workload=edge -f "$base" --set "$valid_source" --set 'addresses[1].hostname=smtp.example.invalid' >/dev/null 2>&1; then fail "accepted the primary hostname"; fi
+
+# The addresses list is required: empty fails, and so do the removed values
+# when set alone, with a hint about the replacement.
+err=$(helm template thinpost "$chart" --set workload=edge 2>&1) && fail "accepted an Edge with no addresses"
+echo "$err" | grep -q 'addresses is required' || fail "empty addresses message: $err"
+for legacy in sourceAddress=192.0.2.1 smtpHostname=smtp.example.invalid bounceDomain=bounce.example.invalid \
+  'additionalSources[0].address=203.0.113.10' 'additionalBounceDomains[0]=old.example.invalid'; do
+  err=$(helm template thinpost "$chart" --set workload=edge --set "$legacy" 2>&1) && fail "accepted the removed value $legacy"
+  echo "$err" | grep -q 'replaced by a single addresses list' || fail "missing upgrade hint for $legacy: $err"
+done
+# During the rollout both shapes are set (the old chart reads only the legacy
+# keys). They must describe the same attachments: matching values render exactly
+# like addresses alone, and any difference fails instead of silently changing
+# the Edge's addresses when the chart switches.
+helm template thinpost "$chart" --set workload=edge -f "$base" >"$tmp/edge_addresses_only.yaml" || fail "addresses-only render"
+helm template thinpost "$chart" --set workload=edge -f "$base" --set sourceAddress=192.0.2.1 --set smtpHostname=smtp.example.invalid --set bounceDomain=smtp.example.invalid >"$tmp/edge_both.yaml" || fail "matching legacy keys beside addresses must render"
+cmp -s "$tmp/edge_addresses_only.yaml" "$tmp/edge_both.yaml" || fail "matching legacy keys changed the render"
+for mismatch in 'sourceAddress=192.0.2.99' 'smtpHostname=other.example.invalid' 'additionalSources[0].address=203.0.113.10'; do
+  case "$mismatch" in sourceAddress*) other='smtpHostname=smtp.example.invalid' ;; smtpHostname*) other='sourceAddress=192.0.2.1' ;; *) other='sourceAddress=192.0.2.1' ;; esac
+  err=$(helm template thinpost "$chart" --set workload=edge -f "$base" --set "$other" --set "$mismatch" 2>&1) && fail "accepted legacy keys that disagree with addresses: $mismatch"
+  echo "$err" | grep -q 'while both are set they must match' || fail "missing mismatch message for $mismatch: $err"
+done
+# A second entry that drops the legacy range (the reviewer's whereabouts case) fails.
+err=$(helm template thinpost "$chart" --set workload=edge --set publicNetwork.range=192.0.2.0/24 --set 'addresses[0].address=192.0.2.1' --set 'addresses[0].hostname=smtp.example.invalid' --set 'addresses[1].address=203.0.113.10' --set 'addresses[1].hostname=extra.example.invalid' \
+  --set sourceAddress=192.0.2.1 --set smtpHostname=smtp.example.invalid --set 'additionalSources[0].address=203.0.113.10' --set 'additionalSources[0].hostname=extra.example.invalid' --set 'additionalSources[0].range=203.0.113.0/24' 2>&1) && fail "accepted an entry that dropped its legacy range"
+echo "$err" | grep -q 'range' || fail "range mismatch message: $err"
+# A quoted Secret name keeps a numeric-looking name a string.
+helm template thinpost "$chart" --set workload=edge -f "$base" --set-string 'addresses[0].certificateSecret=1234' | grep -q 'secretName: "1234"' || fail "first certificateSecret must render quoted"
+# 1-16 entries; the last entry's routing table must stay at or below 252.
+many() { # count
+  i=0
+  while [ "$i" -lt "$1" ]; do
+    printf -- '--set\n addresses[%d].address=198.51.100.%d\n--set\n addresses[%d].hostname=h%d.example.com\n' "$i" "$((i + 1))" "$i" "$i"
+    i=$((i + 1))
+  done
+}
+many 16 | sed 's/^ //' | xargs helm template thinpost "$chart" --set workload=edge >/dev/null || fail "rejected 16 addresses"
+if many 17 | sed 's/^ //' | xargs helm template thinpost "$chart" --set workload=edge >/dev/null 2>&1; then fail "accepted 17 addresses"; fi
+render edge_table_ok --set workload=edge -f "$base" --set 'addresses[1].address=203.0.113.10' --set 'addresses[1].hostname=smtp.a.example' --set publicNetwork.table=251
+if helm template thinpost "$chart" --set workload=edge -f "$base" --set 'addresses[1].address=203.0.113.10' --set 'addresses[1].hostname=smtp.a.example' --set 'addresses[2].address=203.0.113.11' --set 'addresses[2].hostname=smtp.b.example' --set publicNetwork.table=251 >/dev/null 2>&1; then fail "accepted a routing table above 252"; fi
+# The first entry may override the network defaults too, and a certificate Secret.
+render edge_first --set workload=edge -f "$base" --set 'addresses[0].gateway=192.0.2.200' --set 'addresses[0].master=ens20' --set 'addresses[0].certificateSecret=thinpost-smtp-main'
+grep -q '"gateway": "192.0.2.200"' "$tmp/edge_first.yaml" || fail "first entry gateway override"
+grep -q '"master": "ens20"' "$tmp/edge_first.yaml" || fail "first entry master override"
+grep -q 'secretName: "thinpost-smtp-main"' "$tmp/edge_first.yaml" || fail "first entry certificate Secret"
+# The first entry is the main IP: reordering moves the primary listener and hostname.
+render edge_reordered --set workload=edge -f "$base" --set 'addresses[0].address=203.0.113.10' --set 'addresses[0].hostname=smtp.a.example' \
+  --set 'addresses[1].address=192.0.2.1' --set 'addresses[1].hostname=smtp.example.invalid'
+grep -A1 'name: THINPOST_EDGE_SMTP_HOSTNAME$' "$tmp/edge_reordered.yaml" | grep -q 'value: "smtp.a.example"' || fail "first entry must be the primary hostname"
+
+# Golden equality: the old chart's rendering with legacy values (sourceAddress,
+# additionalSources) is the fixture; the equivalent addresses must render the
+# same NetworkAttachmentDefinitions, networks annotation (and so the
+# public-network checksum), env and mounts. Only the removed bounce env is
+# absent from the fixtures. Regenerate a fixture only on purpose: renaming an
+# attachment, interface or table churns live Multus attachments.
+for golden in single multi; do
+  helm template thinpost "$chart" -n thinpost-edge -f "scripts/testdata/helm-edge/addresses-$golden.yaml" >"$tmp/golden_$golden.yaml" || fail "golden $golden values must render"
+  if ! diff "scripts/testdata/helm-edge/legacy-$golden.golden.yaml" "$tmp/golden_$golden.yaml" >"$tmp/golden_$golden.diff"; then
+    cat "$tmp/golden_$golden.diff" >&2
+    fail "addresses ($golden) must render exactly what the legacy values rendered"
+  fi
+done
 
 # The Edge floats across nodes unless node is set: an empty or placeholder node
 # renders no pin, and a set node still pins it (existing values keep working until
 # the routers stop checking a source MAC for these addresses). One pod at a time
 # (Recreate, one replica at most) because the journal volume is single-writer.
 if grep -q 'nodeSelector' "$tmp/edge.yaml"; then fail "an Edge with no node value must not be pinned"; fi
-helm template thinpost "$chart" --set workload=edge --set node=unconfigured >"$tmp/edge_unconfigured.yaml" || fail "the placeholder node value must render"
+helm template thinpost "$chart" --set workload=edge -f "$base" --set node=unconfigured >"$tmp/edge_unconfigured.yaml" || fail "the placeholder node value must render"
 if grep -q 'nodeSelector' "$tmp/edge_unconfigured.yaml"; then fail "the placeholder node value must not pin the Edge"; fi
-helm template thinpost "$chart" --set workload=edge --set node=edge-node-1 >"$tmp/edge_node.yaml" || fail "a node value must render"
+helm template thinpost "$chart" --set workload=edge -f "$base" --set node=edge-node-1 >"$tmp/edge_node.yaml" || fail "a node value must render"
 grep -q 'kubernetes.io/hostname: "edge-node-1"' "$tmp/edge_node.yaml" || fail "a node value must pin the Edge"
 # Source announcement: one gateway per source (primary first, then each
 # additional source's own or the default), and a pod annotation that follows the
@@ -106,10 +169,10 @@ grep -A1 'name: THINPOST_EDGE_SOURCE_GATEWAYS' "$tmp/edge.yaml" | grep -q 'value
 grep -A1 'name: THINPOST_EDGE_SOURCE_GATEWAYS' "$tmp/edge_extra.yaml" | grep -q 'value: "192.0.2.254,203.0.113.1,192.0.2.254"$' || fail "gateway env order and defaults"
 sum_of() { grep 'checksum/public-network:' "$1" | sed 's/.*: //'; }
 [ -n "$(sum_of "$tmp/edge.yaml")" ] || fail "missing checksum/public-network annotation"
-[ "$(sum_of "$tmp/edge.yaml")" != "$(sum_of "$tmp/edge_extra.yaml")" ] || fail "additionalSources must change the public-network checksum"
-render edge_again --set workload=edge
+[ "$(sum_of "$tmp/edge.yaml")" != "$(sum_of "$tmp/edge_extra.yaml")" ] || fail "an added address must change the public-network checksum"
+render edge_again --set workload=edge -f "$base"
 [ "$(sum_of "$tmp/edge.yaml")" = "$(sum_of "$tmp/edge_again.yaml")" ] || fail "the public-network checksum must be stable"
-render edge_gw --set workload=edge --set publicNetwork.gateway=192.0.2.253
+render edge_gw --set workload=edge -f "$base" --set publicNetwork.gateway=192.0.2.253
 [ "$(sum_of "$tmp/edge.yaml")" != "$(sum_of "$tmp/edge_gw.yaml")" ] || fail "a gateway change must change the checksum"
 for forbidden in affinity topologySpread PodDisruptionBudget hostNetwork; do
   if grep -q "$forbidden" "$tmp/edge_extra.yaml"; then fail "the Edge must not render $forbidden"; fi
@@ -123,7 +186,7 @@ grep -q 'thinpost-recipient-allowlist' "$tmp/control.yaml" || fail "control must
 # Liveness and startup check the journal only; readiness also waits for neighbours.
 [ "$(grep -c 'healthcheck, liveness\]' "$tmp/edge.yaml")" = 2 ] || fail "liveness and startup probes must use the journal-only check"
 grep -q 'type: Recreate' "$tmp/edge.yaml" || fail "the Edge must use the Recreate strategy"
-if helm template thinpost "$chart" --set workload=edge --set replicas=2 >/dev/null 2>&1; then fail "accepted more than one Edge replica"; fi
+if helm template thinpost "$chart" --set workload=edge -f "$base" --set replicas=2 >/dev/null 2>&1; then fail "accepted more than one Edge replica"; fi
 
 # The schema owner credential must never reach the Deployment.
 name=control
@@ -208,12 +271,12 @@ if helm template thinpost "$chart" --set workload=control --set control.image=$i
 for needle in THINPOST_EDGE_SUBMISSION 'containerPort: 587' 'containerPort: 465' submission-internal thinpost-edge-submission; do
   if grep -q "$needle" "$tmp/edge.yaml"; then fail "the default Edge render must not contain $needle"; fi
 done
-render edge_submission --set workload=edge --set smtpSubmission.enabled=true --set 'additionalSources[0].address=203.0.113.10' --set 'additionalSources[0].hostname=smtp.hosting.example'
+render edge_submission --set workload=edge -f "$base" --set smtpSubmission.enabled=true --set 'addresses[1].address=203.0.113.10' --set 'addresses[1].hostname=smtp.hosting.example'
 grep -A1 'name: THINPOST_EDGE_SUBMISSION$' "$tmp/edge_submission.yaml" | grep -q 'value: "true"' || fail "submission env"
 grep -q 'containerPort: 587' "$tmp/edge_submission.yaml" && grep -q 'containerPort: 465' "$tmp/edge_submission.yaml" || fail "submission container ports"
 if grep -q 'THINPOST_EDGE_SUBMISSION_INTERNAL\|kind: Service' "$tmp/edge_submission.yaml"; then fail "public submission must not render the internal listener or a Service"; fi
 internal='smtpSubmission.internal'
-render edge_internal --set workload=edge --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" \
+render edge_internal --set workload=edge -f "$base" --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" \
   --set "$internal.clientCidrs[0]=10.0.0.0/8" --set "$internal.clientNamespaceSelector.matchLabels.tier=apps"
 if grep -q 'name: THINPOST_EDGE_SUBMISSION$' "$tmp/edge_internal.yaml"; then fail "the internal listener alone must not open the public ports"; fi
 grep -A1 'name: THINPOST_EDGE_SUBMISSION_INTERNAL_LISTEN' "$tmp/edge_internal.yaml" | grep -q 'value: "$(POD_IP):2587"' || fail "internal listen env"
@@ -228,21 +291,21 @@ grep -q 'targetPort: submission-int' "$tmp/edge_internal.yaml" || fail "submissi
 grep -q 'cidr: "10.0.0.0/8"' "$tmp/edge_internal.yaml" && grep -q 'tier: apps' "$tmp/edge_internal.yaml" || fail "internal ingress sources"
 grep -q 'port: 2587' "$tmp/edge_internal.yaml" || fail "internal ingress port"
 grep -q 'containerPort: 2587' "$tmp/edge_internal.yaml" || fail "internal container port"
-render edge_internal_port --set workload=edge --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" --set "$internal.clientCidrs[0]=10.0.0.0/8" --set "$internal.port=3587"
+render edge_internal_port --set workload=edge -f "$base" --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" --set "$internal.clientCidrs[0]=10.0.0.0/8" --set "$internal.port=3587"
 grep -A1 'name: THINPOST_EDGE_SUBMISSION_INTERNAL_LISTEN' "$tmp/edge_internal_port.yaml" | grep -q 'value: "$(POD_IP):3587"' || fail "internal port env"
 grep -q 'port: 587$' "$tmp/edge_internal_port.yaml" && grep -q 'targetPort: submission-int' "$tmp/edge_internal_port.yaml" || fail "Service port stays 587"
-helm lint "$chart" --set workload=edge --set smtpSubmission.enabled=true --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" --set "$internal.clientCidrs[0]=10.0.0.0/8"
+helm lint "$chart" --set workload=edge -f "$base" --set smtpSubmission.enabled=true --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" --set "$internal.clientCidrs[0]=10.0.0.0/8"
 # Public and internal listeners together never declare one container port twice.
-render edge_both --set workload=edge --set smtpSubmission.enabled=true --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" --set "$internal.clientCidrs[0]=10.0.0.0/8"
+render edge_both --set workload=edge -f "$base" --set smtpSubmission.enabled=true --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" --set "$internal.clientCidrs[0]=10.0.0.0/8"
 [ "$(grep -c 'containerPort: 587' "$tmp/edge_both.yaml")" = 1 ] && [ "$(grep -c 'containerPort: 465' "$tmp/edge_both.yaml")" = 1 ] || fail "duplicate or missing submission container ports"
 for clash in 587 465; do
-  if helm template thinpost "$chart" --set workload=edge --set smtpSubmission.enabled=true --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" --set "$internal.clientCidrs[0]=10.0.0.0/8" --set "$internal.port=$clash" >/dev/null 2>&1; then fail "accepted internal port $clash beside the public listeners"; fi
+  if helm template thinpost "$chart" --set workload=edge -f "$base" --set smtpSubmission.enabled=true --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" --set "$internal.clientCidrs[0]=10.0.0.0/8" --set "$internal.port=$clash" >/dev/null 2>&1; then fail "accepted internal port $clash beside the public listeners"; fi
 done
 for bad in "$internal.hostname=Bad.Example.com" "$internal.hostname=" "$internal.port=25" "$internal.port=7443" "$internal.port=70000" "$internal.certificateSecret=Bad_Name" "$internal.clientCidrs[0]=not-a-cidr"; do
-  if helm template thinpost "$chart" --set workload=edge --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" --set "$internal.clientCidrs[0]=10.0.0.0/8" --set "$bad" >/dev/null 2>&1; then fail "accepted invalid $bad"; fi
+  if helm template thinpost "$chart" --set workload=edge -f "$base" --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" --set "$internal.clientCidrs[0]=10.0.0.0/8" --set "$bad" >/dev/null 2>&1; then fail "accepted invalid $bad"; fi
 done
-if helm template thinpost "$chart" --set workload=edge --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" >/dev/null 2>&1; then fail "accepted the internal listener with no allowed clients"; fi
-if helm template thinpost "$chart" --set workload=edge --set smtpSubmission.enabled=yes >/dev/null 2>&1; then fail "accepted a non-boolean smtpSubmission.enabled"; fi
+if helm template thinpost "$chart" --set workload=edge -f "$base" --set "$internal.enabled=true" --set "$internal.hostname=thinpost-edge-submission.mail.svc" >/dev/null 2>&1; then fail "accepted the internal listener with no allowed clients"; fi
+if helm template thinpost "$chart" --set workload=edge -f "$base" --set smtpSubmission.enabled=yes >/dev/null 2>&1; then fail "accepted a non-boolean smtpSubmission.enabled"; fi
 if helm template thinpost "$chart" --set workload=control --set control.image=$image --set smtpSubmission.enabled=true | grep -q 'THINPOST_EDGE_SUBMISSION'; then fail "control must not render the Edge submission settings"; fi
 
 # Edge and every disabled variant render no Job at all.
@@ -272,7 +335,7 @@ if grep -q 'imagePullSecrets' "$tmp/control.yaml" "$tmp/edge.yaml"; then fail "i
 render control_pull --set workload=control --set control.image=$image --set 'imagePullSecrets[0].name=regcred'
 [ "$(grep -c 'name: regcred' "$tmp/control_pull.yaml")" = 3 ] || fail "pull secret on the Deployment and both Jobs"
 [ "$(grep -c '^      imagePullSecrets:$' "$tmp/control_pull.yaml")" = 3 ] || fail "pull secret list on every control pod spec"
-render edge_pull --set workload=edge --set 'imagePullSecrets[0].name=regcred'
+render edge_pull --set workload=edge -f "$base" --set 'imagePullSecrets[0].name=regcred'
 [ "$(grep -c 'name: regcred' "$tmp/edge_pull.yaml")" = 1 ] || fail "pull secret on the Edge pod"
 [ "$(grep -c 'backoffLimit: 0' "$tmp/control.yaml")" = 2 ] || fail "Jobs must not retry"
 # Only the reopen Job holds a Kubernetes API token.
@@ -285,5 +348,5 @@ grep -q -- "--image=$image" "$tmp/control.yaml" || fail "reopen Job image flag d
 
 if helm template thinpost "$chart" --set workload=control --set control.image=example.invalid/control:test --set-string 'control.deploymentAnnotations.secret\.reloader\.stakater\.com/reload=a' >/dev/null 2>&1; then fail "accepted a duplicate reloader annotation while the reloader is enabled"; fi
 helm template thinpost "$chart" --set workload=control --set control.image=example.invalid/control:test --set control.reloader.enabled=false --set-string 'control.deploymentAnnotations.secret\.reloader\.stakater\.com/reload=a' >/dev/null || fail "a custom reloader annotation must render when the built-in one is disabled"
-if helm template thinpost "$chart" --set workload=edge --set publicNetwork.cniTypes.sbr=null >/dev/null 2>&1; then fail "accepted a null CNI type"; fi
+if helm template thinpost "$chart" --set workload=edge -f "$base" --set publicNetwork.cniTypes.sbr=null >/dev/null 2>&1; then fail "accepted a null CNI type"; fi
 echo "chart assertions passed"

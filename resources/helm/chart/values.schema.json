@@ -44,14 +44,9 @@
       "type": "string",
       "description": "Placeholder image used until image is set."
     },
-    "sourceAddress": {
-      "type": "string",
-      "format": "ipv4",
-      "description": "Primary outbound and SMTP listener address."
-    },
-    "additionalSources": {
+    "addresses": {
       "type": "array",
-      "maxItems": 15,
+      "maxItems": 16,
       "items": {
         "type": "object",
         "required": [
@@ -63,13 +58,13 @@
           "address": {
             "type": "string",
             "format": "ipv4",
-            "description": "Source IPv4 address."
+            "description": "Public IPv4 address."
           },
           "hostname": {
             "type": "string",
             "maxLength": 219,
             "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
-            "description": "Hostname for the greeting, certificate and reverse DNS."
+            "description": "Hostname for the greeting, HELO name, reverse DNS, certificate and bounce domain."
           },
           "certificateSecret": {
             "type": "string",
@@ -100,17 +95,7 @@
           }
         }
       },
-      "description": "Further outbound addresses, one network attachment each."
-    },
-    "additionalBounceDomains": {
-      "type": "array",
-      "maxItems": 7,
-      "items": {
-        "type": "string",
-        "maxLength": 219,
-        "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
-      },
-      "description": "Extra bounce domains the Edge accepts beyond its own."
+      "description": "Every public sending address, one network attachment, listener and certificate each. The first entry is the main IP."
     },
     "control": {
       "type": "object",
@@ -246,14 +231,6 @@
       "type": "string",
       "description": "Edge worker identifier."
     },
-    "smtpHostname": {
-      "type": "string",
-      "description": "Primary SMTP hostname the Edge greets with."
-    },
-    "bounceDomain": {
-      "type": "string",
-      "description": "Primary bounce domain."
-    },
     "controllerIdentity": {
       "type": "string",
       "description": "SPIFFE identity of the control plane the Edge trusts."
@@ -305,7 +282,7 @@
     },
     "publicNetwork": {
       "type": "object",
-      "description": "Public network attachment settings; each additionalSources entry may override range, gateway, master and mtu.",
+      "description": "Public network attachment settings; each addresses entry may override range, gateway, master and mtu.",
       "properties": {
         "master": {
           "type": "string",
@@ -313,7 +290,7 @@
         },
         "range": {
           "type": "string",
-          "description": "Network CIDR of the primary address."
+          "description": "Default network CIDR for the addresses."
         },
         "gateway": {
           "type": "string",

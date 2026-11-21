@@ -1,0 +1,31 @@
+# Legacy edge values: a primary plus two additional sources, one with every
+# override, a custom certificate Secret, labels, CNI types and submission.
+workload: edge
+replicas: 1
+controlClientCidrs: [10.0.0.5/32]
+sourceAddress: 198.51.100.10
+smtpHostname: mx.example.net
+bounceDomain: mx.example.net
+additionalBounceDomains: [old.example.net]
+additionalSources:
+  - address: 203.0.113.10
+    hostname: smtp.hosting.example
+    certificateSecret: thinpost-smtp-hosting
+    range: 203.0.113.0/24
+    gateway: 203.0.113.1
+    master: ens19
+    mtu: 1500
+  - address: 198.51.100.77
+    hostname: smtp.second.example
+smtpSubmission:
+  enabled: true
+publicNetwork:
+  master: ens18
+  range: 198.51.100.0/24
+  gateway: 198.51.100.1
+  table: 150
+  attachmentLabels:
+    tier: public
+  cniTypes:
+    ipvlan: ipvlan-custom
+    sbr: sbr-custom

@@ -8,7 +8,7 @@ import (
 
 func sourcesEnv() map[string]string {
 	return map[string]string{
-		"THINPOST_EDGE_WORKER_ID": "worker-1", "THINPOST_EDGE_SMTP_HOSTNAME": "smtp.example.com", "THINPOST_EDGE_BOUNCE_DOMAIN": "bounce.example.com",
+		"THINPOST_EDGE_WORKER_ID": "worker-1", "THINPOST_EDGE_SMTP_HOSTNAME": "smtp.example.com",
 		"THINPOST_EDGE_CONTROL_LISTEN": "10.2.3.4:7443", "THINPOST_EDGE_SMTP_LISTEN": "45.0.1.22:25",
 		"THINPOST_EDGE_CONTROLLER_IDENTITIES": "spiffe://thinpost.test/controller/a", "THINPOST_EDGE_CONTROL_CA": "ca.pem", "THINPOST_EDGE_CONTROL_CERT": "control.pem", "THINPOST_EDGE_CONTROL_KEY": "control.key",
 		"THINPOST_EDGE_SMTP_CERT": "smtp.pem", "THINPOST_EDGE_SMTP_KEY": "smtp.key", "THINPOST_EDGE_JOURNAL_PATH": "/data/journal", "THINPOST_EDGE_JOURNAL_CAPACITY": "100", "THINPOST_EDGE_CLOCK_MARGIN": "5s",
@@ -32,28 +32,19 @@ func TestEdgeConfigAdditionalSourcesAndBounceDomains(t *testing.T) {
 	env := sourcesEnv()
 	get := func(key string) string { return env[key] }
 	c, err := Load(get)
-	if err != nil || len(c.AdditionalSources) != 0 || len(c.Sources()) != 1 || len(c.BounceDomains) != 2 || c.BounceDomains[0] != "bounce.example.com" || c.BounceDomains[1] != "smtp.example.com" {
+	if err != nil || len(c.AdditionalSources) != 0 || len(c.Sources()) != 1 || strings.Join(c.BounceDomains(), ",") != "smtp.example.com" {
 		t.Fatalf("defaults: %+v %v", c, err)
 	}
 	withSources(env, "45.0.0.10, 45.0.1.23")
-	env["THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS"] = "bounce.other.example, b2.example.org"
 	c, err = Load(get)
 	if err != nil || len(c.Sources()) != 3 || c.Sources()[0].String() != "45.0.1.22" || c.Sources()[1].String() != "45.0.0.10" {
 		t.Fatalf("configured sources: %v %v", c.Sources(), err)
 	}
-	// Global, then the primary and both additional listener names, then the explicit extras.
-	if len(c.BounceDomains) != 6 || c.BounceDomains[0] != "bounce.example.com" || c.BounceDomains[1] != "smtp.example.com" || c.BounceDomains[2] != "smtp1.example.net" || c.BounceDomains[3] != "smtp2.example.net" || c.BounceDomains[5] != "b2.example.org" {
-		t.Fatalf("configured domains: %v", c.BounceDomains)
+	// Bounces are accepted at exactly the listener names, the primary first.
+	if got := strings.Join(c.BounceDomains(), ","); got != "smtp.example.com,smtp1.example.net,smtp2.example.net" {
+		t.Fatalf("bounce domains: %v", got)
 	}
 	var many []string
-	// 22 extras, the global domain and the primary name are exactly the cap of 24.
-	env["THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS"] = manyDomains(22)
-	delete(env, "THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES")
-	delete(env, "THINPOST_EDGE_SMTP_ADDITIONAL_HOSTNAMES")
-	if c, err = Load(get); err != nil || len(c.BounceDomains) != MaxBounceDomains {
-		t.Fatalf("a full list of bounce domains: %v %v", len(c.BounceDomains), err)
-	}
-	env["THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS"] = ""
 	for i := 1; i <= 16; i++ {
 		many = append(many, fmt.Sprintf("45.0.0.%d", i+10))
 	}
@@ -65,22 +56,37 @@ func TestEdgeConfigAdditionalSourcesAndBounceDomains(t *testing.T) {
 		"not an address":           {"THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES", "mail.example.com"},
 		"empty entry":              {"THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES", "45.0.0.10,"},
 		"sixteen additional":       {"THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES", strings.Join(many, ",")},
-		"uppercase bounce domain":  {"THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS", "Bounce.Other.example"},
-		"duplicate of global":      {"THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS", "bounce.example.com"},
-		"duplicate bounce domain":  {"THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS", "a.example.org,a.example.org"},
-		"not a domain":             {"THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS", "not a domain"},
-		"too long bounce domain":   {"THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS", strings.Repeat("a", 60) + "." + strings.Repeat("b", 60) + "." + strings.Repeat("c", 60) + "." + strings.Repeat("d", 40) + ".example"},
-		"twenty-three extras plus global and primary": {"THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS", manyDomains(23)},
 	} {
 		env := sourcesEnv()
-		if tc[0] == "THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES" {
-			withSources(env, tc[1])
-		} else {
-			env[tc[0]] = tc[1]
-		}
+		withSources(env, tc[1])
 		if _, err := Load(func(key string) string { return env[key] }); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// The bounce domain settings of earlier releases are never read: an Edge that
+// still has them set starts, and they change nothing.
+func TestEdgeConfigIgnoresRemovedBounceEnv(t *testing.T) {
+	env := sourcesEnv()
+	withSources(env, "45.0.0.10")
+	get := func(key string) string { return env[key] }
+	want, err := Load(get)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env["THINPOST_EDGE_BOUNCE_DOMAIN"] = "bounce.example.com"
+	env["THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS"] = "old.example.org,Not A Domain,smtp.example.com," + manyDomains(40)
+	c, err := Load(get)
+	if err != nil {
+		t.Fatalf("an Edge with the removed bounce env set must start: %v", err)
+	}
+	if strings.Join(c.BounceDomains(), ",") != strings.Join(want.BounceDomains(), ",") || strings.Join(c.BounceDomains(), ",") != "smtp.example.com,smtp1.example.net" {
+		t.Fatalf("removed env changed the bounce domains: %v", c.BounceDomains())
+	}
+	env["THINPOST_EDGE_BOUNCE_DOMAIN"] = "not a domain"
+	if _, err = Load(get); err != nil {
+		t.Fatalf("an invalid removed value must be ignored: %v", err)
 	}
 }
 
@@ -104,11 +110,6 @@ func TestEdgeConfigListenersAndHostnames(t *testing.T) {
 	env := sourcesEnv()
 	withSources(env, "45.0.0.10,45.0.1.23")
 	env["THINPOST_EDGE_SMTP_ADDITIONAL_HOSTNAMES"] = "smtp.hosting.example,smtp.other.example"
-	env["THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS"] = "smtp.hosting.example"
-	if _, err := Load(func(key string) string { return env[key] }); err == nil {
-		t.Fatal("an extra bounce domain repeating a listener name was accepted")
-	}
-	env["THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS"] = "old.example.org"
 	c, err := Load(func(key string) string { return env[key] })
 	if err != nil {
 		t.Fatal(err)
@@ -120,14 +121,9 @@ func TestEdgeConfigListenersAndHostnames(t *testing.T) {
 	if listeners[1].Hostname != "smtp.hosting.example" || listeners[1].Cert != "/run/thinpost/smtp-sources/0/tls.crt" || listeners[2].Key != "/run/thinpost/smtp-sources/1/tls.key" {
 		t.Fatalf("additional listeners: %+v", listeners)
 	}
-	want := []string{"bounce.example.com", "smtp.example.com", "smtp.hosting.example", "smtp.other.example", "old.example.org"}
-	if strings.Join(c.BounceDomains, ",") != strings.Join(want, ",") {
-		t.Fatalf("bounce domains: %v", c.BounceDomains)
-	}
-	// A listener name equal to the global bounce domain is not repeated.
-	env["THINPOST_EDGE_SMTP_ADDITIONAL_HOSTNAMES"] = "bounce.example.com,smtp.other.example"
-	if c, err = Load(func(key string) string { return env[key] }); err != nil || strings.Join(c.BounceDomains, ",") != "bounce.example.com,smtp.example.com,smtp.other.example,old.example.org" {
-		t.Fatalf("deduplicated domains: %v %v", c.BounceDomains, err)
+	want := []string{"smtp.example.com", "smtp.hosting.example", "smtp.other.example"}
+	if strings.Join(c.BounceDomains(), ",") != strings.Join(want, ",") {
+		t.Fatalf("bounce domains: %v", c.BounceDomains())
 	}
 	for name, mutate := range map[string]func(map[string]string){
 		"missing hostnames": func(e map[string]string) { delete(e, "THINPOST_EDGE_SMTP_ADDITIONAL_HOSTNAMES") },

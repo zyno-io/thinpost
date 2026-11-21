@@ -11,7 +11,7 @@ The control and Edge workloads read their runtime settings from the environment 
 
 How to read the tables:
 
-- Paths use dots for nested keys and `[]` for list items, for example `additionalSources[].address`.
+- Paths use dots for nested keys and `[]` for list items, for example `addresses[].address`.
 - A **Required** value must be set for the schema to pass; every other value has a default.
 - The defaults for addresses, hostnames and identities are placeholders (documentation ranges and `.invalid` names). Replace them for a real install; the control plane and Edge reject documentation ranges as real sending sources.
 
@@ -34,20 +34,16 @@ These values apply when `workload` is `edge`.
 | --- | --- | --- | --- |
 | `node` | string | `""` | Optional node to pin the Edge to, by hostname. Empty or `unconfigured` lets the pod run on any node. Pin only when something outside the cluster identifies the Edge by the MAC address of its node. |
 | `workerId` | string | `unconfigured` | Worker identifier, sent as `THINPOST_EDGE_WORKER_ID`. The control plane's `THINPOST_CONTROL_WORKER_ID` must equal it. |
-| `smtpHostname` | string | `smtp.example.invalid` | Primary SMTP name the Edge greets with and uses as its HELO. It needs a certificate, matching reverse DNS and an A record. |
-| `bounceDomain` | string | `bounce.example.invalid` | Primary bounce domain. |
 | `controllerIdentity` | string | `spiffe://thinpost.invalid/control` | URI identity of the control plane that the Edge accepts on its control listener, sent as `THINPOST_EDGE_CONTROLLER_IDENTITIES`. |
 | `controlClientCidrs` | list of strings | `[]` | Source addresses allowed to reach the Edge's control port (7443/tcp). Each entry must be an exact IPv4 `/32`. Required to be non-empty when `replicas` is `1`. |
-| `sourceAddress` | IPv4 address | `192.0.2.1` | Primary address: the SMTP listener, the MX target and the default outbound source for every app. The first address the Edge reports. Must be unique among all sources. |
-| `additionalSources` | list | `[]` | Further addresses, one network attachment each so each can sit in its own network behind its own gateway. At most 15. The Edge listens for SMTP on every one and sends from it. Changing the list restarts the Edge. Each address must also be in the control plane's infrastructure ranges (`THINPOST_CONTROL_INFRASTRUCTURE_CIDRS`); the control plane refuses an Edge that reports a source outside them. |
-| `additionalSources[].address` | IPv4 address | none | Source address. Required, unique, different from `sourceAddress`. |
-| `additionalSources[].hostname` | string | none | Name the address greets with, and its certificate and reverse DNS name. Required: a lowercase DNS name of at most 219 characters, unique and different from `smtpHostname`. |
-| `additionalSources[].certificateSecret` | string | `thinpost-smtp-public` | `kubernetes.io/tls` Secret in the release namespace whose certificate covers `hostname`. The default Secret can be shared when it covers the name; otherwise use one Secret per name. |
-| `additionalSources[].range` | CIDR | `publicNetwork.range` | Network of the address. |
-| `additionalSources[].gateway` | IPv4 address | `publicNetwork.gateway` | Gateway for this address. |
-| `additionalSources[].master` | string | `publicNetwork.master` | Parent interface for this address's attachment. |
-| `additionalSources[].mtu` | integer 576 to 9000 | `publicNetwork.mtu` | MTU for this address's attachment. |
-| `additionalBounceDomains` | list of strings | `[]` | Extra bounce domains the Edge accepts, only for retired domains that still receive bounces. At most 7. Each must be a lowercase DNS name, unique and different from `bounceDomain` and every additional hostname. The Edge already accepts `bounceDomain` and each listener's hostname. |
+| `addresses` | list | `[]` | Every public sending address, one network attachment, SMTP listener and certificate each. Required for the Edge: 1 to 16 entries. The first entry is the main IP, the default for every app that has not chosen one; reordering the list changes it. Changing the list restarts the Edge. Each address must also be in the control plane's infrastructure ranges (`THINPOST_CONTROL_INFRASTRUCTURE_CIDRS`); the control plane refuses an Edge that reports a source outside them. |
+| `addresses[].address` | IPv4 address | none | Public IPv4 address. Required, unique. |
+| `addresses[].hostname` | string | none | Name the address greets with: its HELO name, reverse DNS name, certificate name and bounce domain. Required: a lowercase DNS name of at most 219 characters, unique. |
+| `addresses[].certificateSecret` | string | `thinpost-smtp-public` | `kubernetes.io/tls` Secret in the release namespace whose certificate covers `hostname`. The default Secret can be shared when it covers the name; otherwise use one Secret per name. |
+| `addresses[].range` | CIDR | `publicNetwork.range` | Network of the address. |
+| `addresses[].gateway` | IPv4 address | `publicNetwork.gateway` | Gateway for this address. |
+| `addresses[].master` | string | `publicNetwork.master` | Parent interface for this address's attachment. |
+| `addresses[].mtu` | integer 576 to 9000 | `publicNetwork.mtu` | MTU for this address's attachment. |
 
 ## SMTP submission
 
@@ -84,12 +80,12 @@ The Edge's public addresses are attached with a Multus `NetworkAttachmentDefinit
 
 | Value | Type | Default | Description |
 | --- | --- | --- | --- |
-| `publicNetwork` | object | see below | Public network attachment settings. Each `additionalSources` entry may override `range`, `gateway`, `master` and `mtu`. |
-| `publicNetwork.master` | string | `unconfigured` | Parent interface on the node for the primary attachment. Set it for a real install. |
-| `publicNetwork.range` | CIDR | `192.0.2.0/24` | Network of the primary address. |
-| `publicNetwork.gateway` | IPv4 address | `192.0.2.254` | Default gateway for the primary attachment. |
+| `publicNetwork` | object | see below | Public network attachment settings. Each `addresses` entry may override `range`, `gateway`, `master` and `mtu`. |
+| `publicNetwork.master` | string | `unconfigured` | Default parent interface on the node for the attachments. Set it for a real install. |
+| `publicNetwork.range` | CIDR | `192.0.2.0/24` | Default network of the addresses. |
+| `publicNetwork.gateway` | IPv4 address | `192.0.2.254` | Default gateway for the attachments. |
 | `publicNetwork.mtu` | integer 576 to 9000 | `1400` | Interface MTU. |
-| `publicNetwork.table` | integer, at least 1 | `100` | First source-based routing table. The primary uses `table`; additional source N uses `table + N`. `table` plus the number of additional sources must not exceed 252. |
+| `publicNetwork.table` | integer, at least 1 | `100` | First source-based routing table. The first `addresses` entry uses `table`; entry N uses `table + N`. `table` plus the number of entries minus one must not exceed 252. |
 | `publicNetwork.attachmentLabels` | map of strings | `{}` | Labels added to every `NetworkAttachmentDefinition`, for example one that a policy engine checks. |
 | `publicNetwork.cniTypes` | object | see below | CNI plugin binary names used in each attachment. Override when the cluster installs them under versioned or custom names. |
 | `publicNetwork.cniTypes.ipvlan` | string | `ipvlan` | Plugin type for the interface. Required when `cniTypes` is set. |

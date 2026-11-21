@@ -5,40 +5,40 @@ image: ''
 # guard). (The old placeholder "unconfigured" also means no pin.)
 node: ''
 workerId: unconfigured
-smtpHostname: smtp.example.invalid
-bounceDomain: bounce.example.invalid
 controllerIdentity: spiffe://thinpost.invalid/control
 controlClientCidrs: []
-# The primary address: the SMTP listener, the MX and the default outbound
-# source for every app. It is the first address the Edge reports.
-sourceAddress: 192.0.2.1
-# Further addresses, one network attachment each (so each can sit in its own
-# network behind its own gateway). The Edge listens for SMTP on every one of
-# them, as well as sending from it: it greets with, and presents a certificate
-# for, the entry's own hostname, and accepts bounces and inbound mail there.
-# address and hostname are required. certificateSecret names a kubernetes.io/tls
+# Every public sending address, one entry each. Required for the Edge: it
+# renders nothing without at least one (up to 16). Each entry gets its own
+# network attachment, SMTP listener and certificate, and is also where the Edge
+# sends from. The Edge reports these addresses and names to the control plane,
+# which shows them in the console and pins apps to them.
+#
+# The FIRST entry is the main IP: the default for every app that has not chosen
+# one. Reordering the list changes the main IP for every such app.
+#
+# address and hostname are required. hostname is the greeting, the HELO name,
+# the PTR record, the certificate name and the bounce domain (bounces arrive at
+# b+...@<hostname>). Point its forward DNS (A, MX, SPF) at the address and its
+# reverse DNS back at the hostname. certificateSecret names a kubernetes.io/tls
 # Secret in this namespace whose certificate covers the hostname (default
 # thinpost-smtp-public, which may be reused when it does); use a separate
 # Secret per name. range, gateway, master and mtu default to publicNetwork.
-# The hostname must match the address's reverse DNS. Name each address in the
-# console (Operations > Sending IPs) with that hostname as its HELO name.
 # Changing this list restarts the Edge. Each address must also be in the
-# infrastructure CIDRs on the control plane.
-additionalSources: []
+# infrastructure CIDRs on the control plane. Renaming a hostname makes the Edge
+# refuse late bounces addressed to the old name.
+addresses: []
+#  - address: 198.51.100.10
+#    hostname: mx.example.net
 #  - address: 203.0.113.10
 #    hostname: smtp.hosting.example
 #    certificateSecret: thinpost-smtp-hosting
 #    range: 203.0.113.0/24
 #    gateway: 203.0.113.1
 #    master: ens19
-# Extra bounce domains the Edge accepts beyond its own: only for retired domains
-# still receiving bounces. The bounce listener already accepts bounceDomain and
-# every additionalSources hostname, so those need no entry here.
-additionalBounceDomains: []
 # Authenticated SMTP submission for apps that send raw mail (Edge workload).
 smtpSubmission:
   # true: opens 587 (STARTTLS) and 465 (implicit TLS) on every sending IP, each
-  # presenting that IP's own certificate (the primary's or the additionalSources
+  # presenting that IP's own certificate (its addresses
   # entry's). Port 25 is unchanged: no AUTH there. Router and firewall rules must
   # allow inbound TCP 465 and 587 to every sending address.
   enabled: false
@@ -71,8 +71,8 @@ publicNetwork:
   gateway: 192.0.2.254
   mtu: 1400
   table: 100
-  # Labels added to every NetworkAttachmentDefinition (the primary and each
-  # additionalSources entry), for example one a policy engine checks.
+  # Labels added to every NetworkAttachmentDefinition (one per
+  # addresses entry), for example one a policy engine checks.
   attachmentLabels: {}
   # CNI plugin binary names used in each attachment. Override when the cluster
   # installs them under versioned or custom names.
