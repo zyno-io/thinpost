@@ -52,12 +52,22 @@ Before signing, Thinpost rewrites each recipient's HTML. Absolute HTTP(S) links 
 Link paths look like this:
 
 ```text
-/t/c/v2/<key-id>/<payload>   click
-/t/o/v2/<key-id>/<payload>   open
-/t/u/v2/<key-id>/<payload>   unsubscribe
+/t/c/v3/<key-id>/<payload>   click
+/t/o/v3/<key-id>/<payload>   open
+/t/u/v3/<key-id>/<payload>   unsubscribe
 ```
 
-The payload is an authenticated ciphertext (XChaCha20-Poly1305) holding the recipient token and, for clicks, the destination, padded to a multiple of 64 bytes. It is bound to your origin, the link kind and the key generation, so it cannot be moved to another origin or turned into a different kind of link. Any tampering, or any other failure, produces an empty 404. Opens and clicks answer 405 for methods other than GET and HEAD. Query parameters are rejected.
+The payload is an authenticated ciphertext (XChaCha20-Poly1305) holding the recipient token and, for clicks, the destination, padded to a multiple of 64 bytes. It is bound to the link kind and the key generation, so it cannot be turned into a different kind of link or replayed under another key generation. It is not tied to a hostname: the origin in the URL only says where the link points, and any hostname that routes to your Thinpost deployment serves any link, ignoring the `Host` header. (Links from before this format, `/v2/`, are not accepted.) Any tampering, or any other failure, produces an empty 404. Opens and clicks answer 405 for methods other than GET and HEAD. Query parameters are rejected.
+
+### Host self-check
+
+To confirm that a hostname reaches your deployment, Thinpost can request `GET /t/h/v1/<challenge>` (also `HEAD`), where the challenge is 32 random bytes in unpadded base64url. The answer is `200 text/plain` with `Cache-Control: no-store` and the body:
+
+```text
+thinpost-host-check v1 <key-id> <base64url(HMAC)>
+```
+
+The MAC is keyed by a secret derived from your tracking key seed, so only a deployment holding the tracking keys can produce it, and it covers the challenge only, not the hostname. A key id of any retained seed verifies, so a check keeps working through key rotation. Queries and malformed challenges get an empty 404.
 
 Because the URL holds no readable message content or recipient identity, access logs at rest reveal neither. A logged URL is still a working capability: anyone who can read the logs and reach your origin can replay it. That is inherent to mail links. Limiting retention of `/t/` request logs is an optional extra layer.
 

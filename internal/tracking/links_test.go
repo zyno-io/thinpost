@@ -41,7 +41,7 @@ func TestEncryptedLinksSurviveAbsentAnalyticsAndRetainExactDestination(t *testin
 		assertOpaqueLink(t, link, origin, kind[:1], token, destination)
 		for _, failure := range []error{nil, ErrNotFound, errors.New("database offline"), errors.New("mapping object missing")} {
 			v := &fakeVisitor{err: failure}
-			h := &Handler{Origin: origin, Links: keys, Visitor: v}
+			h := &Handler{Links: keys, Visitor: v}
 			for _, method := range []string{http.MethodGet, http.MethodHead} {
 				w := httptest.NewRecorder()
 				h.ServeHTTP(w, httptest.NewRequest(method, link, nil))
@@ -61,7 +61,7 @@ func TestEncryptedLinksSurviveAbsentAnalyticsAndRetainExactDestination(t *testin
 		}
 		// A replica with no database/objects can still serve an authentic link.
 		w := httptest.NewRecorder()
-		(&Handler{Origin: origin, Links: keys}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, link, nil))
+		(&Handler{Links: keys}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, link, nil))
 		if kind == "click" && w.Code != http.StatusFound || kind == "open" && w.Code != http.StatusOK {
 			t.Fatal("stateless resolution failed", w.Code)
 		}
@@ -78,7 +78,7 @@ const (
 
 func assertOpaqueLink(t *testing.T, link, origin, letter, token, destination string) {
 	t.Helper()
-	if !strings.HasPrefix(link, origin+"/t/"+letter+"/v2/") || strings.Count(strings.TrimPrefix(link, origin), "/") != 5 {
+	if !strings.HasPrefix(link, origin+"/t/"+letter+"/v3/") || strings.Count(strings.TrimPrefix(link, origin), "/") != 5 {
 		t.Fatal("unexpected link shape")
 	}
 	payload := link[strings.LastIndex(link, "/")+1:]
@@ -120,13 +120,13 @@ func TestEncryptedLinksRoundTripEveryKind(t *testing.T) {
 	for _, l := range [][3]string{{open, "o"}, {click, "c"}, {unsub, "u"}} {
 		assertOpaqueLink(t, l[0], linkOrigin, l[1], linkToken, linkTarget)
 	}
-	if got, kind, dest, err := keys.verify(linkOrigin, strings.TrimPrefix(open, linkOrigin)); err != nil || got != hash || kind != "open" || dest != "" {
+	if got, kind, dest, err := keys.verify(strings.TrimPrefix(open, linkOrigin)); err != nil || got != hash || kind != "open" || dest != "" {
 		t.Fatal("open round trip", err)
 	}
-	if got, kind, dest, err := keys.verify(linkOrigin, strings.TrimPrefix(click, linkOrigin)); err != nil || got != hash || kind != "click" || dest != linkTarget {
+	if got, kind, dest, err := keys.verify(strings.TrimPrefix(click, linkOrigin)); err != nil || got != hash || kind != "click" || dest != linkTarget {
 		t.Fatal("click round trip", err)
 	}
-	if id, err := keys.verifyUnsubscribe(linkOrigin, strings.TrimPrefix(unsub, linkOrigin)); err != nil || id != linkToken {
+	if id, err := keys.verifyUnsubscribe(strings.TrimPrefix(unsub, linkOrigin)); err != nil || id != linkToken {
 		t.Fatal("unsubscribe round trip", err)
 	}
 	again, _ := keys.link(linkOrigin, "open", linkToken, "")
@@ -158,15 +158,15 @@ func TestEncryptedLinksRejectTampering(t *testing.T) {
 			t.Fatal(err)
 		}
 		path := strings.TrimPrefix(link, linkOrigin)
-		check := func(origin, p string) error {
+		check := func(p string) error {
 			if kind == "u" {
-				_, err := keys.verifyUnsubscribe(origin, p)
+				_, err := keys.verifyUnsubscribe(p)
 				return err
 			}
-			_, _, _, err := keys.verify(origin, p)
+			_, _, _, err := keys.verify(p)
 			return err
 		}
-		if err := check(linkOrigin, path); err != nil {
+		if err := check(path); err != nil {
 			t.Fatal(kind, err)
 		}
 		parts := strings.Split(path, "/")
@@ -175,7 +175,7 @@ func TestEncryptedLinksRejectTampering(t *testing.T) {
 			bad := bytes.Clone(sealed)
 			bad[i] ^= 1
 			parts[5] = base64.RawURLEncoding.EncodeToString(bad)
-			if check(linkOrigin, strings.Join(parts, "/")) == nil {
+			if check(strings.Join(parts, "/")) == nil {
 				t.Fatal("tampered byte accepted", kind, i)
 			}
 		}
@@ -184,7 +184,7 @@ func TestEncryptedLinksRejectTampering(t *testing.T) {
 		cases := map[string]string{
 			"truncated": good[:len(good)-1], "extended": good + "A", "trailing slash": good + "/",
 			"key id swap": strings.Replace(good, keys.active, otherID, 1), "unknown key": strings.Replace(good, keys.active, strings.Repeat("0", 32), 1),
-			"version": strings.Replace(good, "/v2/", "/v1/", 1), "empty payload": strings.Join(parts[:5], "/") + "/",
+			"version": strings.Replace(good, "/v3/", "/v1/", 1), "empty payload": strings.Join(parts[:5], "/") + "/",
 			"oversize": strings.Join(parts[:5], "/") + "/" + strings.Repeat("A", 4000),
 			"padded":   good + "=",
 		}
@@ -194,18 +194,15 @@ func TestEncryptedLinksRejectTampering(t *testing.T) {
 			}
 		}
 		for name, p := range cases {
-			if check(linkOrigin, p) == nil {
+			if check(p) == nil {
 				t.Fatal("accepted", kind, name)
 			}
 			// Cross-kind: whichever verifier, never accepted.
 			if kind != "u" {
-				if _, err := keys.verifyUnsubscribe(linkOrigin, p); err == nil {
+				if _, err := keys.verifyUnsubscribe(p); err == nil {
 					t.Fatal("accepted as unsubscribe", name)
 				}
 			}
-		}
-		if check("https://other.example.com", good) == nil {
-			t.Fatal("origin swap accepted", kind)
 		}
 	}
 }
@@ -215,8 +212,8 @@ func TestEncryptedLinksHandlerRejectsBeforeAnalytics(t *testing.T) {
 	link, _ := keys.link(linkOrigin, "click", linkToken, linkTarget)
 	path := strings.TrimPrefix(link, linkOrigin)
 	v := &fakeVisitor{}
-	h := &Handler{Origin: linkOrigin, Links: keys, Visitor: v}
-	for _, p := range []string{path + "?url=https://evil.example", path + "/extra", strings.Replace(path, "/v2/", "/%76%32/", 1), strings.Replace(path, "/c/", "/o/", 1),
+	h := &Handler{Links: keys, Visitor: v}
+	for _, p := range []string{path + "?url=https://evil.example", path + "/extra", strings.Replace(path, "/v3/", "/%76%33/", 1), strings.Replace(path, "/c/", "/o/", 1),
 		"/t/c/" + linkToken + "/v1/" + keys.active + "/" + base64.RawURLEncoding.EncodeToString([]byte(linkTarget)) + "/" + strings.Repeat("A", 86)} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, p, nil))
@@ -224,8 +221,16 @@ func TestEncryptedLinksHandlerRejectsBeforeAnalytics(t *testing.T) {
 			t.Fatal("untrusted redirect accepted", w.Code)
 		}
 	}
+	// Flip one tag bit and re-encode canonically, so the path always differs from
+	// the genuine link and still reaches the AEAD.
+	cut := strings.LastIndex(path, "/") + 1
+	raw, err := base64.RawURLEncoding.DecodeString(path[cut:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[len(raw)-1] ^= 1
 	w := httptest.NewRecorder()
-	(&Handler{Origin: "https://other.example.com", Links: keys, Visitor: v}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, link, nil))
+	(&Handler{Links: keys, Visitor: v}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, path[:cut]+base64.RawURLEncoding.EncodeToString(raw), nil))
 	if w.Code != http.StatusNotFound || v.calls != 0 {
 		t.Fatal("invalid link reached analytics")
 	}
@@ -241,7 +246,7 @@ func TestEncryptedLinksHandlerLogsNothing(t *testing.T) {
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 	keys := testLinkKeys(t)
-	h := &Handler{Origin: linkOrigin, Links: keys, Visitor: &fakeVisitor{}, Unsubscribes: &fakeUnsubscribes{}}
+	h := &Handler{Links: keys, Visitor: &fakeVisitor{}, Unsubscribes: &fakeUnsubscribes{}}
 	click, _ := keys.link(linkOrigin, "click", linkToken, linkTarget)
 	unsub, _ := keys.UnsubscribeLink(linkOrigin, linkToken)
 	for _, link := range []string{click, unsub, click[:len(click)-3] + "AAA"} {
@@ -261,13 +266,13 @@ func TestLinkRotationKeepsOldGenerationViaPreviousSeeds(t *testing.T) {
 		t.Fatal(err)
 	}
 	unsub, _ := old.UnsubscribeLink(linkOrigin, linkToken)
-	h := &Handler{Origin: linkOrigin, Links: rotated}
+	h := &Handler{Links: rotated}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, link, nil))
 	if w.Code != http.StatusFound || w.Header().Get("Location") != linkTarget {
 		t.Fatal("rotation broke old redirect", w.Code)
 	}
-	if id, err := rotated.verifyUnsubscribe(linkOrigin, strings.TrimPrefix(unsub, linkOrigin)); err != nil || id != linkToken {
+	if id, err := rotated.verifyUnsubscribe(strings.TrimPrefix(unsub, linkOrigin)); err != nil || id != linkToken {
 		t.Fatal("rotation broke old unsubscribe")
 	}
 	fresh, _ := rotated.link(linkOrigin, "open", linkToken, "")
@@ -280,7 +285,7 @@ func TestLinkRotationKeepsOldGenerationViaPreviousSeeds(t *testing.T) {
 		t.Fatal(err)
 	}
 	w = httptest.NewRecorder()
-	(&Handler{Origin: linkOrigin, Links: withoutHistory}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, link, nil))
+	(&Handler{Links: withoutHistory}).ServeHTTP(w, httptest.NewRequest(http.MethodGet, link, nil))
 	if w.Code != http.StatusNotFound {
 		t.Fatal("removed key accepted", w.Code)
 	}
@@ -296,7 +301,7 @@ func TestV1LinksNoLongerResolve(t *testing.T) {
 	} {
 		v := &fakeVisitor{}
 		u := &fakeUnsubscribes{}
-		h := &Handler{Origin: linkOrigin, Links: keys, Visitor: v, Unsubscribes: u}
+		h := &Handler{Links: keys, Visitor: v, Unsubscribes: u}
 		for _, m := range []string{http.MethodGet, http.MethodPost} {
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, httptest.NewRequest(m, p, strings.NewReader("List-Unsubscribe=One-Click")))
@@ -340,7 +345,7 @@ func TestMaxClickLinkFitsBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, got, err := keys.verify(linkOrigin, strings.TrimPrefix(link, linkOrigin)); err != nil || got != dest {
+	if _, _, got, err := keys.verify(strings.TrimPrefix(link, linkOrigin)); err != nil || got != dest {
 		t.Fatal("max-size click did not verify", err)
 	}
 	if len(strings.TrimPrefix(link, linkOrigin)) > maxLinkPathBytes {
@@ -388,7 +393,7 @@ func TestLinkKeyFileParsing(t *testing.T) {
 	}
 	old, _ := NewLinkKeys(seedA, nil)
 	link, _ := old.link(linkOrigin, "open", linkToken, "")
-	if _, _, _, err = keys.verify(linkOrigin, strings.TrimPrefix(link, linkOrigin)); err != nil {
+	if _, _, _, err = keys.verify(strings.TrimPrefix(link, linkOrigin)); err != nil {
 		t.Fatal("loaded previous seed did not decrypt", err)
 	}
 	if _, err = json.Marshal(keys); err == nil {
@@ -454,12 +459,12 @@ func TestNonCanonicalPlaintextRejected(t *testing.T) {
 	aead := keys.aeads[keys.active]
 	build := func(plaintext []byte) string {
 		nonce := make([]byte, aead.NonceSize())
-		sealed := aead.Seal(nonce, nonce, plaintext, linkAAD(linkOrigin, "o", keys.active))
-		return "/t/o/v2/" + keys.active + "/" + base64.RawURLEncoding.EncodeToString(sealed)
+		sealed := aead.Seal(nonce, nonce, plaintext, linkAAD("o", keys.active))
+		return "/t/o/v3/" + keys.active + "/" + base64.RawURLEncoding.EncodeToString(sealed)
 	}
 	good := make([]byte, 64)
 	copy(good, raw)
-	if _, _, _, err := keys.verify(linkOrigin, build(good)); err != nil {
+	if _, _, _, err := keys.verify(build(good)); err != nil {
 		t.Fatal("canonical plaintext rejected", err)
 	}
 	nonZeroPad := bytes.Clone(good)
@@ -468,8 +473,58 @@ func TestNonCanonicalPlaintextRejected(t *testing.T) {
 	badLen := bytes.Clone(good)
 	badLen[17] = 200 // length beyond the plaintext
 	for name, p := range map[string][]byte{"non-zero padding": nonZeroPad, "extra padding": overLong, "length overflow": badLen, "short": good[:63], "unaligned": append(bytes.Clone(good), 0)} {
-		if _, _, _, err := keys.verify(linkOrigin, build(p)); err == nil {
+		if _, _, _, err := keys.verify(build(p)); err == nil {
 			t.Fatal("accepted", name)
 		}
+	}
+}
+
+func TestLinksAreNotBoundToTheHost(t *testing.T) {
+	keys := testLinkKeys(t)
+	v := &fakeVisitor{}
+	h := &Handler{Links: keys, Visitor: v}
+	// Minted for one origin, served at any Host (the handler ignores it).
+	click, _ := keys.link("https://track.example.com", "click", linkToken, linkTarget)
+	open, _ := keys.link("https://track.example.com", "open", linkToken, "")
+	unsub, _ := keys.UnsubscribeLink("https://track.example.com", linkToken)
+	for _, host := range []string{"track.example.com", "mail.customer.example", "203.0.113.9:8443", "[::1]", "bad host!", ""} {
+		for _, link := range []string{click, open, unsub} {
+			r := httptest.NewRequest(http.MethodGet, strings.TrimPrefix(link, "https://track.example.com"), nil)
+			r.Host = host
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != http.StatusFound && w.Code != http.StatusOK {
+				t.Fatal("link rejected at host", host, w.Code)
+			}
+		}
+	}
+	// Minting with a different origin only changes the URL prefix: the path
+	// verifies the same way.
+	other, err := keys.link("https://other.example.org", "open", linkToken, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, kind, _, err := keys.verify(strings.TrimPrefix(other, "https://other.example.org")); err != nil || kind != "open" {
+		t.Fatal("a link minted for another origin did not verify", kind, err)
+	}
+	// Kind binding still holds: a click payload is not an open or unsubscribe link.
+	payload := click[strings.LastIndex(click, "/")+1:]
+	for _, letter := range []string{"o", "u"} {
+		p := "/t/" + letter + "/v3/" + keys.active + "/" + payload
+		if _, _, _, err := keys.verify(p); err == nil && letter == "o" {
+			t.Fatal("click payload accepted as open")
+		}
+		if _, err := keys.verifyUnsubscribe(p); err == nil && letter == "u" {
+			t.Fatal("click payload accepted as unsubscribe")
+		}
+	}
+}
+
+func TestLegacyV2LinksAreNotAccepted(t *testing.T) {
+	keys := testLinkKeys(t)
+	link, _ := keys.link(linkOrigin, "open", linkToken, "")
+	old := strings.Replace(strings.TrimPrefix(link, linkOrigin), "/v3/", "/v2/", 1)
+	if _, _, _, err := keys.verify(old); err == nil {
+		t.Fatal("v2 link accepted")
 	}
 }

@@ -240,7 +240,7 @@ func run() error {
 			return trackingErr
 		}
 		trackingPreparation = &preparation.TrackingConfig{Origin: config.Tracking.Origin, Links: config.Tracking.Links, EventLimit: config.Tracking.EventLimit, Objects: protected}
-		trackingHandler = &tracking.Handler{Origin: config.Tracking.Origin, Links: config.Tracking.Links, Visitor: &tracking.Service{Repository: repository, Objects: protected}, Unsubscribes: repository}
+		trackingHandler = &tracking.Handler{Links: config.Tracking.Links, Visitor: &tracking.Service{Repository: repository, Objects: protected}, Unsubscribes: repository}
 	}
 	if catalogPath != "" {
 		if objects == nil {

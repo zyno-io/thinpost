@@ -26,11 +26,12 @@ type Visitor interface {
 	Visit(context.Context, [32]byte, string, bool) error
 }
 
-// Handler decrypts self-contained v2 links independently of analytics storage.
-// Only /t/{o|c|u}/v2/... paths are accepted; everything else is 404.
+// Handler decrypts self-contained v3 links independently of analytics storage.
+// Only /t/{o|c|u}/v3/... paths and the /t/h/v1/ host self-check are accepted;
+// everything else is 404. Links are not bound to a hostname, so the handler
+// ignores Host entirely.
 type Handler struct {
 	Visitor Visitor
-	Origin  string
 	Links   *LinkKeys
 	// Unsubscribes records one-click unsubscribes. When nil, a verified POST
 	// to /t/u gets 503 and GET and HEAD still work.
@@ -64,6 +65,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if isHostCheckPath(r.URL.Path) {
+		h.serveHostCheck(w, r)
+		return
+	}
 	if isUnsubscribePath(r.URL.Path) {
 		h.serveUnsubscribe(w, r)
 		return
@@ -77,7 +82,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	hash, kind, destination, err := h.Links.verify(h.Origin, r.URL.Path)
+	hash, kind, destination, err := h.Links.verify(r.URL.Path)
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
