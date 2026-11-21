@@ -28,6 +28,12 @@ type RuntimeFeatures struct {
 type RuntimeTracking struct {
 	Origin         string `json:"origin"`
 	LinkEventLimit int    `json:"link_event_limit"`
+	// CustomDomains is true when apps may use their own tracking domains,
+	// which needs THINPOST_ADMIN_ORIGIN to be set.
+	CustomDomains bool `json:"custom_domains"`
+	// CNAMETarget is the deployment's tracking host: what a custom tracking
+	// domain's DNS record should point at.
+	CNAMETarget string `json:"cname_target"`
 }
 
 // RuntimeInfo is set once at startup from configuration, never from a request.

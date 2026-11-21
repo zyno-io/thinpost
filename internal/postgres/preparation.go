@@ -49,7 +49,12 @@ func (r *Repository) ClaimPreparation(ctx context.Context, token string, ttl tim
 	}
 	err = tx.QueryRowContext(ctx, `UPDATE messages SET state='preparing',prepare_token=$1,prepare_until=clock_timestamp()+$2*interval '1 millisecond',prepare_attempts=prepare_attempts+1
 		WHERE id=(SELECT m.id FROM messages m JOIN apps app ON app.id=m.app_id WHERE app.active AND m.state='queued' AND m.prepare_next_at<=clock_timestamp() AND m.prepare_attempts<$3 ORDER BY m.prepare_next_at,m.accepted_at,m.id FOR UPDATE OF m SKIP LOCKED LIMIT 1)
-		RETURNING id,app_id,object_key,accepted_at,COALESCE(hold_resolved_at,accepted_at),enhanced_protection,(SELECT a.list_unsubscribe FROM apps a WHERE a.id=messages.app_id),COALESCE(sender_domain,'')`, token, ttl.Milliseconds(), maxPreparationAttempts).Scan(&claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.AcceptedAt, &claim.Date, &claim.EnhancedProtection, &claim.ListUnsubscribe, &claim.SenderDomain)
+		RETURNING id,app_id,object_key,accepted_at,COALESCE(hold_resolved_at,accepted_at),enhanced_protection,(SELECT a.list_unsubscribe FROM apps a WHERE a.id=messages.app_id),COALESCE(sender_domain,''),
+		COALESCE((SELECT t.domain FROM tracking_domains t
+			WHERE t.app_id=messages.app_id AND t.state='active' AND t.last_ok_at>clock_timestamp()-`+trackingFreshness+`
+			AND (t.sender_domain=messages.sender_domain OR right(messages.sender_domain,length(t.sender_domain)+1)='.'||t.sender_domain)
+			AND EXISTS (SELECT 1 FROM sender_domains s WHERE s.app_id=t.app_id AND s.domain=t.sender_domain AND s.active)
+			ORDER BY length(t.sender_domain) DESC LIMIT 1),'')`, token, ttl.Milliseconds(), maxPreparationAttempts).Scan(&claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.AcceptedAt, &claim.Date, &claim.EnhancedProtection, &claim.ListUnsubscribe, &claim.SenderDomain, &claim.TrackingDomain)
 	if errors.Is(err, sql.ErrNoRows) {
 		return claim, preparation.ErrNoWork
 	}

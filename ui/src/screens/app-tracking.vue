@@ -44,6 +44,8 @@
             </div>
         </section>
 
+        <TrackingDomainsSummary v-if="runtime && runtime.features.tracking && runtime.tracking" :app-id="app.id" :available="runtime.tracking.custom_domains" />
+
         <TrackingDefaultsPanel :tracking="runtime ? runtime.features.tracking : null" />
 
         <section class="card" aria-labelledby="tracking-budget-heading" :aria-busy="quotaLoading || isSubmitting">
@@ -135,6 +137,7 @@ import HelpButton from '@/shared/components/help-button.vue';
 import ListUnsubscribePanel from '@/shared/components/list-unsubscribe-panel.vue';
 import Loader from '@/shared/components/loader.vue';
 import TrackingDefaultsPanel from '@/shared/components/tracking-defaults-panel.vue';
+import TrackingDomainsSummary from '@/shared/components/tracking-domains-summary.vue';
 import TrackingQuotaModal from '@/shared/components/tracking-quota-modal.vue';
 import { formatCount } from '@/submission-rate';
 import { parseRuntimeInfo, parseTrackingQuota } from '@/tracking';
