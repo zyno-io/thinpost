@@ -139,6 +139,18 @@ helm upgrade --install thinpost-control zyno/thinpost --version <chart version> 
 
 For a `HelmRelease` resource, set `spec.timeout` the same way. A timeout shorter than the hooks makes Helm report a failure while the Jobs are still working, and with remediation on, it can try to roll back.
 
+## Sending identity comes from the edge
+
+From schema 45, the sending worker's configuration is the only place each sending IP's address and HELO name are set, and each IP's bounce domain is its HELO name. The control plane no longer reads `THINPOST_CONTROL_SMTP_SOURCE`, `THINPOST_CONTROL_BOUNCE_DOMAIN` or `THINPOST_INBOUND_MX_HOST` (they are ignored if still set) and the chart's `control.inboundMxHost` is gone.
+
+If your bounce domain or inbound MX host was a name other than the main IP's HELO name (the older examples used `bounce.example.com` and `mx.example.com` next to `smtp.example.com`):
+
+- **Receiving domains** should point their MX at the main IP's HELO name. Until they do, the console's MX check reports them as pointing elsewhere, although mail still arrives while the old name resolves to the edge.
+- **The old bounce and MX names** are no longer reserved, so they could be claimed as receiving domains. Remove them from DNS, or keep them pointing at the edge only until bounces for mail sent before the upgrade have arrived.
+- **The feedback mailbox** moves to `b+…@<main HELO name>`. Re-register it with the mailbox providers you enrolled.
+
+If they were already the same name, as in the current examples, nothing changes.
+
 ## Upgrading the edge
 
 The edge release is independent. Its Deployment uses `Recreate`, so an upgrade stops the old pod and starts a new one, and sending pauses briefly. Bounce senders retry. The control plane reconnects and the edge replays any results it has not had acknowledged.

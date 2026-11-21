@@ -55,3 +55,13 @@ func TestBridgeIsDisabledOnlyWithoutPartialConfiguration(t *testing.T) {
 		t.Fatal("route exceptions silently accepted with bridge disabled")
 	}
 }
+
+// The Edge reports its own addresses and names, so the settings that used to
+// restate them are never read. They do not make an otherwise disabled bridge
+// look partially configured either.
+func TestRemovedEdgeIdentityEnvIsIgnored(t *testing.T) {
+	env := map[string]string{"THINPOST_CONTROL_SMTP_SOURCE": "203.0.113.10", "THINPOST_CONTROL_BOUNCE_DOMAIN": "bounce.example.com"}
+	if config, err := FromEnvironment(func(key string) string { return env[key] }); err != nil || config != nil {
+		t.Fatal("removed Edge identity env changed the disabled bridge", config, err)
+	}
+}

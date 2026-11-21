@@ -48,9 +48,7 @@
                         <RouterLink :to="addWebhookTarget" data-testid="add-inbound-webhook-warning">Add an inbound webhook</RouterLink>
                     </p>
                 </div>
-                <p v-if="domains && !mxHost" class="hint" data-testid="no-mx-host">
-                    No receiving mail server is set up yet, so there is no MX record to show and the MX check is unavailable. Ask your Thinpost administrator.
-                </p>
+                <p v-if="domains && !mxHost" class="hint" data-testid="no-mx-host">{{ noMxHostText }}</p>
                 <div v-if="domains && !domains.length && !loadError" class="empty">
                     <i class="fa-solid fa-inbox" aria-hidden="true" />
                     <h2>No receiving domains</h2>
@@ -103,7 +101,7 @@
                                     {{ isBusy(domain.name, 'records') ? 'Working…' : 'New DNS records' }}
                                     <span class="sr-only">for {{ domain.name }}</span>
                                 </button>
-                                <button type="button" class="btn sm" :disabled="!canAct || !mxHost" :title="mxHost ? undefined : 'No receiving mail server is set up yet'" @click="checkMx(domain.name)">
+                                <button type="button" class="btn sm" :disabled="!canAct || !mxHost" :title="mxHost ? undefined : 'There is no mail server name to check against yet'" @click="checkMx(domain.name)">
                                     {{ isBusy(domain.name, 'mx') ? 'Checking…' : 'Check MX' }}
                                     <span class="sr-only">{{ domain.name }}</span>
                                 </button>
@@ -190,7 +188,8 @@ import {
     parseInboundLimits,
     STATE_LABELS,
     STATE_TONES,
-    type InboundChallenge
+    type InboundChallenge,
+    type MxHostStatus
 } from '@/inbound';
 import { DefaultApi, type InboundDomain, type InboundLimits } from '@/openapi-client-generated';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
@@ -207,6 +206,12 @@ const { app, appId } = useAppContext();
 
 const domains = shallowRef<InboundDomain[] | null>(null);
 const mxHost = ref<string | null>(null);
+const mxHostStatus = ref<MxHostStatus>('not_reported');
+const noMxHostText = computed(() =>
+    mxHostStatus.value === 'dns_unconfirmed'
+        ? "Thinpost can't confirm the mail server's name yet, so there is no MX record to show and the MX check is unavailable. This usually clears up on its own once DNS catches up. Try again in a few minutes, or ask your Thinpost administrator."
+        : "The mail server hasn't connected yet, so there is no MX record to show and the MX check is unavailable. Try again in a few minutes, or ask your Thinpost administrator."
+);
 const isLoading = ref(true);
 const loadError = ref<ApiErrorDescription | null>(null);
 const actionError = ref<ApiErrorDescription | null>(null);
@@ -268,6 +273,7 @@ async function load() {
         const parsed = parseInboundDomainList(data);
         domains.value = parsed.domains;
         mxHost.value = parsed.mxHost;
+        mxHostStatus.value = parsed.mxHostStatus;
     } catch (err) {
         if (seq !== loadSeq) return;
         loadError.value = describeApiError(err, {
@@ -288,6 +294,7 @@ async function reload() {
         const parsed = parseInboundDomainList(data);
         domains.value = parsed.domains;
         mxHost.value = parsed.mxHost;
+        mxHostStatus.value = parsed.mxHostStatus;
     } catch (err) {
         if (seq !== loadSeq || isUnmounted) return;
         domains.value = null;

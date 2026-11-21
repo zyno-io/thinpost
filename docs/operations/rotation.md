@@ -118,6 +118,8 @@ If you suspect the edge was compromised:
 2. The edge holds the private keys of the public SMTP certificates, so **reissue every public SMTP certificate with a new key** (the primary's and each additional address's Secret), revoking the old certificates at your CA where possible, and rotate the internal listener's certificate if you use it. Do this before reissuing credentials, or a still-trusted stolen key can capture the new passwords.
 3. For every app with SMTP credentials, **revoke every credential and create new ones**. An app may have at most 10 unrevoked credentials: if it has 5 or fewer you can create the replacements first, otherwise revoke before creating. Each credential must be replaced on the device that uses it.
 4. Review recent SMTP messages in the console for mail you do not recognize.
+5. Check that each sending IP's HELO name in the edge configuration is one you chose. The SMTP tab and inbound MX host only show names that public DNS confirms both ways, but confirm the names your devices and MX records use before handing out new credentials.
+6. Rotate the feedback mailbox (Operations, Feedback loops), since its address was handed to mailbox providers while the edge may have been compromised.
 
 The SMTP retry secret and the credential digests never reached the edge, so they do not need rotating.
 

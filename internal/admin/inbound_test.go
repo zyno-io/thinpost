@@ -124,8 +124,8 @@ func inboundPath(app, rest string) string { return "/api/v1/apps/" + app + "/" +
 
 func TestInboundDomainRoutes(t *testing.T) {
 	app := strings.Repeat("a", 32)
-	store := &inboundFake{fakeStore: &fakeStore{}, domains: map[string]InboundDomain{}}
-	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store, BounceDomain: "bounce.example.net", InboundMXHost: "smtp.mx.example.net",
+	store := &inboundFake{fakeStore: &fakeStore{identity: EdgeIdentity{MainHostname: "smtp.mx.example.net", MainAddress: "45.0.0.10", Hostnames: []string{"smtp.mx.example.net", "bounce.example.net"}}}, domains: map[string]InboundDomain{}}
+	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store, ReverseDNS: &fakeReverse{names: []string{"smtp.mx.example.net."}, hosts: []string{"45.0.0.10"}},
 		DNS: fakeDNS{records: []string{"thinpost-inbound-verification=test"}}, MX: fakeMX{records: mx("smtp.mx.example.net.")}}
 	if w := send(h, "GET", inboundPath(app, "inbound-domains"), "", ""); w.Code != 401 {
 		t.Fatal("unauthenticated", w.Code)
@@ -136,7 +136,7 @@ func TestInboundDomainRoutes(t *testing.T) {
 	}
 	h.Authenticator = fakeAuth{admin: true}
 	// List carries the MX host.
-	if w := send(h, "GET", inboundPath(app, "inbound-domains"), "", "valid"); w.Code != 200 || !strings.Contains(w.Body.String(), `"domains":[]`) || !strings.Contains(w.Body.String(), `"mx_host":"smtp.mx.example.net"`) {
+	if w := send(h, "GET", inboundPath(app, "inbound-domains"), "", "valid"); w.Code != 200 || !strings.Contains(w.Body.String(), `"domains":[]`) || !strings.Contains(w.Body.String(), `"mx_host":"smtp.mx.example.net"`) || !strings.Contains(w.Body.String(), `"mx_host_status":"ok"`) {
 		t.Fatal("list", w.Code, w.Body.String())
 	}
 	// Create.
@@ -199,12 +199,39 @@ func TestInboundDomainRoutes(t *testing.T) {
 	if w := send(h, "POST", inboundPath(app, "inbound-domains/mail.example.com/check-mx"), "", "valid"); w.Code != 200 || store.mxStatus != MXError {
 		t.Fatal("a failed lookup is recorded as an error", w.Code, store.mxStatus)
 	}
-	h.InboundMXHost = ""
+	// Before the sending worker reports, there is no host to check against.
+	h.MX = fakeMX{records: mx("smtp.mx.example.net.")}
+	store.identity = EdgeIdentity{}
 	if w := send(h, "POST", inboundPath(app, "inbound-domains/mail.example.com/check-mx"), "", "valid"); w.Code != 503 {
-		t.Fatal("check-mx without a configured host", w.Code)
+		t.Fatal("check-mx before a report", w.Code)
 	}
-	if w := send(h, "GET", inboundPath(app, "inbound-domains"), "", "valid"); strings.Contains(w.Body.String(), "mx_host") {
-		t.Fatal("an unconfigured host was reported")
+	if w := send(h, "GET", inboundPath(app, "inbound-domains"), "", "valid"); strings.Contains(w.Body.String(), `"mx_host":`) || !strings.Contains(w.Body.String(), `"mx_host_status":"not_reported"`) {
+		t.Fatal("a host was reported before any report", w.Body.String())
+	}
+	// A name public DNS does not map to the reported address is withheld, and
+	// the MX check refuses to use it.
+	store.identity = EdgeIdentity{MainHostname: "smtp.mx.example.net", MainAddress: "45.0.0.10", Hostnames: []string{"smtp.mx.example.net"}}
+	timeout := &net.DNSError{Err: "i/o timeout", IsTimeout: true}
+	for name, dns := range map[string]*fakeReverse{
+		"mismatch":     {names: []string{"smtp.mx.example.net."}, hosts: []string{"45.0.0.99"}},
+		"nxdomain":     {names: []string{"smtp.mx.example.net."}, hostErr: &net.DNSError{IsNotFound: true}},
+		"timeout":      {names: []string{"smtp.mx.example.net."}, hostErr: timeout},
+		"reverse only": {names: []string{"other.example.net."}, hosts: []string{"45.0.0.10"}},
+	} {
+		h.ReverseDNS = dns
+		if w := send(h, "GET", inboundPath(app, "inbound-domains"), "", "valid"); w.Code != 200 || strings.Contains(w.Body.String(), `"mx_host":`) || strings.Contains(w.Body.String(), "smtp.mx.example.net") || !strings.Contains(w.Body.String(), `"mx_host_status":"dns_unconfirmed"`) {
+			t.Fatal(name, "host shown", w.Body.String())
+		}
+		if w := send(h, "POST", inboundPath(app, "inbound-domains"), `{"domain":"again.example.com"}`, "valid"); w.Code != 201 || strings.Contains(w.Body.String(), `"mx_host":`) || !strings.Contains(w.Body.String(), `"mx_host_status":"dns_unconfirmed"`) {
+			t.Fatal(name, "challenge shows the host", w.Code, w.Body.String())
+		}
+		if w := send(h, "POST", inboundPath(app, "inbound-domains/mail.example.com/check-mx"), "", "valid"); w.Code != 503 {
+			t.Fatal(name, "check-mx used an unconfirmed host", w.Code)
+		}
+		// Reserved names stay reserved whatever DNS says.
+		if w := send(h, "POST", inboundPath(app, "inbound-domains"), `{"domain":"smtp.mx.example.net"}`, "valid"); w.Code != 400 {
+			t.Fatal(name, "reserved name accepted", w.Code)
+		}
 	}
 
 	// Disable, enable, delete.

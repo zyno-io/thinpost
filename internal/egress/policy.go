@@ -21,21 +21,19 @@ var denied = prefixes([]string{
 })
 var globalV6 = netip.MustParsePrefix("2000::/3")
 
-// MaxSources bounds the source addresses one policy may hold.
+// MaxSources bounds the source addresses an Edge may report.
 const MaxSources = 16
 
-// Policy holds the SMTP source addresses this process may dial from. The first
-// source of each family is its primary and the default for that family; later
-// sources are used only when a caller names one.
+// Policy is the destination filter. It holds no source addresses: the
+// Edge reports its own, and CheckSources vets them when it does. IPv4 is
+// the only dialable family because every reported source is IPv4.
 type Policy struct {
-	local            []netip.Prefix
-	source4, source6 netip.Addr
-	sources          map[netip.Addr]struct{}
-	exceptions       map[exceptionKey]struct{}
+	local      []netip.Prefix
+	exceptions map[exceptionKey]struct{}
 }
 
 // PublicSource reports whether address is a literal, unzoned public IPv4
-// address, the only kind a worker may advertise as an additional source.
+// address, the only kind a worker may advertise as a source.
 func PublicSource(address netip.Addr) bool {
 	return address.IsValid() && address.Is4() && address.Zone() == "" && publicAddress(address)
 }
@@ -43,7 +41,9 @@ func PublicSource(address netip.Addr) bool {
 // NewPolicy requires explicit infrastructure ranges, including public IPs
 // owned by the operator. Populate these from deployment inventory; the static
 // special-use list cannot identify organization-specific infrastructure.
-func NewPolicy(infrastructure []netip.Prefix, sources []netip.Addr, exceptions ...Exception) (*Policy, error) {
+// A route exception that names an Edge source is caught at Ready, by
+// CheckSources, because sources are only known once the Edge reports them.
+func NewPolicy(infrastructure []netip.Prefix, exceptions ...Exception) (*Policy, error) {
 	if len(infrastructure) == 0 {
 		return nil, errors.New("infrastructure deny ranges are required")
 	}
@@ -54,38 +54,7 @@ func NewPolicy(infrastructure []netip.Prefix, sources []netip.Addr, exceptions .
 		}
 		local = append(local, prefix.Masked())
 	}
-	if len(sources) > MaxSources {
-		return nil, errors.New("too many SMTP source addresses")
-	}
-	policy := &Policy{local: local, sources: make(map[netip.Addr]struct{}, len(sources))}
-	for _, source := range sources {
-		if !source.IsValid() || source.Zone() != "" || source.Is4In6() || !publicAddress(source) {
-			return nil, errors.New("invalid SMTP source address")
-		}
-		owned := false
-		for _, prefix := range local {
-			if prefix.Contains(source) {
-				owned = true
-				break
-			}
-		}
-		if !owned {
-			return nil, errors.New("SMTP source must be in an infrastructure deny range")
-		}
-		if _, duplicate := policy.sources[source]; duplicate {
-			return nil, errors.New("duplicate SMTP source")
-		}
-		policy.sources[source] = struct{}{}
-		// The first source of a family is its primary.
-		if source.Is4() && !policy.source4.IsValid() {
-			policy.source4 = source
-		} else if source.Is6() && !policy.source6.IsValid() {
-			policy.source6 = source
-		}
-	}
-	if !policy.source4.IsValid() && !policy.source6.IsValid() {
-		return nil, errors.New("SMTP source address is required")
-	}
+	policy := &Policy{local: local}
 	if len(exceptions) > maxExceptions {
 		return nil, errors.New("too many SMTP route exceptions")
 	}
@@ -110,17 +79,14 @@ func prefixes(values []string) []netip.Prefix {
 	return out
 }
 
-// Allowed requires both a permitted destination and a configured source for
-// that address family, so routing never selects an undialable family.
+// Allowed requires a permitted IPv4 destination: IPv6 is never dialable
+// because sources are IPv4 only, so routing never selects it.
 func (p *Policy) Allowed(address netip.Addr) bool {
 	if p == nil || len(p.local) == 0 || !address.IsValid() || address.Zone() != "" {
 		return false
 	}
 	address = address.Unmap()
-	if address.Is4() && !p.source4.IsValid() || address.Is6() && !p.source6.IsValid() {
-		return false
-	}
-	if !publicAddress(address) {
+	if !address.Is4() || !publicAddress(address) {
 		return false
 	}
 	for _, prefix := range p.local {
@@ -152,15 +118,13 @@ func (p *Policy) AllowedFor(address netip.Addr, recipient, mx string) bool {
 // CheckSources reports whether every address an Edge reports as a sending
 // source is acceptable to this policy: each must lie inside an infrastructure
 // range, so mail is never routed to it as a destination, and none may be named
-// by a route exception. NewPolicy applies the same rules to the sources it is
-// built with; this applies them to sources only known once an Edge reports
-// them. The Edge applies no destination policy, so this is the only check.
+// by a route exception. The Edge applies no destination policy, so this is the only check.
 func (p *Policy) CheckSources(sources []netip.Addr) error {
 	if p == nil || len(p.local) == 0 || len(sources) == 0 {
 		return errors.New("SMTP source policy is not configured")
 	}
 	for _, source := range sources {
-		if !source.IsValid() || source.Zone() != "" || source.Is4In6() || !publicAddress(source) {
+		if !PublicSource(source) {
 			return errors.New("invalid SMTP source address")
 		}
 		inside := false
@@ -183,10 +147,7 @@ func (p *Policy) CheckSources(sources []netip.Addr) error {
 }
 
 func (p *Policy) isExceptionAddress(address netip.Addr) bool {
-	if p == nil || !address.IsValid() || address.Zone() != "" || address.Is4In6() || !publicAddress(address) || p.isSource(address) {
-		return false
-	}
-	if address.Is4() && !p.source4.IsValid() || address.Is6() && !p.source6.IsValid() {
+	if p == nil || !address.IsValid() || address.Zone() != "" || address.Is4In6() || !address.Is4() || !publicAddress(address) {
 		return false
 	}
 	for _, prefix := range p.local {
@@ -195,11 +156,6 @@ func (p *Policy) isExceptionAddress(address netip.Addr) bool {
 		}
 	}
 	return false
-}
-
-func (p *Policy) isSource(address netip.Addr) bool {
-	_, ok := p.sources[address]
-	return ok
 }
 
 func publicAddress(address netip.Addr) bool {

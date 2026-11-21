@@ -37,8 +37,8 @@ func (s *feedbackLoopTestStore) SetFeedbackReporters(_ context.Context, actor st
 }
 
 func TestFeedbackLoopRoutes(t *testing.T) {
-	store := &feedbackLoopTestStore{fakeStore: &fakeStore{}}
-	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store, BounceDomain: "mx.example.net"}
+	store := &feedbackLoopTestStore{fakeStore: &fakeStore{identity: EdgeIdentity{MainHostname: "mx.example.net", MainAddress: "45.0.0.10", Hostnames: []string{"mx.example.net", "smtp.hosting.example.org"}}}}
+	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store}
 	if w := send(h, "GET", "/api/v1/feedback-loops", "", "bad"); w.Code != 401 {
 		t.Fatal("unauthenticated read", w.Code)
 	}
@@ -76,17 +76,26 @@ func TestFeedbackLoopRoutes(t *testing.T) {
 	if w := send(h, "DELETE", "/api/v1/feedback-loops/mailbox", "", "valid"); w.Code != 405 {
 		t.Fatal("wrong method", w.Code)
 	}
-	// Without a bounce domain no mailbox is created and none is shown as an address.
-	h.BounceDomain = ""
+	// Before the sending worker has reported a name no mailbox is created and
+	// none is shown as an address.
+	store.identity = EdgeIdentity{}
 	store.mailbox = nil
 	if w := send(h, "POST", "/api/v1/feedback-loops/mailbox", `{}`, "valid"); w.Code != 409 || store.mailbox != nil {
-		t.Fatal("created without a bounce domain", w.Code)
+		t.Fatal("created before the sending worker reported", w.Code)
+	}
+	if w := send(h, "GET", "/api/v1/feedback-loops", "", "valid"); w.Code != 200 || !strings.Contains(w.Body.String(), `"receiving":false`) {
+		t.Fatal("receiving before a report", w.Code, w.Body.String())
+	}
+	// The address follows the report: a renamed main IP changes it.
+	store.identity = EdgeIdentity{MainHostname: "mx2.example.net", MainAddress: "45.0.0.11", Hostnames: []string{"mx2.example.net"}}
+	if w := send(h, "POST", "/api/v1/feedback-loops/mailbox", `{}`, "valid"); w.Code != 200 || !strings.Contains(w.Body.String(), `@mx2.example.net"`) {
+		t.Fatal("address ignores the report", w.Code, w.Body.String())
 	}
 }
 
 func TestFeedbackReportersRoute(t *testing.T) {
 	store := &feedbackLoopTestStore{fakeStore: &fakeStore{}}
-	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store, BounceDomain: "mx.example.net"}
+	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store}
 	const path = "/api/v1/feedback-loops/reporters"
 	for _, body := range []string{``, `{}`, `{"domains":null}`, `{"domains":["bad domain"]}`, `{"domains":["localhost"]}`, `{"domains":["10.0.0.1"]}`, `{"domains":["ü.example"]}`,
 		`{"domains":[` + strings.Repeat(`"a.example",`, 32) + `"b.example"]}`, `{"domains":["a.example"],"x":1}`} {

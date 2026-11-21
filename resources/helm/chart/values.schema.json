@@ -218,10 +218,6 @@
           },
           "description": "Helm hook Jobs that migrate the schema and reopen the admission gate."
         },
-        "inboundMxHost": {
-          "type": "string",
-          "description": "Mail host that inbound domains point their MX record at; empty leaves it unset."
-        },
         "deploymentAnnotations": {
           "type": "object",
           "description": "Extra annotations for the operator Deployment metadata.",

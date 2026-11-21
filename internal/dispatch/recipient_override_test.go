@@ -71,7 +71,7 @@ func overrideProvider(t *testing.T, override bool, destination string) (*dispatc
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err := egress.NewPolicy([]netip.Prefix{netip.MustParsePrefix("45.0.1.0/24")}, []netip.Addr{netip.MustParseAddr("45.0.1.22")})
+	policy, err := egress.NewPolicy([]netip.Prefix{netip.MustParsePrefix("45.0.1.0/24")})
 	if err != nil {
 		t.Fatal(err)
 	}

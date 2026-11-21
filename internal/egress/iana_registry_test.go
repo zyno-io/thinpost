@@ -28,7 +28,6 @@ func TestIANASpecialPurposeDestinationsAreNotDialable(t *testing.T) {
 	}
 	policy, err := NewPolicy(
 		[]netip.Prefix{netip.MustParsePrefix("45.0.1.0/24"), netip.MustParsePrefix("2606:4700:400:a100::/56")},
-		[]netip.Addr{netip.MustParseAddr("45.0.1.62"), netip.MustParseAddr("2606:4700:400:a110::100")},
 	)
 	if err != nil {
 		t.Fatal(err)

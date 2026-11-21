@@ -25,7 +25,6 @@ func TestInfrastructureExceptionIsAppliedToResolvedRecipientAndMX(t *testing.T) 
 	address := netip.MustParseAddr("45.0.1.21")
 	policy, err := egress.NewPolicy(
 		[]netip.Prefix{netip.MustParsePrefix("45.0.1.0/24")},
-		[]netip.Addr{netip.MustParseAddr("45.0.1.62")},
 		egress.Exception{Recipient: "test@mailhost.example", MX: "mail.mailhost.example", Address: address},
 	)
 	if err != nil {

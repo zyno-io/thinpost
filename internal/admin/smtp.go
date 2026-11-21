@@ -30,6 +30,9 @@ const (
 	// SMTPHostIPUnavailable: the app's chosen IP is no longer on the sending
 	// worker, so no host is offered.
 	SMTPHostIPUnavailable = "ip_unavailable"
+	// SMTPHostDNSUnconfirmed: the sending worker reported a name, but public DNS
+	// does not map it to the reported address, so the name is withheld.
+	SMTPHostDNSUnconfirmed = "dns_unconfirmed"
 )
 
 // SMTPCredential is one SMTP login of an app. Username is what the client
@@ -82,13 +85,17 @@ type SMTPPort struct {
 }
 
 // SMTPConnection tells clients where to connect. Host is the HELO name of the
-// IP the app sends from, as the sending worker last reported it; HostStatus
-// says why there is none when it is absent.
+// IP the app sends from, as the sending worker last reported it, and only when
+// public DNS maps that name to the reported address; HostStatus says why there
+// is none when it is absent.
 type SMTPConnection struct {
-	Host       *string    `json:"host,omitempty"`
-	HostSource *string    `json:"host_source"`
-	HostStatus string     `json:"host_status"`
-	Ports      []SMTPPort `json:"ports"`
+	Host *string `json:"host,omitempty"`
+	// HostAddress is the address the worker reported for Host. A store sets it
+	// with Host; the handler checks DNS against it and never serializes it.
+	HostAddress string     `json:"-"`
+	HostSource  *string    `json:"host_source"`
+	HostStatus  string     `json:"host_status"`
+	Ports       []SMTPPort `json:"ports"`
 	// ObservedPorts are the submission ports the Edge last reported listening
 	// on. They only drive an availability hint.
 	ObservedPorts []int      `json:"observed_ports"`
@@ -114,7 +121,8 @@ type SMTPStore interface {
 	IssueSMTPCredential(ctx context.Context, actor, appID, name string) (IssuedSMTPCredential, error)
 	RevokeSMTPCredential(ctx context.Context, actor, appID, credentialID string) error
 	// SMTPConnection resolves the host: the app's chosen sending IP, else the
-	// main IP of the Edge's last report.
+	// main IP of the Edge's last report. It does not check DNS; the handler
+	// does, so a name the Edge reported is never shown unconfirmed.
 	SMTPConnection(ctx context.Context, appID string) (SMTPConnection, error)
 }
 
@@ -266,6 +274,14 @@ func (h *Handler) getAppSMTP(w http.ResponseWriter, r *http.Request, store SMTPS
 	if err != nil {
 		storeError(w, err)
 		return
+	}
+	// The sending worker is untrusted and this name is what clients are told to
+	// connect to, so show it only when the name's public A records include the
+	// address the worker reported for it. A compromised worker cannot change
+	// public DNS, so it cannot make the console name a host that DNS does not
+	// map to that address.
+	if connection.Host != nil && !h.confirmHostName(r.Context(), *connection.Host, connection.HostAddress) {
+		connection.Host, connection.HostSource, connection.HostStatus = nil, nil, SMTPHostDNSUnconfirmed
 	}
 	if credentials == nil {
 		credentials = []SMTPCredential{}

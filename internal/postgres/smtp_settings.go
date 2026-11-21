@@ -113,12 +113,12 @@ func (r *Repository) SMTPConnection(ctx context.Context, appID string) (admin.SM
 		return out, admin.ErrInvalidInput
 	}
 	var assigned, haveReport, onEdge bool
-	var helo, mainHelo sql.NullString
-	err := r.DB.QueryRowContext(ctx, `SELECT a.sending_ip_id IS NOT NULL,s.helo_name,r.addresses IS NOT NULL,COALESCE(s.address=ANY(r.addresses),false),
-		(SELECT m.helo_name FROM sending_ips m WHERE m.address=r.addresses[1])
+	var helo, heloAddress, mainHelo, mainAddress sql.NullString
+	err := r.DB.QueryRowContext(ctx, `SELECT a.sending_ip_id IS NOT NULL,s.helo_name,host(s.address),r.addresses IS NOT NULL,COALESCE(s.address=ANY(r.addresses),false),
+		(SELECT m.helo_name FROM sending_ips m WHERE m.address=r.addresses[1]),host(r.addresses[1])
 		FROM apps a LEFT JOIN sending_ips s ON s.id=a.sending_ip_id
 		LEFT JOIN LATERAL (SELECT addresses FROM edge_source_reports ORDER BY reported_at DESC LIMIT 1) r ON true
-		WHERE a.id=$1`, appID).Scan(&assigned, &helo, &haveReport, &onEdge, &mainHelo)
+		WHERE a.id=$1`, appID).Scan(&assigned, &helo, &heloAddress, &haveReport, &onEdge, &mainHelo, &mainAddress)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, admin.ErrNotFound
 	}
@@ -128,12 +128,12 @@ func (r *Repository) SMTPConnection(ctx context.Context, appID string) (admin.SM
 	switch {
 	case assigned && helo.Valid && haveReport && onEdge:
 		source := admin.SMTPHostAppSendingIP
-		out.Host, out.HostSource, out.HostStatus = &helo.String, &source, admin.SMTPHostOK
+		out.Host, out.HostAddress, out.HostSource, out.HostStatus = &helo.String, heloAddress.String, &source, admin.SMTPHostOK
 	case assigned && haveReport:
 		out.HostStatus = admin.SMTPHostIPUnavailable
 	case !assigned && mainHelo.Valid:
 		source := admin.SMTPHostPrimary
-		out.Host, out.HostSource, out.HostStatus = &mainHelo.String, &source, admin.SMTPHostOK
+		out.Host, out.HostAddress, out.HostSource, out.HostStatus = &mainHelo.String, mainAddress.String, &source, admin.SMTPHostOK
 	}
 	var reported time.Time
 	var ports []byte
@@ -152,4 +152,31 @@ func (r *Repository) SMTPConnection(ctx context.Context, appID string) (admin.SM
 		out.ObservedPorts, out.ObservedAt = list, &reported
 	}
 	return out, nil
+}
+
+// EdgeIdentity reads the HELO names of the addresses in the Edge's last
+// report, main IP first. It is the zero value before the Edge has reported.
+func (r *Repository) EdgeIdentity(ctx context.Context) (admin.EdgeIdentity, error) {
+	var out admin.EdgeIdentity
+	rows, err := r.DB.QueryContext(ctx, `SELECT t.n,host(t.addr),s.helo_name
+		FROM (SELECT addresses FROM edge_source_reports ORDER BY reported_at DESC LIMIT 1) r
+		CROSS JOIN LATERAL unnest(r.addresses) WITH ORDINALITY AS t(addr,n)
+		JOIN sending_ips s ON s.address=t.addr
+		ORDER BY t.n`)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var position int
+		var address, name string
+		if err = rows.Scan(&position, &address, &name); err != nil {
+			return out, err
+		}
+		out.Hostnames = append(out.Hostnames, name)
+		if position == 1 {
+			out.MainHostname, out.MainAddress = name, address
+		}
+	}
+	return out, rows.Err()
 }

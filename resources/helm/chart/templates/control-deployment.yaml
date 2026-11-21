@@ -45,12 +45,6 @@ spec:
         # harder before the pod is OOM-killed. Keep in step with the limit.
         - name: GOMEMLIMIT
           value: 460MiB
-        # The mail host receiving domains point their MX at; set only when
-        # control.inboundMxHost is. No fallback to smtpHostname.
-        {{- if .Values.control.inboundMxHost }}
-        - name: THINPOST_INBOUND_MX_HOST
-          value: {{ .Values.control.inboundMxHost | quote }}
-        {{- end }}
         # Internal webhook exceptions; each set only when its value is non-empty.
         # validate.yaml requires serviceCidrs whenever destinations are listed.
         {{- if .Values.control.webhookInternalDestinations }}

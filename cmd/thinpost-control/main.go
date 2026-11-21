@@ -151,7 +151,7 @@ func run() error {
 			return err
 		}
 	}
-	operator := &admin.Handler{Authenticator: auth, Store: repository, WebhookHistory: repository, PolicyHolds: repository, TrackingHolds: repository, AppStatus: repository, Suppressions: repository, Operations: repository, AuthConfig: &config.PublicAuth, DNS: net.DefaultResolver, MX: net.DefaultResolver, InboundMXHost: config.InboundMXHost, ReverseDNS: net.DefaultResolver, WebhookDestinations: config.WebhookDestinations}
+	operator := &admin.Handler{Authenticator: auth, Store: repository, WebhookHistory: repository, PolicyHolds: repository, TrackingHolds: repository, AppStatus: repository, Suppressions: repository, Operations: repository, AuthConfig: &config.PublicAuth, DNS: net.DefaultResolver, MX: net.DefaultResolver, ReverseDNS: net.DefaultResolver, WebhookDestinations: config.WebhookDestinations}
 	if keys != nil {
 		operator.SigningReadiness = keys
 	}
@@ -197,7 +197,6 @@ func run() error {
 			return errors.New("control bridge requires an explicit recipient policy")
 		}
 		bridgeConfig.Recipients = recipients
-		operator.BounceDomain = bridgeConfig.BounceDomain
 	}
 	// Acceptance and SMTP intake are built before the bridge, which hands the
 	// intake to its control session (the submission/1 capability). An edge that

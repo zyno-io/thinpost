@@ -7,8 +7,10 @@ const base = { name: 'in.example.com', state: 'active', created_at: '2026-10-02T
 
 describe('inbound parsing', () => {
     it('reads a listing and the optional mail host', () => {
-        expect(parseInboundDomainList({ domains: [base], mx_host: 'smtp.mx.example.net' })).toEqual({ domains: [base], mxHost: 'smtp.mx.example.net' });
+        expect(parseInboundDomainList({ domains: [base], mx_host: 'smtp.mx.example.net' })).toEqual({ domains: [base], mxHost: 'smtp.mx.example.net', mxHostStatus: 'ok' });
         expect(parseInboundDomainList({ domains: [] }).mxHost).toBeNull();
+        expect(parseInboundDomainList({ domains: [], mx_host_status: 'dns_unconfirmed' })).toEqual({ domains: [], mxHost: null, mxHostStatus: 'dns_unconfirmed' });
+        expect(() => parseInboundDomainList({ domains: [], mx_host_status: 'maybe' })).toThrow(InvalidResponseError);
     });
 
     it('requires the MX check time with the MX status', () => {
@@ -32,7 +34,7 @@ describe('inbound parsing', () => {
     });
 
     it('requires both challenge fields', () => {
-        expect(parseInboundChallenge({ dns_name: 'a', dns_value: 'b' }, 'in.example.com')).toEqual({ domain: 'in.example.com', txtName: 'a', txtValue: 'b', mxHost: null });
+        expect(parseInboundChallenge({ dns_name: 'a', dns_value: 'b' }, 'in.example.com')).toEqual({ domain: 'in.example.com', txtName: 'a', txtValue: 'b', mxHost: null, mxHostStatus: 'not_reported' });
         expect(() => parseInboundChallenge({ dns_name: 'a' }, 'in.example.com')).toThrow(InvalidResponseError);
     });
 

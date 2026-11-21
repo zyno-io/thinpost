@@ -37,7 +37,7 @@ func TestBridgeRejectsPublicTargetsAndWrongControlIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := Config{WorkerID: "worker", ControllerID: "controller", JournalID: "0123456789abcdef0123456789abcdef", ControllerIdentity: identity.String(), Target: "10.0.0.1:7443", WorkerDNS: "edge.internal", WorkerIdentity: "spiffe://thinpost.test/worker/a", PrivateCA: x509.NewCertPool(), ClientCertificate: tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, Source: netip.MustParseAddr("45.0.1.22"), Infrastructure: []netip.Prefix{netip.MustParsePrefix("45.0.1.0/24")}, BounceDomain: "bounce.example.com", ActiveBounceKey: "v1", BounceKeys: map[string][]byte{"v1": []byte("0123456789abcdef0123456789abcdef")}, LeaseTTL: 30 * time.Second, ClockMargin: time.Second, PollInterval: time.Second}
+	c := Config{WorkerID: "worker", ControllerID: "controller", JournalID: "0123456789abcdef0123456789abcdef", ControllerIdentity: identity.String(), Target: "10.0.0.1:7443", WorkerDNS: "edge.internal", WorkerIdentity: "spiffe://thinpost.test/worker/a", PrivateCA: x509.NewCertPool(), ClientCertificate: tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, Infrastructure: []netip.Prefix{netip.MustParsePrefix("45.0.1.0/24")}, ActiveBounceKey: "v1", BounceKeys: map[string][]byte{"v1": []byte("0123456789abcdef0123456789abcdef")}, LeaseTTL: 30 * time.Second, ClockMargin: time.Second, PollInterval: time.Second}
 	c.Recipients = allowRecipients{}
 	repo := &postgres.Repository{DB: &sql.DB{}}
 	bridge, err := New(c, repo, objects{})
@@ -103,7 +103,7 @@ func TestBridgePassesSubmissionToTheRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := Config{WorkerID: "worker", ControllerID: "controller", JournalID: "0123456789abcdef0123456789abcdef", ControllerIdentity: identity.String(), Target: "10.0.0.1:7443", WorkerDNS: "edge.internal", WorkerIdentity: "spiffe://thinpost.test/worker/a", PrivateCA: x509.NewCertPool(), ClientCertificate: tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, Source: netip.MustParseAddr("45.0.1.22"), Infrastructure: []netip.Prefix{netip.MustParsePrefix("45.0.1.0/24")}, BounceDomain: "bounce.example.com", ActiveBounceKey: "v1", BounceKeys: map[string][]byte{"v1": []byte("0123456789abcdef0123456789abcdef")}, LeaseTTL: 30 * time.Second, ClockMargin: time.Second, PollInterval: time.Second, Recipients: allowRecipients{}}
+	c := Config{WorkerID: "worker", ControllerID: "controller", JournalID: "0123456789abcdef0123456789abcdef", ControllerIdentity: identity.String(), Target: "10.0.0.1:7443", WorkerDNS: "edge.internal", WorkerIdentity: "spiffe://thinpost.test/worker/a", PrivateCA: x509.NewCertPool(), ClientCertificate: tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, Infrastructure: []netip.Prefix{netip.MustParsePrefix("45.0.1.0/24")}, ActiveBounceKey: "v1", BounceKeys: map[string][]byte{"v1": []byte("0123456789abcdef0123456789abcdef")}, LeaseTTL: 30 * time.Second, ClockMargin: time.Second, PollInterval: time.Second, Recipients: allowRecipients{}}
 	repo := &postgres.Repository{DB: &sql.DB{}}
 	without, err := New(c, repo, objects{})
 	if err != nil {

@@ -17,7 +17,6 @@ import (
 func TestReadySourcesMustSatisfyTheSourcePolicy(t *testing.T) {
 	policy, err := egress.NewPolicy(
 		[]netip.Prefix{netip.MustParsePrefix("45.0.1.0/24"), netip.MustParsePrefix("45.0.0.0/24")},
-		[]netip.Addr{netip.MustParseAddr("45.0.1.22")},
 		egress.Exception{Recipient: "test@mailhost.example", MX: "mail.mailhost.example", Address: netip.MustParseAddr("45.0.0.50")},
 	)
 	if err != nil {

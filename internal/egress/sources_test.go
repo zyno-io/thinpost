@@ -8,15 +8,7 @@ import (
 )
 
 func TestMultipleSourcesPerFamily(t *testing.T) {
-	infra := []netip.Prefix{netip.MustParsePrefix("45.0.1.0/24"), netip.MustParsePrefix("45.0.0.0/24")}
 	primary, second := netip.MustParseAddr("45.0.1.22"), netip.MustParseAddr("45.0.0.10")
-	if _, err := NewPolicy(infra, []netip.Addr{primary, primary}); err == nil {
-		t.Fatal("accepted a duplicate source")
-	}
-	p, err := NewPolicy(infra, []netip.Addr{primary, second})
-	if err != nil {
-		t.Fatal(err)
-	}
 	d, err := NewSourceDialer([]netip.Addr{primary, second})
 	if err != nil {
 		t.Fatal(err)
@@ -47,24 +39,9 @@ func TestMultipleSourcesPerFamily(t *testing.T) {
 	if _, err = d.dial(context.Background(), second, netip.MustParseAddr("2607:f8b0:4000::1"), dial); err == nil || seenSource.IsValid() {
 		t.Fatal("dialed an IPv6 destination from an IPv4 source")
 	}
-	// Every source is excluded from route exceptions, not only the primary.
-	for _, source := range []netip.Addr{primary, second} {
-		if p.isExceptionAddress(source) || p.Allowed(source) {
-			t.Fatalf("source %s is reachable as a destination", source)
-		}
-		if _, err = NewPolicy(infra, []netip.Addr{primary, second}, Exception{Recipient: "a@mailhost.example", MX: "mx.mailhost.example", Address: source}); err == nil {
-			t.Fatalf("accepted a route exception for source %s", source)
-		}
-	}
-	if !p.isExceptionAddress(netip.MustParseAddr("45.0.1.41")) {
-		t.Fatal("an infrastructure address that is not a source must stay excludable")
-	}
 	var tooMany []netip.Addr
 	for i := 0; i <= MaxSources; i++ {
 		tooMany = append(tooMany, netip.AddrFrom4([4]byte{45, 0, 0, byte(i + 1)}))
-	}
-	if _, err = NewPolicy(infra, tooMany); err == nil {
-		t.Fatal("accepted too many sources")
 	}
 	if _, err = NewSourceDialer(tooMany); err == nil {
 		t.Fatal("dialer accepted too many sources")
@@ -116,7 +93,7 @@ func TestSourceDialerPinsSourceAndDoesNotFilterDestinations(t *testing.T) {
 func TestCheckSourcesRestoresTheInfrastructureGuarantees(t *testing.T) {
 	infra := []netip.Prefix{netip.MustParsePrefix("45.0.1.0/24"), netip.MustParsePrefix("45.0.0.0/24")}
 	exception := Exception{Recipient: "a@mailhost.example", MX: "mx.mailhost.example", Address: netip.MustParseAddr("45.0.0.50")}
-	p, err := NewPolicy(infra, []netip.Addr{netip.MustParseAddr("45.0.1.22")}, exception)
+	p, err := NewPolicy(infra, exception)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +115,9 @@ func TestCheckSourcesRestoresTheInfrastructureGuarantees(t *testing.T) {
 		if ok(addrs...) == nil {
 			t.Errorf("%s was accepted", name)
 		}
+	}
+	if ok("2607:f8b0:4000::1") == nil {
+		t.Error("an IPv6 source was accepted")
 	}
 	if p.CheckSources(nil) == nil || (*Policy)(nil).CheckSources([]netip.Addr{netip.MustParseAddr("45.0.1.22")}) == nil {
 		t.Error("an empty list or nil policy was accepted")

@@ -40,6 +40,13 @@
                             <strong>No server name yet.</strong> The sending worker hasn't connected yet, so Thinpost doesn't have a server name to give you. Try again in a few minutes, or ask your Thinpost administrator.
                         </p>
                     </div>
+                    <div v-else-if="hostStatus === 'dns_unconfirmed'" class="notice warning" data-testid="smtp-host-dns-unconfirmed">
+                        <i class="fa-solid fa-triangle-exclamation" aria-hidden="true" />
+                        <p class="notice-body">
+                            <strong>Server name can't be confirmed yet.</strong> Thinpost only shows a server name once the internet's name records (DNS) point it at the right address, and that
+                            check didn't pass just now. It may still be updating. Try again in a few minutes, or ask your Thinpost administrator.
+                        </p>
+                    </div>
                     <div v-else-if="hostStatus === 'ip_unavailable'" class="notice warning" data-testid="smtp-host-ip-unavailable">
                         <i class="fa-solid fa-triangle-exclamation" aria-hidden="true" />
                         <p class="notice-body">

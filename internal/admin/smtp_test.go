@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -49,7 +51,7 @@ func (s *smtpTestStore) RevokeSMTPCredential(_ context.Context, actor, app, id s
 }
 func (s *smtpTestStore) SMTPConnection(context.Context, string) (SMTPConnection, error) {
 	host, source := "smtp.example.org", SMTPHostPrimary
-	return SMTPConnection{Host: &host, HostSource: &source, HostStatus: SMTPHostOK, Ports: SMTPPorts(), ObservedPorts: []int{}}, nil
+	return SMTPConnection{Host: &host, HostAddress: "45.0.0.10", HostSource: &source, HostStatus: SMTPHostOK, Ports: SMTPPorts(), ObservedPorts: []int{}}, nil
 }
 
 type fakeReadiness struct {
@@ -64,7 +66,7 @@ func (f *fakeReadiness) Ready(_ context.Context, app, domain string) error {
 
 func TestSMTPRoutes(t *testing.T) {
 	store := &smtpTestStore{fakeStore: &fakeStore{}, policy: SMTPFromPolicy{Mode: "off", OnlyUnauthorized: true}}
-	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store}
+	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store, ReverseDNS: &fakeReverse{names: []string{"smtp.example.org."}, hosts: []string{"45.0.0.10"}}}
 	app := strings.Repeat("a", 32)
 	base := "/api/v1/apps/" + app + "/smtp"
 
@@ -199,4 +201,70 @@ func TestNormalizeSMTPFromPolicy(t *testing.T) {
 			t.Fatal("address accepted", address)
 		}
 	}
+}
+
+// The host is client-facing and comes from the untrusted sending worker, so it
+// is shown only when public DNS maps it to the address the worker reported.
+func TestSMTPHostIsHiddenUnlessDNSConfirmsIt(t *testing.T) {
+	store := &smtpTestStore{fakeStore: &fakeStore{}, policy: SMTPFromPolicy{Mode: "off", OnlyUnauthorized: true}}
+	path := "/api/v1/apps/" + strings.Repeat("a", 32) + "/smtp"
+	timeout := &net.DNSError{Err: "i/o timeout", IsTimeout: true}
+	ptr := []string{"smtp.example.org."}
+	for name, test := range map[string]struct {
+		dns    *fakeReverse
+		nilDNS bool
+		shown  bool
+	}{
+		"matches":                              {dns: &fakeReverse{names: ptr, hosts: []string{"45.0.0.10"}}, shown: true},
+		"reverse name differs in case and dot": {dns: &fakeReverse{names: []string{"SMTP.Example.org"}, hosts: []string{"45.0.0.10"}}, shown: true},
+		"among several":                        {dns: &fakeReverse{names: []string{"other.example.net.", "smtp.example.org."}, hosts: []string{"2001:db8::1", "45.0.0.99", "45.0.0.10"}}, shown: true},
+		"another address":                      {dns: &fakeReverse{names: ptr, hosts: []string{"45.0.0.99"}}},
+		"only IPv6":                            {dns: &fakeReverse{names: ptr, hosts: []string{"2001:db8::1"}}},
+		"no records":                           {dns: &fakeReverse{names: ptr}},
+		"nxdomain":                             {dns: &fakeReverse{names: ptr, hostErr: &net.DNSError{IsNotFound: true}}},
+		"servfail":                             {dns: &fakeReverse{names: ptr, hostErr: &net.DNSError{Err: "server misbehaving", IsTemporary: true}}},
+		"timeout":                              {dns: &fakeReverse{names: ptr, hostErr: timeout}},
+		// A name the worker's operator owns can point at the address, but only
+		// the address block's owner sets reverse DNS.
+		"forward only, reverse names another host": {dns: &fakeReverse{names: []string{"mail.provider.example."}, hosts: []string{"45.0.0.10"}}},
+		"forward only, no reverse":                 {dns: &fakeReverse{hosts: []string{"45.0.0.10"}}},
+		"reverse lookup fails":                     {dns: &fakeReverse{addrErr: timeout, hosts: []string{"45.0.0.10"}}},
+		"no resolver configured":                   {nilDNS: true},
+	} {
+		h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store}
+		if !test.nilDNS {
+			h.ReverseDNS = test.dns
+		}
+		w := send(h, "GET", path, "", "valid")
+		if test.dns != nil && len(test.dns.lookedUp) > 0 && !test.dns.deadlined {
+			t.Errorf("%s: DNS lookup without a deadline", name)
+		}
+		if test.dns != nil && slices.Contains(test.dns.lookedUp, "smtp.example.org") {
+			t.Errorf("%s: relative name looked up: %v", name, test.dns.lookedUp)
+		}
+		var got struct {
+			Connection SMTPConnection `json:"connection"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &got) != nil {
+			t.Fatal(name, w.Code, w.Body.String())
+		}
+		if test.shown && (got.Connection.Host == nil || *got.Connection.Host != "smtp.example.org" || got.Connection.HostStatus != SMTPHostOK || got.Connection.HostSource == nil) {
+			t.Errorf("%s: host hidden: %s", name, w.Body.String())
+		}
+		if !test.shown && (got.Connection.Host != nil || got.Connection.HostSource != nil || got.Connection.HostStatus != SMTPHostDNSUnconfirmed || strings.Contains(w.Body.String(), "smtp.example.org") || strings.Contains(w.Body.String(), "45.0.0.10")) {
+			t.Errorf("%s: host shown or wrong status: %s", name, w.Body.String())
+		}
+	}
+	// A status that already says there is no host is left alone.
+	store2 := &smtpNoHostStore{smtpTestStore: store}
+	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store2, ReverseDNS: &fakeReverse{hostErr: timeout}}
+	if w := send(h, "GET", path, "", "valid"); w.Code != 200 || !strings.Contains(w.Body.String(), `"host_status":"not_reported"`) {
+		t.Fatal("not_reported was overwritten", w.Body.String())
+	}
+}
+
+type smtpNoHostStore struct{ *smtpTestStore }
+
+func (smtpNoHostStore) SMTPConnection(context.Context, string) (SMTPConnection, error) {
+	return SMTPConnection{HostStatus: SMTPHostNotReported, Ports: SMTPPorts(), ObservedPorts: []int{}}, nil
 }

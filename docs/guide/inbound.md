@@ -32,7 +32,7 @@ An administrator adds a receiving domain in the console (app, **Inbound**, **Add
 
 Verification looks up the TXT record through the control plane's resolver, like sender domains, with no DNSSEC validation. It shares the `_thinpost` TXT name with [sender-domain](/guide/domains) verification, and one domain can carry both challenges. Asking again for a pending domain replaces the challenge.
 
-The mail host the MX record names is set by the operator with `THINPOST_INBOUND_MX_HOST` (the chart value `control.inboundMxHost`). Without it, the console says no mail server is set up and the MX check is unavailable.
+The mail host the MX record names is the HELO name of the sending worker's main IP, as the worker reports it (see [Sending IPs](/guide/sending-ips)). Nothing is set up in control for it. The console shows the name only when public DNS confirms it both ways: the address's reverse DNS names it, and it points at the address. Until the worker has connected, or while DNS does not confirm the name, the console shows no MX record and the MX check is unavailable, and says why.
 
 ### One owner per domain
 
@@ -40,7 +40,7 @@ Several apps can hold a pending claim on one domain. The first to verify owns it
 
 ### Reserved names
 
-These are refused with 400 and cannot be verified: the bounce domain and its subdomains, and the Thinpost mail host and its subdomains.
+These are refused with 400 and cannot be verified: every HELO name of the sending worker (which are also its bounce domains and the mail host) and their subdomains.
 
 ### Domain states
 
