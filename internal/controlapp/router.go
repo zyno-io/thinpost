@@ -16,6 +16,39 @@ type MailRuntime struct {
 	// App serves the app-key read routes under /app/v1/. Like the submission
 	// routes it is served only when submission is configured.
 	App http.Handler
+	// AdminHost, when set, is the only hostname (any port) that serves the
+	// operator console and operator API. On every other hostname those routes,
+	// including the site root, are an empty 404; tracking, health and the
+	// sending APIs are unaffected. Empty serves the console on every host.
+	AdminHost string
+}
+
+// normalizeHostname reduces a Host header or origin authority to a lowercase
+// hostname without port or trailing dots. The port is ignored on purpose:
+// gateways commonly route by hostname and forward the client's Host verbatim,
+// so "admin.example.com:1" must still be the admin host and
+// "t.example.com:1" must not be.
+func normalizeHostname(h string) string {
+	h = strings.ToLower(h)
+	if strings.HasPrefix(h, "[") {
+		if end := strings.IndexByte(h, ']'); end >= 0 {
+			return h[:end+1]
+		}
+		return h
+	}
+	if i := strings.LastIndexByte(h, ':'); i >= 0 {
+		h = h[:i]
+	}
+	return strings.TrimRight(h, ".")
+}
+
+// emptyNotFound answers 404 without a body, so the response reveals nothing
+// about what is served elsewhere.
+func emptyNotFound(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusNotFound)
 }
 
 // Router leaves mail readiness and public tracking disabled. Operator readiness
@@ -77,6 +110,15 @@ func RouterWithRuntime(operator, experimentalSubmission, console http.Handler, o
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			http.NotFound(w, r)
 			return
+		}
+		if runtime.AdminHost != "" && normalizeHostname(r.Host) != runtime.AdminHost {
+			// Handler reports the pattern a request would reach, including the
+			// target of ServeMux's own redirects, so "/api/v1" and unclean
+			// paths are caught before they can redirect.
+			if _, pattern := mux.Handler(r); pattern == "" || pattern == "/" || pattern == "/api/v1/" {
+				emptyNotFound(w)
+				return
+			}
 		}
 		mux.ServeHTTP(w, r)
 	}), log.Printf)

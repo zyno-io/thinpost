@@ -33,10 +33,13 @@ type Config struct {
 	// ConsoleConnectOrigins are extra https origins the console may fetch (for
 	// example an IdP token endpoint on a different origin than the issuer).
 	ConsoleConnectOrigins []string
-	Auth                  operatorauth.Config
-	PublicAuth            admin.PublicAuthConfig
-	S3                    *S3Config
-	Tracking              *TrackingConfig
+	// AdminHost is the hostname of THINPOST_ADMIN_ORIGIN, normalized for
+	// matching. Empty means the console and operator API answer on every host.
+	AdminHost  string
+	Auth       operatorauth.Config
+	PublicAuth admin.PublicAuthConfig
+	S3         *S3Config
+	Tracking   *TrackingConfig
 	// InboundMXHost is the mail host receiving domains point their MX at
 	// (THINPOST_INBOUND_MX_HOST), lowercase and without a trailing dot. Empty
 	// means unset: the console cannot show the record or run the MX check.
@@ -117,6 +120,13 @@ func Load(getenv func(string) string) (Config, error) {
 			}
 			config.ConsoleConnectOrigins = append(config.ConsoleConnectOrigins, strings.TrimSpace(origin))
 		}
+	}
+	if raw := getenv("THINPOST_ADMIN_ORIGIN"); raw != "" {
+		host, ok := adminHostname(raw)
+		if !ok {
+			return Config{}, errors.New("invalid admin origin")
+		}
+		config.AdminHost = host
 	}
 	scopeOptional := getenv("THINPOST_OIDC_ADMIN_SCOPE_OPTIONAL")
 	if scopeOptional != "" && scopeOptional != "true" {
@@ -286,6 +296,39 @@ func validDatabaseSchema(value string) bool {
 		}
 	}
 	return true
+}
+
+// adminHostname returns the hostname of a bare https origin in the form
+// requests carry it: lowercase ASCII without trailing dots, or a canonical
+// bracketed IPv6 address. It refuses names that could never match a request
+// (non-ASCII, empty after normalization), so a typo cannot silently leave the
+// console on every host or lock operators out.
+func adminHostname(origin string) (string, bool) {
+	if !validConnectOrigin(origin) {
+		return "", false
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return "", false
+	}
+	host := u.Hostname()
+	if strings.Contains(host, ":") {
+		addr, err := netip.ParseAddr(host)
+		if err != nil || !addr.Is6() || addr.Zone() != "" {
+			return "", false
+		}
+		return "[" + addr.String() + "]", true
+	}
+	host = normalizeHostname(host)
+	if host == "" {
+		return "", false
+	}
+	for i := 0; i < len(host); i++ {
+		if ch := host[i]; !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '.') {
+			return "", false
+		}
+	}
+	return host, true
 }
 
 // validConnectOrigin accepts only a bare https scheme://host[:port] origin.

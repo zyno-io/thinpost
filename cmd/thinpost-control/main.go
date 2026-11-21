@@ -306,7 +306,7 @@ func run() error {
 	operator.Runtime = runtimeInfo
 	operatorHealth := controlapp.StartOperatorHealth(ctx, db.PingContext)
 	defer operatorHealth.Close()
-	mailRuntime := controlapp.MailRuntime{Tracking: trackingHandler, App: appReads}
+	mailRuntime := controlapp.MailRuntime{Tracking: trackingHandler, App: appReads, AdminHost: config.AdminHost}
 	if handler != nil {
 		admissionHealth := controlapp.StartOperatorHealth(ctx, repository.CheckAdmission)
 		defer admissionHealth.Close()
