@@ -62,7 +62,7 @@ export function parseAppSmtp(data: unknown): AppSmtp {
     if (!isRecord(data) || !Array.isArray(data.credentials) || !isRecord(data.connection)) throw new InvalidResponseError();
     const connection = data.connection;
     const hostStatus = connection.host_status;
-    if (hostStatus !== 'ok' && hostStatus !== 'not_reported' && hostStatus !== 'ip_unavailable') throw new InvalidResponseError();
+    if (hostStatus !== 'ok' && hostStatus !== 'not_reported' && hostStatus !== 'dns_unconfirmed' && hostStatus !== 'ip_unavailable') throw new InvalidResponseError();
     const hostSource = connection.host_source;
     if (hostSource !== null && hostSource !== 'app_sending_ip' && hostSource !== 'primary') throw new InvalidResponseError();
     const observed = Array.isArray(connection.observed_ports) ? connection.observed_ports.filter((p): p is number => Number.isInteger(p)) : [];

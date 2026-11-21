@@ -32,7 +32,6 @@ The `thinpost-control` binary with no subcommand runs the control plane: the ope
 | `THINPOST_CONSOLE_CONNECT_ORIGINS` | list of origins | none | Optional | Extra `https://host[:port]` origins the console may fetch, added to its Content-Security-Policy `connect-src`. Use it when the identity provider's token endpoint is on a different origin than the issuer. The issuer's own origin is always allowed. Each entry must be a bare HTTPS origin with no path, query, wildcard or trailing slash. |
 | `THINPOST_ADMIN_ORIGIN` | HTTPS origin | none | Optional | The only hostname that serves the operator console and operator API (`/api/v1/`), for example `https://thinpost-admin.example.com`. On any other hostname those routes, including the site root, return an empty 404; tracking links, health endpoints and the sending APIs answer on every hostname. Matching uses the request's hostname (from the `Host` header or an absolute request URI) and ignores the port. Must be a bare `https://host[:port]` origin with no path, query or trailing slash; give an international name in punycode. When unset, the console answers on every hostname. |
 | `THINPOST_MAX_ATTACHMENT_BYTES` | integer (bytes) | `5242880` (5 MiB) | Optional | Limit on the total decoded attachment bytes of one submitted message. Must be a plain integer from `65536` to `5767168` (5.5 MiB). |
-| `THINPOST_INBOUND_MX_HOST` | host name | none | Optional | Mail host that receiving domains point their MX record at. Must be lowercase, without a trailing dot, and not end in `.invalid`. When unset, the console cannot show the record or run the MX check. |
 
 ### Database
 
@@ -135,11 +134,9 @@ The bridge is the control plane's client side of the [control protocol](/referen
 | `THINPOST_CONTROL_CLIENT_CERT` | path | none | Conditional | Client certificate (PEM) the control plane presents to the Edge. Its key also signs the lease proofs the Edge verifies. |
 | `THINPOST_CONTROL_CLIENT_KEY` | path | none | Conditional | Private key (PEM) for the client certificate. |
 | `THINPOST_CONTROL_PRIVATE_CA` | path | none | Conditional | PEM bundle of the private CA that signs the Edge's control certificate. |
-| `THINPOST_CONTROL_BOUNCE_DOMAIN` | DNS name | none | Conditional | Global bounce (return-path) domain. Must match the Edge's `THINPOST_EDGE_BOUNCE_DOMAIN`. |
 | `THINPOST_CONTROL_BOUNCE_ACTIVE_KEY` | string | none | Conditional | Version name of the key in the bounce keyring that signs new bounce addresses. Must exist in the keyring. |
 | `THINPOST_CONTROL_BOUNCE_KEYS_FILE` | path | none | Conditional | JSON object mapping key version (at most 64 characters) to a base64 key of at least 32 bytes. At most 32 keys and 16 KiB. Older versions remain to verify existing bounce addresses. |
-| `THINPOST_CONTROL_SMTP_SOURCE` | IP address | none | Conditional | The Edge's primary SMTP source address, which the control plane uses when it resolves routes. Must be in an infrastructure range. |
-| `THINPOST_CONTROL_INFRASTRUCTURE_CIDRS` | list of CIDRs | none | Conditional | Ranges the control plane's route policy treats as infrastructure and refuses as mail destinations. Must include the primary source address and every additional source address the Edge reports: the control plane refuses an Edge whose Ready reports a source outside these ranges, or one a route exception names, and never routes mail to a reported source. The control plane is the only component that applies this policy. |
+| `THINPOST_CONTROL_INFRASTRUCTURE_CIDRS` | list of CIDRs | none | Conditional | Ranges the control plane's route policy treats as infrastructure and refuses as mail destinations. Must include every source address the Edge reports (control takes them from the Edge's report, not from its own settings): the control plane refuses an Edge whose Ready reports a source outside these ranges, or one a route exception names, and never routes mail to a reported source. The control plane is the only component that applies this policy. |
 | `THINPOST_CONTROL_ROUTE_EXCEPTIONS_FILE` | path | none | Optional | Route-exception file, in the [format below](#route-exceptions-file). |
 
 ## Edge worker
@@ -248,3 +245,11 @@ Delivery retry behavior is stored in the database and edited in the console (Ope
 | `THINPOST_DELIVERY_RETRY_INITIAL_DELAY` | Edit the retry policy in the console. |
 | `THINPOST_DELIVERY_RETRY_MAX_DELAY` | Edit the retry policy in the console. |
 | `THINPOST_DELIVERY_RETRY_MAX_AGE` | Edit the retry policy in the console. |
+
+## Removed (ignored)
+
+The Edge reports its own sending addresses and their HELO names when it connects, and the control plane uses that report instead of settings of its own. These variables from earlier releases are no longer read. They are ignored if set, not refused, so old values can stay in place while new pods roll out.
+
+- `THINPOST_CONTROL_SMTP_SOURCE`: the Edge's source addresses come from its report.
+- `THINPOST_CONTROL_BOUNCE_DOMAIN`: the return-path domain is the HELO name of the address the message is sent from, as reported.
+- `THINPOST_INBOUND_MX_HOST`: the inbound mail host is the HELO name of the Edge's main address, as reported.

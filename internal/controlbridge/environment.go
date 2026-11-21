@@ -23,22 +23,21 @@ import (
 func FromEnvironment(getenv func(string) string) (*Config, error) {
 	target := getenv("THINPOST_CONTROL_EDGE_TARGET")
 	if target == "" {
-		for _, key := range []string{"THINPOST_CONTROL_WORKER_ID", "THINPOST_CONTROL_JOURNAL_ID", "THINPOST_CONTROL_INSTANCE_ID", "THINPOST_CONTROL_IDENTITY", "THINPOST_CONTROL_EDGE_DNS", "THINPOST_CONTROL_EDGE_IDENTITY", "THINPOST_CONTROL_BOUNCE_DOMAIN", "THINPOST_CONTROL_BOUNCE_ACTIVE_KEY", "THINPOST_CONTROL_BOUNCE_KEYS_FILE", "THINPOST_CONTROL_SMTP_SOURCE", "THINPOST_CONTROL_INFRASTRUCTURE_CIDRS", "THINPOST_CONTROL_ROUTE_EXCEPTIONS_FILE", "THINPOST_CONTROL_CLIENT_CERT", "THINPOST_CONTROL_CLIENT_KEY", "THINPOST_CONTROL_PRIVATE_CA"} {
+		for _, key := range []string{"THINPOST_CONTROL_WORKER_ID", "THINPOST_CONTROL_JOURNAL_ID", "THINPOST_CONTROL_INSTANCE_ID", "THINPOST_CONTROL_IDENTITY", "THINPOST_CONTROL_EDGE_DNS", "THINPOST_CONTROL_EDGE_IDENTITY", "THINPOST_CONTROL_BOUNCE_ACTIVE_KEY", "THINPOST_CONTROL_BOUNCE_KEYS_FILE", "THINPOST_CONTROL_INFRASTRUCTURE_CIDRS", "THINPOST_CONTROL_ROUTE_EXCEPTIONS_FILE", "THINPOST_CONTROL_CLIENT_CERT", "THINPOST_CONTROL_CLIENT_KEY", "THINPOST_CONTROL_PRIVATE_CA"} {
 			if getenv(key) != "" {
 				return nil, errors.New("incomplete control bridge configuration")
 			}
 		}
 		return nil, nil
 	}
-	c := &Config{Target: target, WorkerID: getenv("THINPOST_CONTROL_WORKER_ID"), JournalID: getenv("THINPOST_CONTROL_JOURNAL_ID"), ControllerID: getenv("THINPOST_CONTROL_INSTANCE_ID"), ControllerIdentity: getenv("THINPOST_CONTROL_IDENTITY"), WorkerDNS: getenv("THINPOST_CONTROL_EDGE_DNS"), WorkerIdentity: getenv("THINPOST_CONTROL_EDGE_IDENTITY"), BounceDomain: getenv("THINPOST_CONTROL_BOUNCE_DOMAIN"), ActiveBounceKey: getenv("THINPOST_CONTROL_BOUNCE_ACTIVE_KEY"), LeaseTTL: 60 * time.Second, ClockMargin: 5 * time.Second, PollInterval: 3 * time.Second}
-	if c.WorkerID == "" || !journal.ValidIdentity(c.JournalID) || c.ControllerID == "" || c.ControllerIdentity == "" || c.WorkerDNS == "" || c.WorkerIdentity == "" || c.BounceDomain == "" || c.ActiveBounceKey == "" {
+	c := &Config{Target: target, WorkerID: getenv("THINPOST_CONTROL_WORKER_ID"), JournalID: getenv("THINPOST_CONTROL_JOURNAL_ID"), ControllerID: getenv("THINPOST_CONTROL_INSTANCE_ID"), ControllerIdentity: getenv("THINPOST_CONTROL_IDENTITY"), WorkerDNS: getenv("THINPOST_CONTROL_EDGE_DNS"), WorkerIdentity: getenv("THINPOST_CONTROL_EDGE_IDENTITY"), ActiveBounceKey: getenv("THINPOST_CONTROL_BOUNCE_ACTIVE_KEY"), LeaseTTL: 60 * time.Second, ClockMargin: 5 * time.Second, PollInterval: 3 * time.Second}
+	if c.WorkerID == "" || !journal.ValidIdentity(c.JournalID) || c.ControllerID == "" || c.ControllerIdentity == "" || c.WorkerDNS == "" || c.WorkerIdentity == "" || c.ActiveBounceKey == "" {
 		return nil, errors.New("incomplete control bridge configuration")
 	}
+	// THINPOST_CONTROL_SMTP_SOURCE and THINPOST_CONTROL_BOUNCE_DOMAIN from an
+	// earlier release are never read: the Edge reports its own addresses and
+	// names. They may stay set while new pods roll out.
 	var err error
-	c.Source, err = netip.ParseAddr(getenv("THINPOST_CONTROL_SMTP_SOURCE"))
-	if err != nil {
-		return nil, errors.New("invalid SMTP source")
-	}
 	for _, value := range strings.Split(getenv("THINPOST_CONTROL_INFRASTRUCTURE_CIDRS"), ",") {
 		prefix, err := netip.ParsePrefix(strings.TrimSpace(value))
 		if err != nil {

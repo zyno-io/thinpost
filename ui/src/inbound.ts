@@ -71,30 +71,43 @@ export function parseInboundDomain(data: unknown): InboundDomain {
     return parseDomain(data);
 }
 
-/** The listing and the host the MX record should name; the host is null when this deployment has none. */
-export function parseInboundDomainList(data: unknown): { domains: InboundDomain[]; mxHost: string | null } {
-    const candidate = data as { domains?: unknown; mx_host?: unknown } | null | undefined;
+/** Why there is no mail server name to show: the sending worker has not reported yet, or public DNS does not confirm its name. */
+export type MxHostStatus = 'ok' | 'not_reported' | 'dns_unconfirmed';
+
+function parseMxHostStatus(value: unknown, mxHost: string | null): MxHostStatus {
+    if (value === undefined) return mxHost ? 'ok' : 'not_reported';
+    if (value !== 'ok' && value !== 'not_reported' && value !== 'dns_unconfirmed') throw new InvalidResponseError();
+    return value;
+}
+
+/** The listing and the host the MX record should name; the host is null until the sending worker has reported and DNS confirms its name. */
+export function parseInboundDomainList(data: unknown): { domains: InboundDomain[]; mxHost: string | null; mxHostStatus: MxHostStatus } {
+    const candidate = data as { domains?: unknown; mx_host?: unknown; mx_host_status?: unknown } | null | undefined;
     if (!Array.isArray(candidate?.domains)) throw new InvalidResponseError();
     if (candidate.mx_host !== undefined && !isString(candidate.mx_host, 253)) throw new InvalidResponseError();
-    return { domains: candidate.domains.map(parseDomain), mxHost: (candidate.mx_host as string | undefined) ?? null };
+    const mxHost = (candidate.mx_host as string | undefined) ?? null;
+    return { domains: candidate.domains.map(parseDomain), mxHost, mxHostStatus: parseMxHostStatus(candidate.mx_host_status, mxHost) };
 }
 
 export interface InboundChallenge {
     domain: string;
     txtName: string;
     txtValue: string;
-    /** Null when this deployment has no receiving mail host configured. */
+    /** Null until the sending worker has reported and DNS confirms its name. */
     mxHost: string | null;
+    mxHostStatus: MxHostStatus;
 }
 
 export function parseInboundChallenge(data: unknown, fallbackDomain: string): InboundChallenge {
-    const c = data as { domain?: { name?: unknown }; dns_name?: unknown; dns_value?: unknown; mx_host?: unknown } | null | undefined;
+    const c = data as { domain?: { name?: unknown }; dns_name?: unknown; dns_value?: unknown; mx_host?: unknown; mx_host_status?: unknown } | null | undefined;
     if (!isString(c?.dns_name) || !isString(c.dns_value) || (c.mx_host !== undefined && !isString(c.mx_host, 253))) throw new InvalidResponseError();
+    const mxHost = (c.mx_host as string | undefined) ?? null;
     return {
         domain: isString(c.domain?.name, 253) ? c.domain.name : fallbackDomain,
         txtName: c.dns_name,
         txtValue: c.dns_value,
-        mxHost: (c.mx_host as string | undefined) ?? null
+        mxHost,
+        mxHostStatus: parseMxHostStatus(c.mx_host_status, mxHost)
     };
 }
 

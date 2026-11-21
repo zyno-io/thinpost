@@ -21,7 +21,7 @@ There is nothing to name, edit or delete in the console. A new address appears i
 
 An app with no choice uses the **main IP**, the first address the edge reports. Every reported address has a row, including the main IP, so every delivery is sent from an explicitly named address. Changing the order of the edge's addresses changes the main IP, and so where every app with no choice sends from.
 
-The HELO name is also the **SMTP submission host**: the server name the console's SMTP tab gives to the software that sends an app's mail over SMTP, because that name already has a valid certificate. An app uses the HELO name of its chosen sending IP, or of the main IP. Until the edge has connected, or while an app's IP is not on the edge, the SMTP tab says there is no server name yet. See [Operator console](/guide/console#smtp). Clients connect to this name on ports 465 and 587 of the sending IP, which reuse the same certificate as port 25.
+The HELO name is also the **SMTP submission host**: the server name the console's SMTP tab gives to the software that sends an app's mail over SMTP, because that name already has a valid certificate. An app uses the HELO name of its chosen sending IP, or of the main IP. Until the edge has connected, while an app's IP is not on the edge, or while public DNS doesn't confirm the name both ways (the IP's reverse DNS names it and it points at the IP), the SMTP tab says there is no server name yet. See [Operator console](/guide/console#smtp). Clients connect to this name on ports 465 and 587 of the sending IP, which reuse the same certificate as port 25.
 
 ### Choosing an IP for an app
 

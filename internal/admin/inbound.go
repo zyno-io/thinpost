@@ -52,6 +52,10 @@ type InboundDomain struct {
 type InboundDomainList struct {
 	Domains []InboundDomain `json:"domains"`
 	MXHost  string          `json:"mx_host,omitempty"`
+	// MXHostStatus is ok when MXHost is set; otherwise not_reported (the sending
+	// worker has not reported its IPs yet) or dns_unconfirmed (public DNS does
+	// not map the name to the address the worker reported).
+	MXHostStatus string `json:"mx_host_status"`
 }
 
 // InboundDomainChallenge is the TXT record that proves control of a domain and
@@ -61,6 +65,8 @@ type InboundDomainChallenge struct {
 	DNSName  string        `json:"dns_name"`
 	DNSValue string        `json:"dns_value"`
 	MXHost   string        `json:"mx_host,omitempty"`
+	// MXHostStatus is as in InboundDomainList.
+	MXHostStatus string `json:"mx_host_status"`
 }
 
 // InboundLimits are an app's inbound caps: messages accepted per UTC day and
@@ -143,17 +149,22 @@ func CheckMX(ctx context.Context, resolver MXResolver, domain, host string) stri
 	return ClassifyMX(records, host)
 }
 
-// inboundDomainReserved reports whether domain is the bounce domain, the Thinpost
-// mail host, or a subdomain of either. Those names carry Thinpost's own mail
-// and can never be a customer receiving domain.
-func (h *Handler) inboundDomainReserved(domain string) bool {
-	for _, reserved := range []string{h.BounceDomain, h.InboundMXHost} {
-		reserved = normalizeHost(reserved)
+// inboundDomainReserved reports whether domain is a HELO name the sending
+// worker reported (which is also its bounce domain and the inbound mail host),
+// or a subdomain of one. Those names carry Thinpost's own mail and can never be
+// a customer receiving domain. Names are reserved whether or not DNS confirms
+// them.
+func (h *Handler) inboundDomainReserved(ctx context.Context, domain string) (bool, error) {
+	identity, err := h.edgeIdentity(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, reserved := range identity.Hostnames {
 		if reserved != "" && (domain == reserved || strings.HasSuffix(domain, "."+reserved)) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func (h *Handler) inboundRoute(w http.ResponseWriter, r *http.Request, actor, appID string, path []string) bool {
@@ -208,7 +219,12 @@ func (h *Handler) inboundDomains(w http.ResponseWriter, r *http.Request, store I
 		if domains == nil {
 			domains = []InboundDomain{}
 		}
-		respond(w, http.StatusOK, InboundDomainList{Domains: domains, MXHost: normalizeHost(h.InboundMXHost)})
+		mxHost, mxStatus, err := h.inboundMXHost(r.Context())
+		if err != nil {
+			storeError(w, err)
+			return
+		}
+		respond(w, http.StatusOK, InboundDomainList{Domains: domains, MXHost: mxHost, MXHostStatus: mxStatus})
 	case http.MethodPost:
 		var req struct {
 			Domain string `json:"domain"`
@@ -222,8 +238,20 @@ func (h *Handler) inboundDomains(w http.ResponseWriter, r *http.Request, store I
 			fail(w, http.StatusBadRequest)
 			return
 		}
-		if h.inboundDomainReserved(domain) {
+		reserved, err := h.inboundDomainReserved(r.Context(), domain)
+		if err != nil {
+			storeError(w, err)
+			return
+		}
+		if reserved {
 			respond(w, http.StatusBadRequest, map[string]string{"error": "This domain is used by Thinpost itself and can't receive mail for an app."})
+			return
+		}
+		// Read the MX host first: the claim commits a one-time challenge, which a
+		// failure after it would lose.
+		mxHost, mxStatus, err := h.inboundMXHost(r.Context())
+		if err != nil {
+			storeError(w, err)
 			return
 		}
 		challenge, err := store.RequestInboundDomain(r.Context(), actor, appID, domain)
@@ -231,7 +259,7 @@ func (h *Handler) inboundDomains(w http.ResponseWriter, r *http.Request, store I
 			storeError(w, err)
 			return
 		}
-		challenge.MXHost = normalizeHost(h.InboundMXHost)
+		challenge.MXHost, challenge.MXHostStatus = mxHost, mxStatus
 		respond(w, http.StatusCreated, challenge)
 	default:
 		method(w, "GET, POST")
@@ -292,7 +320,9 @@ func (h *Handler) verifyInboundDomain(ctx context.Context, store InboundStore, a
 	if current.State != InboundDomainPending {
 		return current, nil
 	}
-	if h.inboundDomainReserved(domain) {
+	if reserved, err := h.inboundDomainReserved(ctx, domain); err != nil {
+		return InboundDomain{}, err
+	} else if reserved {
 		return InboundDomain{}, ErrInvalidInput
 	}
 	if h.DNS == nil {
@@ -318,7 +348,10 @@ func (h *Handler) verifyInboundDomain(ctx context.Context, store InboundStore, a
 }
 
 func (h *Handler) checkInboundMX(ctx context.Context, store InboundStore, actor, appID, domain string) (InboundDomain, error) {
-	host := normalizeHost(h.InboundMXHost)
+	host, _, err := h.inboundMXHost(ctx)
+	if err != nil {
+		return InboundDomain{}, err
+	}
 	if h.MX == nil || host == "" {
 		return InboundDomain{}, &statusError{http.StatusServiceUnavailable}
 	}

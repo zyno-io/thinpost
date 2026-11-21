@@ -50,7 +50,7 @@ Routes that put an address in a URL (Postmark `dump?EmailAddress=`, and Resend r
 
 ## Spam complaints and feedback loops
 
-Mailbox providers can send abuse reports (ARF, RFC 5965) when a recipient marks a message as spam. Thinpost receives them at one global mailbox, `b+<token>@<bounce domain>`, on the edge's existing bounce listener.
+Mailbox providers can send abuse reports (ARF, RFC 5965) when a recipient marks a message as spam. Thinpost receives them at one global mailbox, `b+<token>@<main HELO name>`, on the edge's existing bounce listener. The name is the HELO name of the sending worker's main IP, as it last reported it. The mailbox can't be created before the worker has connected. If you rename the main IP, rotate the mailbox and register the new address.
 
 Set it up in the console under **Operations, Feedback loops**:
 

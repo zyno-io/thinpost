@@ -203,10 +203,22 @@ describe('inbound screen', () => {
         expect(wrapper!.find('td .tag.success').exists()).toBe(true);
     });
 
-    it('disables Check MX and says why when no mail server is configured', async () => {
-        api.listInboundDomains.mockResolvedValue(list([active], null));
+    it('disables Check MX and says the mail server has not connected yet', async () => {
+        api.listInboundDomains.mockResolvedValue({ data: { domains: [active], mx_host_status: 'not_reported' } });
         await mountPage();
-        expect(wrapper!.get('[data-testid="no-mx-host"]').text()).toContain('Ask your Thinpost administrator');
+        const note = wrapper!.get('[data-testid="no-mx-host"]').text();
+        expect(note).toContain("hasn't connected yet");
+        expect(note).toContain('ask your Thinpost administrator');
+        expect(button('Check MX').attributes('disabled')).toBeDefined();
+    });
+
+    it('withholds the mail server name and says so when DNS does not confirm it', async () => {
+        api.listInboundDomains.mockResolvedValue({ data: { domains: [active], mx_host_status: 'dns_unconfirmed' } });
+        await mountPage();
+        const note = wrapper!.get('[data-testid="no-mx-host"]').text();
+        expect(note).toContain("can't confirm the mail server's name");
+        expect(note).not.toMatch(/HELO|Edge|operator/i);
+        expect(wrapper!.find('[data-testid="mx-instruction"]').exists()).toBe(false);
         expect(button('Check MX').attributes('disabled')).toBeDefined();
     });
 
@@ -294,15 +306,15 @@ describe('inbound screen', () => {
         expect(wrapper!.text()).toContain('Not verified');
     });
 
-    it('says there is no MX record to show when no mail server is configured', async () => {
+    it('says there is no MX record to show until the mail server has connected', async () => {
         api.listInboundDomains.mockResolvedValue(list([], null));
-        api.requestInboundDomain.mockResolvedValue({ data: { ...CHALLENGE, mx_host: undefined } });
+        api.requestInboundDomain.mockResolvedValue({ data: { ...CHALLENGE, mx_host: undefined, mx_host_status: 'not_reported' } });
         await mountPage();
         await button('Add domain').trigger('click');
         await wrapper!.find('input[type="text"]').setValue('in.example.com');
         await wrapper!.find('form').trigger('submit');
         await flushPromises();
-        expect(wrapper!.get('[data-testid="modal-no-mx-host"]').text()).toContain('No receiving mail server is set up yet');
+        expect(wrapper!.get('[data-testid="modal-no-mx-host"]').text()).toContain("hasn't connected yet");
         expect(wrapper!.findAll('input[readonly]')).toHaveLength(2);
     });
 

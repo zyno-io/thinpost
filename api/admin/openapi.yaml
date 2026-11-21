@@ -84,7 +84,7 @@ paths:
         Spam-complaint intake: the global feedback mailbox address (when created), the
         reporter DKIM domain allowlist and the last 14 days of result counters. It reads
         in a read-only transaction and works while the runtime gate is closed. The
-        address is b+<token>@<bounce domain>; the token is not a credential, because a
+        address is b+<token>@<main HELO name>; the token is not a credential, because a
         report counts only through an allowlisted reporter signature and its correlation
         to an accepted delivery. No report content, address or reporter text is stored or
         returned.
@@ -103,7 +103,7 @@ paths:
         Creates the single feedback mailbox. When one exists, rotate must be true (409
         otherwise); rotating makes the previous address stop receiving at once, and every
         feedback loop must be re-registered with the new address. 409 also when this
-        replica has no bounce domain. Needs the open gate. Audited as
+        sending worker has not reported its name yet. Needs the open gate. Audited as
         feedback.mailbox.created or feedback.mailbox.rotated with no app and never the token.
       requestBody:
         required: false
@@ -124,7 +124,7 @@ paths:
                 required: [address]
                 properties:
                   address: { type: string }
-        '409': { description: A mailbox exists and rotate was not set, or no bounce domain is configured }
+        '409': { description: A mailbox exists and rotate was not set, or the sending worker has not reported its name yet }
         default: { $ref: '#/components/responses/Error' }
   /feedback-loops/reporters:
     put:
@@ -690,21 +690,22 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [domains]
+                required: [domains, mx_host_status]
                 properties:
                   domains:
                     type: array
                     items: { $ref: '#/components/schemas/InboundDomain' }
                   mx_host:
                     type: string
-                    description: Absent when this deployment has no inbound mail host configured.
+                    description: The HELO name of the sending worker's main IP; absent unless mx_host_status is ok.
+                  mx_host_status: { $ref: '#/components/schemas/HostNameStatus' }
         default: { $ref: '#/components/responses/Error' }
     post:
       operationId: requestInboundDomain
       description: >-
         Starts (or restarts, while pending) a claim. Several apps may hold a pending
-        claim on one domain; the first to verify owns it. The bounce domain, the
-        Thinpost mail host and their subdomains are refused with 400. The challenge
+        claim on one domain; the first to verify owns it. Every HELO name the sending
+        worker reported, and their subdomains, are refused with 400. The challenge
         value is shown only in this response. Audited as inbound_domain.requested.
       requestBody:
         required: true
@@ -723,12 +724,13 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [domain, dns_name, dns_value]
+                required: [domain, dns_name, dns_value, mx_host_status]
                 properties:
                   domain: { $ref: '#/components/schemas/InboundDomain' }
                   dns_name: { type: string, description: Shared with the sender-domain challenge (_thinpost.<domain>). }
                   dns_value: { type: string, description: 'thinpost-inbound-verification=...' }
-                  mx_host: { type: string }
+                  mx_host: { type: string, description: Absent unless mx_host_status is ok. }
+                  mx_host_status: { $ref: '#/components/schemas/HostNameStatus' }
         '409': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
   /apps/{appId}/inbound-domains/{domain}:
@@ -963,9 +965,12 @@ paths:
         Everything the SMTP tab shows: the From policy, the app's SMTP credentials
         (active and revoked) and where clients connect. The host is the HELO name of
         the app's chosen sending IP or, for an app without one, of the Edge's main IP,
-        as the Edge last reported it. When there is no host, host_status says why:
-        not_reported (the sending worker has not reported its IPs yet) or ip_unavailable
-        (the app's IP is no longer on the sending worker).
+        as the Edge last reported it, and is returned only when public DNS maps the name
+        to the address the Edge reported for it. When there is no host, host_status says
+        why: not_reported (the sending worker has not reported its IPs yet),
+        dns_unconfirmed (public DNS does not map the name to the reported address, or
+        the lookup failed) or ip_unavailable (the app's IP is no longer on the sending
+        worker).
       responses:
         '200':
           description: The app's SMTP submission settings
@@ -2383,6 +2388,10 @@ components:
             properties:
               domain: { type: string }
               ready: { type: boolean }
+    HostNameStatus:
+      type: string
+      enum: [ok, not_reported, dns_unconfirmed]
+      description: ok when the name is returned; not_reported while the sending worker has not reported its IPs; dns_unconfirmed when public DNS does not map the reported name to the reported address (or the lookup failed or timed out), so the name is withheld.
     SmtpConnection:
       type: object
       required: [host_source, host_status, ports, observed_ports]
@@ -2394,8 +2403,8 @@ components:
           description: Where host came from; null when there is no host.
         host_status:
           type: string
-          enum: [ok, not_reported, ip_unavailable]
-          description: ok when host is set; not_reported while the sending worker has not reported its IPs; ip_unavailable when the app's chosen IP is no longer on the sending worker.
+          enum: [ok, not_reported, dns_unconfirmed, ip_unavailable]
+          description: ok when host is set; not_reported while the sending worker has not reported its IPs; dns_unconfirmed when public DNS does not map the reported name to the reported address (or the lookup failed or timed out), so the name is withheld; ip_unavailable when the app's chosen IP is no longer on the sending worker.
         ports:
           type: array
           description: Always 465 (implicit TLS) and 587 (STARTTLS).
@@ -2590,12 +2599,12 @@ components:
       type: object
       required: [receiving, reporters, counts]
       properties:
-        receiving: { type: boolean, description: True when this replica knows the bounce domain and can show the address. }
+        receiving: { type: boolean, description: True when the sending worker has reported its name, so the address can be shown. }
         mailbox:
           type: object
           required: [created_at]
           properties:
-            address: { type: string, description: Absent when this replica has no bounce domain. }
+            address: { type: string, description: Absent until the sending worker has reported its name. }
             created_at: { type: string, format: date-time }
         reporters: { type: array, items: { type: string } }
         counts:

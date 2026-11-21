@@ -42,7 +42,6 @@ imagePullSecrets: []
 control:
   replicas: 2
   image: ghcr.io/zyno-io/thinpost-control@sha256:<digest>
-  inboundMxHost: mx.example.com    # omit unless you receive mail
   reloader:
     enabled: true                  # needs the Stakater Reloader controller
   tls:
@@ -56,7 +55,7 @@ control:
 All values are in the [Helm values reference](/reference/helm-values). Some details:
 
 - `control.image` is rendered as one string into the Deployment and both Jobs. The post hook compares pods against that exact string, so a tag and a digest are not interchangeable between releases. Prefer a digest.
-- `control.inboundMxHost` sets `THINPOST_INBOUND_MX_HOST`, the host that receiving domains point their MX records at. Leave it empty if you do not receive mail; the console then says so. It must be a lowercase host name with no trailing dot.
+- Control has no setting for the host that receiving domains point their MX records at, or for the edge's addresses and names. It takes them from what the edge reports once it connects: the MX host is the main IP's HELO name, shown in the console only when public DNS maps it to the reported address. The old `control.inboundMxHost` value is gone; if you still set it, Helm ignores it.
 - `control.webhookInternalDestinations` and `control.serviceCidrs` let webhooks target in-cluster URLs. Leave both empty to allow only public HTTPS. See [Webhooks](/guide/webhooks).
 - `control.reloader.enabled` adds the annotation `secret.reloader.stakater.com/reload: thinpost-control-client`, so a renewed control client certificate restarts the pods. The control plane reads that certificate once at start. If you set the annotation yourself in `control.deploymentAnnotations`, set `control.reloader.enabled=false`; the chart refuses both.
 
@@ -165,8 +164,6 @@ data:
   THINPOST_CONTROL_PRIVATE_CA: "/run/thinpost/control/ca.crt"
   THINPOST_CONTROL_CLIENT_CERT: "/run/thinpost/control/tls.crt"
   THINPOST_CONTROL_CLIENT_KEY: "/run/thinpost/control/tls.key"
-  THINPOST_CONTROL_SMTP_SOURCE: "203.0.113.10"
-  THINPOST_CONTROL_BOUNCE_DOMAIN: "bounce.example.com"
   THINPOST_CONTROL_BOUNCE_ACTIVE_KEY: "v1"
   THINPOST_CONTROL_BOUNCE_KEYS_FILE: "/run/thinpost/bounce/keys.json"
 
@@ -181,7 +178,7 @@ data:
 ```
 
 - `THINPOST_CONTROL_EDGE_TARGET` is a **literal IP address and port** that is private or loopback. Use a fixed ClusterIP, see [Services](#services). The edge's certificate must carry the DNS name in `THINPOST_CONTROL_EDGE_DNS` and the URI in `THINPOST_CONTROL_EDGE_IDENTITY`; the control certificate must carry `THINPOST_CONTROL_IDENTITY`.
-- `THINPOST_CONTROL_SMTP_SOURCE` and `THINPOST_CONTROL_BOUNCE_DOMAIN` match the edge release's `sourceAddress` and `bounceDomain`.
+- The edge's sending addresses and their names come from the edge's own report, so control has no settings for them. `THINPOST_CONTROL_SMTP_SOURCE`, `THINPOST_CONTROL_BOUNCE_DOMAIN` and `THINPOST_INBOUND_MX_HOST` from earlier releases are ignored if still set, so they can stay in place while pods roll out. Remove them when convenient.
 - `THINPOST_CONTROL_BOUNCE_ACTIVE_KEY` names a version in the bounce keyring.
 - Message submission requires storage, signing and the edge connection together. The signing catalog is a JSON array of `app_id`, `domain`, `selector` and `key_path` objects and must hold at least one entry when set. It is described in [Domains](/guide/domains).
 - Set the tracking variables only if you want tracking. They require the fingerprint key. `THINPOST_TRACKING_EVENT_LIMIT` is an integer from 1 to 1000. See [Tracking](/guide/tracking).

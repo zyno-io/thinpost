@@ -28,6 +28,14 @@ type fakeStore struct {
 	page            MessagePage
 	subject         string
 	subjectErr      error
+	identity        EdgeIdentity
+	identityErr     error
+}
+
+// EdgeIdentity is what the sending worker reported; the zero value means it has
+// not reported yet.
+func (s *fakeStore) EdgeIdentity(context.Context) (EdgeIdentity, error) {
+	return s.identity, s.identityErr
 }
 
 func (s *fakeStore) SearchMessages(_ context.Context, actor, app string, query MessageQuery) (MessagePage, error) {

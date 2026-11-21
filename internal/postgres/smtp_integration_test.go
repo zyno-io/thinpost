@@ -278,6 +278,9 @@ func TestSMTPConnectionPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := connect(unassigned)
+	if c.HostAddress != "45.0.1.22" {
+		t.Fatal("the address reported for the host", c.HostAddress)
+	}
 	if host(c) != "smtp-main.example.org" || source(c) != "primary" || c.HostStatus != admin.SMTPHostOK || len(c.ObservedPorts) != 2 || c.ObservedPorts[0] != 587 || c.ObservedAt == nil {
 		t.Fatal("main IP host", c)
 	}
@@ -305,6 +308,35 @@ func TestSMTPConnectionPostgres(t *testing.T) {
 	}
 	if c = connect(unassigned); len(c.ObservedPorts) != 0 || c.ObservedAt != nil {
 		t.Fatal("unreported ports", c)
+	}
+}
+
+// The Edge identity is the last report's names, main IP first, and nothing
+// before a report.
+func TestEdgeIdentityPostgres(t *testing.T) {
+	ctx, repo, exec, _ := smtpOwnerFixture(t)
+	identity := func() admin.EdgeIdentity {
+		t.Helper()
+		got, err := repo.EdgeIdentity(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := identity(); got.MainHostname != "" || len(got.Hostnames) != 0 {
+		t.Fatal("identity before any report", got)
+	}
+	exec(`INSERT INTO sending_ips(id,address,helo_name) VALUES ($1,'45.0.1.22','smtp-main.example.org'),($2,'45.0.0.10','smtp-extra.example.org'),($3,'45.0.0.11','smtp-unreported.example.org')`,
+		strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 32))
+	if got := identity(); got.MainHostname != "" {
+		t.Fatal("rows without a report name an identity", got)
+	}
+	if _, err := repo.DB.ExecContext(ctx, `INSERT INTO edge_source_reports(worker_id,epoch,addresses,reported_at) VALUES ('w1',1,'{45.0.0.10,45.0.1.22}'::inet[],clock_timestamp())`); err != nil {
+		t.Fatal(err)
+	}
+	got := identity()
+	if got.MainHostname != "smtp-extra.example.org" || got.MainAddress != "45.0.0.10" || strings.Join(got.Hostnames, ",") != "smtp-extra.example.org,smtp-main.example.org" {
+		t.Fatal("identity follows the report and its order, not every row", got)
 	}
 }
 

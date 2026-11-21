@@ -65,7 +65,10 @@ They **cannot**:
 - learn credential digests, app IDs or the replay secret, which stay in the trusted zone;
 - mint a credential or guess one: the control plane checks every attempt against its digest, and the secrets are 256-bit random values;
 - use a stolen SMTP credential on the HTTP APIs, or an API key for SMTP;
-- steer clients elsewhere or make a careful client skip TLS, as long as the certificate keys are uncompromised. The edge does hold the private keys of its public SMTP certificates (and of the internal listener's certificate) and enforces TLS-before-AUTH itself, so with those keys an attacker can impersonate the server to any client, and a client that does not require TLS or does not verify the certificate can be tricked into sending credentials in clear text.
+- make the console or API tell people to connect to a host that public DNS does not map to an address the edge reported: the SMTP submission host and the inbound MX host come from the edge's report, and control shows them only after checking public DNS in both directions: the reported address's reverse DNS must name the host, and the host's A records must include the address. Lookups fail closed (NXDOMAIN, SERVFAIL, timeout or mismatch hide the name). Reverse DNS is set by whoever runs the address block, not by the edge, so a compromised edge cannot get a domain it owns shown and later point it elsewhere;
+- make a careful client skip TLS, as long as the certificate keys are uncompromised. The edge does hold the private keys of its public SMTP certificates (and of the internal listener's certificate) and enforces TLS-before-AUTH itself, so with those keys an attacker can impersonate the server to any client, and a client that does not require TLS or does not verify the certificate can be tricked into sending credentials in clear text.
+
+One residual risk: the feedback mailbox address (`b+<token>@<main HELO name>`) is shown to administrators only and is not DNS-checked, so a compromised edge could report a different name for its main IP and change the address administrators register with mailbox providers. After any edge compromise, rotate the feedback mailbox as well.
 
 If you suspect the edge was compromised, revoke and reissue every SMTP credential. See [the runbook](/operations/rotation#smtp-credentials-and-an-edge-compromise).
 
@@ -88,10 +91,10 @@ The control plane is the sole authority for the recipient allowlist and the egre
 What control enforces when it resolves a recipient's route:
 
 - **Numeric public addresses only.** Control resolves the MX name and hands the edge a validated IP. The edge dials that IP on port 25, keeps the MX name for TLS validation, and binds the connection to a source address it owns. A bind failure fails the dial. The kernel never substitutes another source.
-- **Special-use ranges are denied.** Private, loopback, link-local, carrier-grade NAT, documentation, benchmarking, multicast, reserved, and the IPv6 translation and transition ranges are refused. IPv6 destinations must be global unicast.
+- **Special-use ranges are denied.** Private, loopback, link-local, carrier-grade NAT, documentation, benchmarking, multicast and reserved ranges are refused, and IPv6 destinations are never routed: sending addresses are IPv4.
 - **Your own infrastructure is denied.** You supply infrastructure ranges, including public addresses you own. Destinations inside them are refused. Control also checks every source address the edge reports when its session starts: a source outside the ranges, or one that a route exception names, ends the session as an invalid readiness. Control never routes mail to an address the edge reports as a source, primary or additional. This stops mail being relayed into your own network or back to the edge.
 - **Exceptions are exact.** An operator-supplied exception allows one recipient, one MX host name and one public IP together. Special-use addresses and every source address stay denied even when listed.
-- **A source must exist for the family.** An address family without a configured source is not routed.
+- **Sources are the edge's reported IPv4 addresses.** The edge must report public IPv4 sources inside your infrastructure ranges, or its session is refused.
 
 The edge itself only checks that a requested source is one of its own addresses of the destination's family. DNS answers are not DNSSEC-validated, so the MX data is unauthenticated, and a recipient policy or allowlist is the control for restricting recipients.
 

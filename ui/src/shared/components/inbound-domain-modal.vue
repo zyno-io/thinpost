@@ -21,7 +21,10 @@
                         records, only the mail sent to this server arrives here.
                     </p>
                 </template>
-                <p v-else class="hint" data-testid="modal-no-mx-host">No receiving mail server is set up yet, so there is no MX record to create. Ask your Thinpost administrator.</p>
+                <p v-else-if="challenge.mxHostStatus === 'dns_unconfirmed'" class="hint" data-testid="modal-no-mx-host">
+                    Thinpost can't confirm the mail server's name yet, so there is no MX record to show. This usually clears up on its own once DNS catches up. Try again in a few minutes, or ask your Thinpost administrator.
+                </p>
+                <p v-else class="hint" data-testid="modal-no-mx-host">The mail server hasn't connected yet, so there is no MX record to create. Try again in a few minutes, or ask your Thinpost administrator.</p>
             </section>
         </div>
 

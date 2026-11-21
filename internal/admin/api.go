@@ -413,19 +413,15 @@ type Handler struct {
 	// TestMessages submits operator test messages as an app. Without it the
 	// test-send route answers 503.
 	TestMessages TestMessageSubmitter
-	// BounceDomain is the domain of per-delivery bounce addresses and the feedback
-	// mailbox, set only on a replica that receives bounces.
-	BounceDomain string
 	// SigningReadiness reports whether mail from a domain would be DKIM-signed
 	// now; nil when this deployment has no signing catalog.
 	SigningReadiness SigningReadiness
 	// Runtime is the serving replica's startup configuration.
 	Runtime *RuntimeInfo
-	// InboundMXHost is the mail host receiving domains point their MX at
-	// (THINPOST_INBOUND_MX_HOST). Empty disables the MX check and hides the
-	// record from the console.
-	InboundMXHost string
-	MX            MXResolver
+	// MX checks a receiving domain's MX record against the inbound mail host,
+	// which is the main IP's HELO name as the Edge reported it (EdgeIdentityStore)
+	// once ReverseDNS confirms it.
+	MX MXResolver
 	// WebhookDestinations lists the operator's exact-match internal webhook
 	// URLs (THINPOST_WEBHOOK_INTERNAL_DESTINATIONS); nil accepts only public
 	// HTTPS endpoints.

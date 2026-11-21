@@ -39,10 +39,9 @@ type Config struct {
 	Target, WorkerDNS, WorkerIdentity          string
 	PrivateCA                                  *x509.CertPool
 	ClientCertificate                          tls.Certificate
-	Source                                     netip.Addr
 	Infrastructure                             []netip.Prefix
 	RouteExceptions                            []egress.Exception
-	BounceDomain, ActiveBounceKey              string
+	ActiveBounceKey                            string
 	BounceKeys                                 map[string][]byte
 	Recipients                                 dispatch.RecipientPolicy
 	// Submission is optional: when set, the session advertises submission/1
@@ -105,7 +104,7 @@ func New(c Config, repository *postgres.Repository, objects Objects) (*Bridge, e
 	if err != nil {
 		return nil, errors.New("invalid edge TLS lifetime")
 	}
-	policy, err := egress.NewPolicy(c.Infrastructure, []netip.Addr{c.Source}, c.RouteExceptions...)
+	policy, err := egress.NewPolicy(c.Infrastructure, c.RouteExceptions...)
 	if err != nil {
 		return nil, errors.New("invalid destination policy")
 	}

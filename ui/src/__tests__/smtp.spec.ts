@@ -239,6 +239,18 @@ describe('SMTP tab', () => {
         expect(wrapper!.find('[data-testid="smtp-connect"]').text()).not.toMatch(/HELO|Edge|primary source/i);
     });
 
+    it('says the server name cannot be confirmed when DNS does not back it', async () => {
+        api.getAppSmtp.mockResolvedValue({
+            data: smtpResponse({ connection: { host_source: null, host_status: 'dns_unconfirmed', ports: [], observed_ports: [] } })
+        });
+        await mountSmtp();
+        const notice = wrapper!.find('[data-testid="smtp-host-dns-unconfirmed"]');
+        expect(notice.text()).toContain("can't be confirmed yet");
+        expect(notice.text()).not.toMatch(/HELO|Edge|operator/i);
+        expect(wrapper!.find('[data-testid="smtp-host-unnamed"]').exists()).toBe(false);
+        expect(wrapper!.find('[data-testid="smtp-connect"]').text()).not.toMatch(/HELO|Edge|primary source/i);
+    });
+
     it("points to the app's Keys page when its sending IP is no longer on the sending worker", async () => {
         api.getAppSmtp.mockResolvedValue({
             data: smtpResponse({ connection: { host_source: null, host_status: 'ip_unavailable', ports: [], observed_ports: [] } })

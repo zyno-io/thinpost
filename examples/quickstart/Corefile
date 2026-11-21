@@ -7,3 +7,10 @@ quickstart.example:53 {
 	}
 	errors
 }
+
+# Reverse DNS for the Edge's address, as an IP provider would publish it. The
+# console only shows the SMTP host once forward and reverse DNS agree.
+51.42.11.in-addr.arpa:53 {
+	file /zone/edge-reverse
+	errors
+}

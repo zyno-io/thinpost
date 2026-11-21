@@ -40,10 +40,6 @@ type Config struct {
 	PublicAuth admin.PublicAuthConfig
 	S3         *S3Config
 	Tracking   *TrackingConfig
-	// InboundMXHost is the mail host receiving domains point their MX at
-	// (THINPOST_INBOUND_MX_HOST), lowercase and without a trailing dot. Empty
-	// means unset: the console cannot show the record or run the MX check.
-	InboundMXHost string
 	// WebhookDestinations is the operator's exact-match internal webhook
 	// exception list (THINPOST_WEBHOOK_INTERNAL_DESTINATIONS), constrained at
 	// dial time to THINPOST_SERVICE_CIDRS. Nil means public HTTPS only.
@@ -75,13 +71,9 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 		config.MaxAttachmentBytes = limit
 	}
-	if host := getenv("THINPOST_INBOUND_MX_HOST"); host != "" {
-		normalized, ok := admin.NormalizeDomain(host)
-		if !ok || normalized != host || strings.HasSuffix(host, ".invalid") {
-			return Config{}, errors.New("THINPOST_INBOUND_MX_HOST must be a lowercase, valid host name without a trailing dot (not .invalid)")
-		}
-		config.InboundMXHost = host
-	}
+	// THINPOST_INBOUND_MX_HOST from an earlier release is never read: the inbound
+	// mail host is the main IP's HELO name as the Edge reports it. It may stay
+	// set while new pods roll out.
 	config.WebhookDestinations, err = admin.ParseWebhookDestinations(getenv("THINPOST_WEBHOOK_INTERNAL_DESTINATIONS"), getenv("THINPOST_SERVICE_CIDRS"))
 	if err != nil {
 		return Config{}, err

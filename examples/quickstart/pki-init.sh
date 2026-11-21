@@ -87,6 +87,13 @@ bounce IN MX 10 smtp
 $SELECTOR._domainkey IN TXT ( $dkim_txt )
 _dmarc IN TXT "v=DMARC1; p=none"
 ZONE
+cat >"$ZONE/edge-reverse" <<ZONE
+\$ORIGIN 51.42.11.in-addr.arpa.
+\$TTL 5
+@ IN SOA ns.$DOMAIN. hostmaster.$DOMAIN. $(date +%s) 5 5 60 5
+@ IN NS ns.$DOMAIN.
+10 IN PTR smtp.$DOMAIN.
+ZONE
 
 chmod 644 "$PKI"/* "$ZONE"/*
 chmod 755 "$PKI/busybox"

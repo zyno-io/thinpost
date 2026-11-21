@@ -98,9 +98,6 @@ control:
   replicas: 2
   image: ''
   bootstrapImage: unconfigured
-  # Mail host that receiving (inbound) domains point their MX record at. Empty
-  # leaves it unset: the console then says no mail server is set up.
-  inboundMxHost: ''
   # Optional HTTPS listener beside the plain :8080 one (the public Gateway path
   # stays plain). The Secret (tls.crt, tls.key; for example from cert-manager)
   # is mounted as a directory and re-read on renewal without a restart. The

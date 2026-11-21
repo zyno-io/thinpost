@@ -219,7 +219,8 @@
     "example.us.auth0.com",
     "example.okta.com",
     "mailpit.axllent.org",
-    "jwt.io"
+    "jwt.io",
+    "51.42.11.in-addr.arpa"
   ],
   "email_addresses": [
     "oss@zyno.io",

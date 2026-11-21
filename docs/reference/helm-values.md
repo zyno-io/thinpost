@@ -105,7 +105,6 @@ These values apply when `workload` is `control`.
 | `control.replicas` | integer | `2` | Control plane replicas: `0` (nothing runs) or at least `2`. Required. |
 | `control.image` | string | `""` | Control image, used by the Deployment and the hook Jobs. Required to be present; the hook Jobs are rendered only when it is non-empty. |
 | `control.bootstrapImage` | string | `unconfigured` | Placeholder control image used until `control.image` is set. Required to be present. |
-| `control.inboundMxHost` | string | `""` | Mail host that receiving domains point their MX record at, sent as `THINPOST_INBOUND_MX_HOST`. Empty leaves it unset, and the console then reports that no mail server is set up. |
 | `control.deploymentAnnotations` | map of strings | `{}` | Extra annotations for the control Deployment's metadata. Must not contain `secret.reloader.stakater.com/reload` while `control.reloader.enabled` is true. |
 | `control.reloader` | object | see below | Restart-on-renewal behavior. |
 | `control.reloader.enabled` | boolean | `true` | Adds the Stakater Reloader annotation so the control Deployment restarts when the `thinpost-control-client` Secret renews. It needs the Reloader controller in the cluster. Set `false` to omit it or to supply your own annotation. |

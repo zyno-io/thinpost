@@ -45,7 +45,7 @@ type feedbackMailboxResponse struct {
 }
 
 type feedbackLoopsResponse struct {
-	// Receiving is true when this replica knows the bounce domain, so it can
+	// Receiving is true when the sending worker has reported its name, so it can
 	// show the mailbox address.
 	Receiving bool                     `json:"receiving"`
 	Mailbox   *feedbackMailboxResponse `json:"mailbox,omitempty"`
@@ -53,12 +53,16 @@ type feedbackLoopsResponse struct {
 	Counts    []FeedbackCount          `json:"counts"`
 }
 
-// feedbackAddress forms b+<token>@<bounce domain>; empty without a domain.
-func (h *Handler) feedbackAddress(token string) string {
-	if h.BounceDomain == "" || token == "" {
+// feedbackAddress forms b+<token>@<main HELO name>; empty before the sending
+// worker has reported one. The mailbox is shown to admins only, and the name is
+// not DNS-confirmed (unlike the names clients are told to use): a compromised
+// worker could therefore make this address point at a name it chose. That
+// residual risk is documented in the threat model.
+func feedbackAddress(identity EdgeIdentity, token string) string {
+	if identity.MainHostname == "" || token == "" {
 		return ""
 	}
-	return "b+" + token + "@" + h.BounceDomain
+	return "b+" + token + "@" + identity.MainHostname
 }
 
 // feedbackRoute serves /api/v1/feedback-loops and its sub-resources. It
@@ -85,7 +89,12 @@ func (h *Handler) feedbackRoute(w http.ResponseWriter, r *http.Request, actor st
 			storeError(w, err)
 			return true
 		}
-		h.respondFeedbackLoops(w, loops)
+		identity, err := h.edgeIdentity(r.Context())
+		if err != nil {
+			storeError(w, err)
+			return true
+		}
+		h.respondFeedbackLoops(w, loops, identity)
 	case "/api/v1/feedback-loops/mailbox":
 		if r.Method != http.MethodPost {
 			method(w, "POST")
@@ -98,9 +107,14 @@ func (h *Handler) feedbackRoute(w http.ResponseWriter, r *http.Request, actor st
 			fail(w, http.StatusBadRequest)
 			return true
 		}
-		// Without the bounce domain the address cannot be formed, so do not
-		// create a mailbox this replica cannot show.
-		if h.BounceDomain == "" {
+		// Before the sending worker reports its name the address cannot be formed,
+		// so do not create a mailbox that cannot be shown.
+		identity, err := h.edgeIdentity(r.Context())
+		if err != nil {
+			storeError(w, err)
+			return true
+		}
+		if identity.MainHostname == "" {
 			fail(w, http.StatusConflict)
 			return true
 		}
@@ -109,7 +123,7 @@ func (h *Handler) feedbackRoute(w http.ResponseWriter, r *http.Request, actor st
 			storeError(w, err)
 			return true
 		}
-		respond(w, http.StatusOK, map[string]string{"address": h.feedbackAddress(mailbox.Token)})
+		respond(w, http.StatusOK, map[string]string{"address": feedbackAddress(identity, mailbox.Token)})
 	default:
 		if r.Method != http.MethodPut {
 			method(w, "PUT")
@@ -145,8 +159,8 @@ func (h *Handler) feedbackRoute(w http.ResponseWriter, r *http.Request, actor st
 	return true
 }
 
-func (h *Handler) respondFeedbackLoops(w http.ResponseWriter, loops FeedbackLoops) {
-	out := feedbackLoopsResponse{Receiving: h.BounceDomain != "", Reporters: loops.Reporters, Counts: loops.Counts}
+func (h *Handler) respondFeedbackLoops(w http.ResponseWriter, loops FeedbackLoops, identity EdgeIdentity) {
+	out := feedbackLoopsResponse{Receiving: identity.MainHostname != "", Reporters: loops.Reporters, Counts: loops.Counts}
 	if out.Reporters == nil {
 		out.Reporters = []string{}
 	}
@@ -154,7 +168,7 @@ func (h *Handler) respondFeedbackLoops(w http.ResponseWriter, loops FeedbackLoop
 		out.Counts = []FeedbackCount{}
 	}
 	if loops.Mailbox != nil {
-		out.Mailbox = &feedbackMailboxResponse{Address: h.feedbackAddress(loops.Mailbox.Token), CreatedAt: loops.Mailbox.CreatedAt}
+		out.Mailbox = &feedbackMailboxResponse{Address: feedbackAddress(identity, loops.Mailbox.Token), CreatedAt: loops.Mailbox.CreatedAt}
 	}
 	respond(w, http.StatusOK, out)
 }

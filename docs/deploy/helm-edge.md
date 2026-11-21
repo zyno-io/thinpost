@@ -49,7 +49,7 @@ publicNetwork:
 | `replicas` | `0` or `1`. The journal volume is single-writer. The release renders but runs no pod at `0`. |
 | `workerId` | The worker's stable identifier. Equals `worker-id` in the control plane's `thinpost-edge-binding`. |
 | `smtpHostname` | The name the primary address greets with, and its HELO, PTR and certificate name. Also the authentication ID and receiving host on inbound mail from every address. |
-| `bounceDomain` | The domain for opaque bounce recipients. Equals `THINPOST_CONTROL_BOUNCE_DOMAIN` on control. |
+| `bounceDomain` | A domain the edge accepts opaque bounce recipients for, besides every listener name. Control has no matching setting: it puts each sending IP's HELO name in the return path, so mail is addressed to a name the edge already accepts. |
 | `controllerIdentity` | The one SPIFFE URI the edge accepts from the control plane. See [Control PKI](/deploy/control-pki). |
 | `controlClientCidrs` | Exact IPv4 `/32` addresses allowed to open the control port. Required for `replicas: 1`; any other prefix fails the render. |
 | `sourceAddress` | The primary public IPv4 address: the SMTP listener, the MX and the default outbound source. |
