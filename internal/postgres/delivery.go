@@ -70,7 +70,7 @@ func (r *Repository) claimDeliveryOnce(ctx context.Context, lease ControllerLeas
 	var trackingCutoff sql.NullTime
 	var firstAttempt sql.NullTime
 	var suppression sql.NullString
-	var pinnedAddress sql.NullString
+	var pinnedAddress, senderDomain sql.NullString
 	var now time.Time
 	// Every delivery is addressed from the live session's report: the HELO and
 	// bounce domain are the reported name of the address it leaves from, and the
@@ -92,12 +92,12 @@ func (r *Repository) claimDeliveryOnce(ctx context.Context, lease ControllerLeas
 		(SELECT min(a.started_at) FROM delivery_attempts a WHERE a.delivery_id=d.id AND a.outcome IS DISTINCT FROM 'recipient_policy_denied'),clock_timestamp(),
 		(SELECT s.reason FROM message_recipients r JOIN suppressions s ON s.app_id=r.app_id AND s.address_lower=r.address_lower
 			WHERE r.message_id=d.message_id AND r.recipient_index=d.recipient_index),
-		host(ip.address)
+		host(ip.address),COALESCE(m.sender_domain,'')
 		FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN apps app ON app.id=m.app_id
 		LEFT JOIN sending_ips ip ON ip.id=app.sending_ip_id
 		WHERE app.active AND d.state='queued' AND d.retry_after<=clock_timestamp()
 		AND (app.sending_ip_id IS NULL OR host(ip.address)=ANY($2::text[]))
-		ORDER BY d.retry_after,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1`, delivery.TrackingMinimumRemaining.Milliseconds(), addresses).Scan(&claim.DeliveryID, &claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.FinalKey, &claim.RecipientIndex, &claim.EnhancedProtection, &claim.AcceptedAt, &claim.RouteAttempt, &claim.RecipientPolicyOverride, &trackingUnavailable, &trackingCutoff, &firstAttempt, &now, &suppression, &pinnedAddress)
+		ORDER BY d.retry_after,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1`, delivery.TrackingMinimumRemaining.Milliseconds(), addresses).Scan(&claim.DeliveryID, &claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.FinalKey, &claim.RecipientIndex, &claim.EnhancedProtection, &claim.AcceptedAt, &claim.RouteAttempt, &claim.RecipientPolicyOverride, &trackingUnavailable, &trackingCutoff, &firstAttempt, &now, &suppression, &pinnedAddress, &senderDomain)
 	if errors.Is(err, sql.ErrNoRows) {
 		return claim, false, delivery.ErrNoWork
 	}
@@ -129,7 +129,22 @@ func (r *Repository) claimDeliveryOnce(ctx context.Context, lease ControllerLeas
 	}
 	sourceAddress := source.Address.String()
 	claim.SourceAddress, claim.HeloName, claim.BounceDomain, claim.SourceName = sourceAddress, source.Hostname, source.Hostname, source.Hostname
-	if _, err = tx.ExecContext(ctx, `INSERT INTO delivery_attempts(id,delivery_id,worker_id,epoch,start_authorized,source_address) VALUES ($1,$2,$3,$4,false,$5::text::inet)`, attemptID, claim.DeliveryID, lease.WorkerID, lease.Epoch, sourceAddress); err != nil {
+	// The Return-Path is the HELO name, today's behaviour, unless the app has a
+	// custom bounce domain that every live condition allows right now. It is
+	// decided only here, from current rows (never from a cached state), and the
+	// provider re-checks it against the worker's report before anything is sent.
+	var returnPath any
+	if caps.AnyBounceDomain && senderDomain.String != "" {
+		custom, found, err := customReturnPath(ctx, tx, claim.AppID, senderDomain.String, source.Hostname)
+		if err != nil {
+			return claim, false, err
+		}
+		if found && !caps.HasHostname(custom) {
+			claim.BounceDomain, claim.BounceTarget = custom, source.Hostname
+			returnPath = custom
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO delivery_attempts(id,delivery_id,worker_id,epoch,start_authorized,source_address,return_path_domain) VALUES ($1,$2,$3,$4,false,$5::text::inet,$6)`, attemptID, claim.DeliveryID, lease.WorkerID, lease.Epoch, sourceAddress, returnPath); err != nil {
 		return claim, false, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE deliveries SET state='in_flight',current_attempt_id=$2 WHERE id=$1`, claim.DeliveryID, attemptID); err != nil {
@@ -471,4 +486,23 @@ func preparationRetryDelay(attempt int, id string) time.Duration {
 }
 func validOutcome(outcome string, code int) bool {
 	return outcome == "accepted" && code == 250 || outcome == "rejected" && (code == 0 || code >= 400 && code <= 599) || outcome == "route_rejected" && code >= 400 && code <= 599 || (outcome == "uncertain" || outcome == delivery.OutcomeNullMX || outcome == delivery.OutcomeDomainNotFound || outcome == delivery.OutcomeRecipientPolicyDenied || outcome == delivery.OutcomeTrackingUnavailable || outcome == delivery.OutcomeRetryExpired || outcome == delivery.OutcomeSuppressed) && code == 0
+}
+
+// customReturnPath returns the app's custom bounce domain for mail from
+// senderDomain, if one may be used now. A bounce domain applies to its sender
+// domain and to the app's sender domains beneath it; the most specific wins.
+// It must be active, have passed a check within the freshness window, and have
+// resolved to heloName (the HELO name of the address this delivery leaves from,
+// from the live report), and must not be a receiving domain.
+func customReturnPath(ctx context.Context, tx *sql.Tx, appID, senderDomain, heloName string) (string, bool, error) {
+	var domain string
+	err := tx.QueryRowContext(ctx, `SELECT b.domain FROM bounce_domains b
+		WHERE b.app_id=$1 AND (b.sender_domain=$2 OR right($2,length(b.sender_domain)+1)='.'||b.sender_domain)
+		AND b.state='active' AND b.target=$3 AND b.last_ok_at>clock_timestamp()-`+bounceFreshness+`
+		AND NOT EXISTS (SELECT 1 FROM inbound_domains i WHERE i.domain=b.domain AND i.state IN ('active','disabled'))
+		ORDER BY length(b.sender_domain) DESC LIMIT 1`, appID, senderDomain, heloName).Scan(&domain)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return domain, err == nil, err
 }

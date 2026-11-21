@@ -167,6 +167,12 @@ API change: `POST .../domains/{domain}/verify` on a domain that is already verif
 
 The migration creates an empty table and drops the unused `sender_domains.verification_hash` column, which are catalog-only changes. It rolls forward only, like the others.
 
+## Custom bounce domains
+
+Schema 47 adds `bounce_domains` and a nullable `delivery_attempts.return_path_domain`, which are catalog-only changes (an empty table; a nullable column with a `NOT VALID` check, so no table scan). Nothing changes for existing mail: until a customer adds a bounce domain, every message keeps using the HELO name as its return address. See [Your own bounce domain](/guide/domains#your-own-bounce-domain).
+
+A custom return address needs an edge that accepts bounces at any domain (it lists `bounce-any-domain/1` in its Ready message). Upgrade the edge first. Control never chooses a custom domain for an edge without it, so the order is safe either way. Don't roll an edge back to a release without that capability while custom bounce domains are in use: deliveries already holding a custom return path would be refused. Every control replica runs the recheck loop that keeps these domains honest; it needs outbound DNS and nothing else.
+
 ## Upgrading the edge
 
 The edge release is independent. Its Deployment uses `Recreate`, so an upgrade stops the old pod and starts a new one, and sending pauses briefly. Bounce senders retry. The control plane reconnects and the edge replays any results it has not had acknowledged.

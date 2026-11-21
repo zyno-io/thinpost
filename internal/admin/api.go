@@ -17,6 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/zyno-io/thinpost/internal/customdomain"
 	"github.com/zyno-io/thinpost/internal/providerid"
 )
 
@@ -347,6 +348,14 @@ type Domain struct {
 	ActiveKey  *DKIMKey        `json:"active_key,omitempty"`
 	PendingKey *DKIMKey        `json:"pending_key,omitempty"`
 	RetiredKey *DKIMRetiredKey `json:"retired_key,omitempty"`
+	// BounceDomain is the domain's own Return-Path domain, if it has one.
+	// CNAMETarget is the name its CNAME must point at (the HELO name of the
+	// app's sending IP), shown only once public DNS confirms the name;
+	// CNAMETargetStatus says why there is none: ok, not_reported or
+	// dns_unconfirmed. Both are set only on verified domains.
+	BounceDomain      *BounceDomain `json:"bounce_domain,omitempty"`
+	CNAMETarget       *string       `json:"cname_target,omitempty"`
+	CNAMETargetStatus string        `json:"cname_target_status,omitempty"`
 }
 
 // DKIMKey is a key Thinpost generated and the TXT record that publishes it.
@@ -444,7 +453,10 @@ type Handler struct {
 	DNS            TXTResolver
 	// ReverseDNS serves the advisory sending-IP DNS check; without it that
 	// check is unavailable.
-	ReverseDNS     ReverseResolver
+	ReverseDNS ReverseResolver
+	// CNAME serves the bounce-domain check; without it that check is
+	// unavailable.
+	CNAME          customdomain.Resolver
 	Webhooks       WebhookAdmin
 	WebhookHistory WebhookHistoryStore
 	PolicyHolds    PolicyHoldStore
@@ -663,6 +675,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if domains == nil {
 				domains = []Domain{}
 			}
+			if err = h.attachBounceDomains(r.Context(), appID, domains); err != nil {
+				storeError(w, err)
+				return
+			}
 			respond(w, http.StatusOK, map[string]any{"domains": domains})
 		case http.MethodPost:
 			var req struct {
@@ -689,7 +705,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(path) >= 8 && len(path) <= 10 && path[5] == "domains" {
-		if h.domainKeyRoute(w, r, principal.Subject, appID, path[6:]) {
+		if h.bounceDomainRoute(w, r, principal.Subject, appID, path[6:]) || h.domainKeyRoute(w, r, principal.Subject, appID, path[6:]) {
 			return
 		}
 	}

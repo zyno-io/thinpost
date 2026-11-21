@@ -160,7 +160,7 @@ First frame, control plane to Edge.
 
 A capability list holds at most 8 entries of at most 32 characters from `a-z 0-9 / - _ .`. Unknown capabilities are ignored.
 
-`bounce-any-domain/1` is edge-only: the Edge always lists it in `Ready.capabilities` and the control plane never sends it in `Open`. It means the Edge accepts a bounce recipient `b+<32 lowercase hex>` at any recipient domain, not only at its own host names. A domain with an inbound route is still routed as inbound, and a bounce still gets `250` only after the control plane has stored and committed it. No frames depend on it, so there is nothing to negotiate and the protocol version stays 7.
+`bounce-any-domain/1` is edge-only: the Edge always lists it in `Ready.capabilities` and the control plane never sends it in `Open`. It means the Edge accepts a bounce recipient `b+<32 lowercase hex>` at any recipient domain, not only at its own host names. A domain with an inbound route is still routed as inbound, and a bounce still gets `250` only after the control plane has stored and committed it. No frames depend on it, so there is nothing to negotiate and the protocol version stays 7. The control plane reads it from `Ready` and, only for an Edge that listed it, may address a delivery from an app's own bounce domain (`EnvelopeFrom` is `b+<token>@<custom domain>`, with the HELO name unchanged); for any other Edge the return address is always the source's HELO name. See [Your own bounce domain](/guide/domains#your-own-bounce-domain).
 
 ### Ready
 
