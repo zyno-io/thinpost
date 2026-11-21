@@ -135,12 +135,12 @@ describe('sending IP helpers', () => {
 });
 
 describe('sending IPs card', () => {
-    it('lists each IP with its HELO name, the main IP, app counts and worker status', async () => {
+    it('lists each IP with its HELO name, the default IP, app counts and worker status', async () => {
         await mountCard();
-        expect(row('45.0.1.22').find('[data-testid="main-tag"]').exists()).toBe(true);
+        expect(row('45.0.1.22').find('[data-testid="main-tag"]').text()).toBe('Default IP');
         expect(row('45.0.1.22').text()).toContain('45.0.1.22');
         expect(row('45.0.1.22').text()).toContain('mx.example.net');
-        // The main IP serves the apps that chose it and the ones that never chose.
+        // The default IP serves the apps that chose it and the ones that never chose.
         expect(row('45.0.1.22').findAll('td')[1]!.text()).toBe('4');
         expect(row('45.0.0.10').findAll('td')[1]!.text()).toBe('2');
         expect(row('45.0.0.10').find('[data-testid="main-tag"]').exists()).toBe(false);
@@ -236,12 +236,12 @@ describe('sending IP panel', () => {
         api.listApps.mockResolvedValue({ data: { apps: [app] } });
     });
 
-    it('shows the main IP and lets the person change it', async () => {
+    it('shows the default IP and lets the person change it', async () => {
         await mountPanel();
-        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain('Main IP');
+        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain(MAIN_LABEL);
         const select = wrapper!.find('[data-testid="sending-ip-select"]');
-        // The main IP's own row is the default choice, not a second entry.
-        expect(select.findAll('option').map(o => o.text())).toEqual(['Main IP (default)', HOSTING_LABEL]);
+        // The default IP's own row is the "no choice" entry, not a second entry.
+        expect(select.findAll('option').map(o => o.text())).toEqual([MAIN_LABEL, HOSTING_LABEL]);
         expect(wrapper!.find('[data-testid="save-sending-ip"]').attributes('disabled')).toBeDefined();
         await select.setValue(HOSTING_ID);
         api.setAppSendingIp.mockResolvedValue({ data: { sending_ip_id: HOSTING_ID, address: '45.0.0.10', helo_name: 'smtp.hosting.example.org' } });
@@ -252,13 +252,13 @@ describe('sending IP panel', () => {
         expect(wrapper!.text()).toContain('starting with its next delivery');
     });
 
-    it('names the main IP an app with no choice sends from', async () => {
+    it('names the default IP an app with no choice sends from', async () => {
         await mountPanel();
-        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain(`Main IP: ${MAIN_LABEL}`);
+        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain(MAIN_LABEL);
         expect(wrapper!.find('[data-testid="worker-state"]').text()).toBe('Available');
     });
 
-    it('sends null to go back to the main IP', async () => {
+    it('sends null to go back to the default IP', async () => {
         await mountPanel({ sending_ip_id: HOSTING_ID, address: '45.0.0.10', helo_name: 'smtp.hosting.example.org' });
         expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain('hosting');
         await wrapper!.find('[data-testid="sending-ip-select"]').setValue('');
@@ -293,13 +293,13 @@ describe('sending IP panel', () => {
         await wrapper!.find('[data-testid="save-sending-ip"]').trigger('click');
         await flushPromises();
         expect(wrapper!.text()).toContain('doesn\'t have that IP right now');
-        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain('Main IP');
+        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain(MAIN_LABEL);
     });
 
     it('says so when there are no other IPs, and when the list cannot load', async () => {
         api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip()] }) });
         await mountPanel();
-        expect(wrapper!.find('[data-testid="no-ips"]').text()).toContain('uses the main IP');
+        expect(wrapper!.find('[data-testid="no-ips"]').text()).toContain('uses the default IP');
         expect(wrapper!.find('[data-testid="no-ips"]').text()).toContain('ask your Thinpost administrator');
         wrapper!.unmount();
         api.listSendingIps.mockRejectedValue(httpError(503));
@@ -316,7 +316,7 @@ describe('sending IP panel', () => {
         await wrapper!.find('[data-testid="save-sending-ip"]').trigger('click');
         await flushPromises();
         expect(wrapper!.text()).toContain('Changing the sending IP is unavailable right now');
-        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain('Main IP');
+        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain(MAIN_LABEL);
     });
 
     it('shows an error instead of a guess when the assignment cannot load', async () => {
@@ -355,17 +355,17 @@ describe('apps list and create form', () => {
         api.listApps.mockResolvedValue({ data: { apps: [app, { ...app, id: 'a'.repeat(32), name: 'Hosted', sending_ip_id: HOSTING_ID }, { ...app, id: 'b'.repeat(32), name: 'Gone', sending_ip_id: '9'.repeat(32) }] } });
     });
 
-    it('has a Sending IP column that says Main IP, the name, or Unknown', async () => {
+    it('has a Sending IP column that shows each app's IP as HELO name (address), or Unknown', async () => {
         await mountApps();
         const cells = wrapper!.findAll('[data-testid="sending-ip-cell"]').map(c => c.text());
-        expect(cells).toEqual(['Main IP', HOSTING_LABEL, 'Unknown']);
+        expect(cells).toEqual([MAIN_LABEL, HOSTING_LABEL, 'Unknown']);
     });
 
     it('says Unknown for a pinned app when the IP list cannot load, without blocking the list', async () => {
         api.listSendingIps.mockRejectedValue(httpError(503));
         await mountApps();
         const cells = wrapper!.findAll('[data-testid="sending-ip-cell"]').map(c => c.text());
-        expect(cells).toEqual(['Main IP', 'Unknown', 'Unknown']);
+        expect(cells).toEqual(['Default IP', 'Unknown', 'Unknown']);
         expect(wrapper!.findAll('tbody tr')).toHaveLength(3);
     });
 
@@ -384,12 +384,12 @@ describe('apps list and create form', () => {
         expect(api.createApp).toHaveBeenCalledWith({ body: { name: 'New' } });
     });
 
-    it('offers the IPs the sending worker has, with the main IP as the default, and sends the choice', async () => {
+    it('offers the IPs the sending worker has, with the default IP first, and sends the choice', async () => {
         await mountApps();
         await button('Create app').trigger('click');
         await flushPromises();
         const picker = document.querySelector('[data-testid="sending-ip-picker"]') as HTMLSelectElement;
-        expect([...picker.options].map(o => o.textContent)).toEqual(['Main IP (default)', HOSTING_LABEL]);
+        expect([...picker.options].map(o => o.textContent)).toEqual([MAIN_LABEL, HOSTING_LABEL]);
         const input = document.querySelector('input[type="text"]') as HTMLInputElement;
         input.value = 'New';
         input.dispatchEvent(new Event('input'));

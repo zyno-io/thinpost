@@ -45,7 +45,7 @@
                             <span class="tag" :class="{ success: app.active }">{{ app.active ? 'Active' : 'Paused' }}</span>
                         </td>
                         <td class="nowrap" data-testid="sending-ip-cell">
-                            <template v-if="app.sending_ip_id === null">{{ MAIN_IP_LABEL }}</template>
+                            <template v-if="app.sending_ip_id === null">{{ defaultIpLabel(ips) }}</template>
                             <template v-else-if="ipLabels">{{ ipLabels.get(app.sending_ip_id) ?? 'Unknown' }}</template>
                             <span v-else class="muted" title="The list of sending IPs couldn't be loaded.">Unknown</span>
                         </td>
@@ -82,7 +82,7 @@ import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import HelpButton from '@/shared/components/help-button.vue';
 import Loader from '@/shared/components/loader.vue';
 import CreateAppModal from '@/shared/components/create-app-modal.vue';
-import { ipLabel, MAIN_IP_LABEL, parseSendingIps } from '@/sending-ips';
+import { defaultIpLabel, ipLabel, parseSendingIps } from '@/sending-ips';
 import { isOpaqueId } from '@/validation';
 
 const router = useRouter();
