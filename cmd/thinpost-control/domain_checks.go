@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/zyno-io/thinpost/internal/admin"
 	"github.com/zyno-io/thinpost/internal/customdomain"
 	"github.com/zyno-io/thinpost/internal/postgres"
 )
@@ -20,8 +23,9 @@ import (
 // stale result is dropped. While the deploy gate is closed nothing is claimed
 // or written.
 //
-// A kind plugs in by supplying a claim function; custom tracking domains will
-// add one beside bounce domains without changing the loop.
+// A kind plugs in by supplying a claim function. Bounce domains and tracking
+// domains are the two kinds; only a replica with tracking configured runs the
+// tracking kind, so only such a replica claims tracking rows.
 const (
 	domainCheckEvery       = 30 * time.Second
 	domainCheckBatch       = 10
@@ -76,6 +80,51 @@ func bounceDomainKind(repository *postgres.Repository, resolver customdomain.Res
 		}
 		return checks, nil
 	}}
+}
+
+// trackingDomainKind checks custom tracking domains (removed ones too, daily).
+// The checker proves the HTTPS route reaches this deployment, so it is built
+// only where tracking is configured.
+func trackingDomainKind(repository trackingDomainStore, checker domainTrackingChecker) domainKind {
+	return domainKind{name: "tracking", claim: func(ctx context.Context, limit int) ([]domainCheck, error) {
+		due, err := repository.ClaimDueTrackingDomains(ctx, limit)
+		if err != nil {
+			return nil, err
+		}
+		checks := make([]domainCheck, 0, len(due))
+		for _, item := range due {
+			item := item
+			checks = append(checks, func(ctx context.Context) error {
+				// The check bounds its own lookups and request; the loop's
+				// timeout leaves time to record whatever it found.
+				outcome := checker.Check(ctx, item.Domain)
+				_, _, err := repository.FinishTrackingCheck(ctx, postgres.BackgroundCheckActor, item, outcome)
+				return err
+			})
+		}
+		return checks, nil
+	}}
+}
+
+// trackingHost is the hostname of the deployment's tracking origin (no port):
+// what a custom tracking domain's DNS record points at.
+func trackingHost(origin string) (string, error) {
+	u, err := url.Parse(origin)
+	if err != nil || u.Hostname() == "" {
+		return "", errors.New("invalid tracking origin")
+	}
+	return strings.ToLower(u.Hostname()), nil
+}
+
+// trackingDomainStore is the part of the repository the tracking kind uses.
+type trackingDomainStore interface {
+	ClaimDueTrackingDomains(ctx context.Context, limit int) ([]customdomain.Check, error)
+	FinishTrackingCheck(ctx context.Context, actor string, check customdomain.Check, outcome customdomain.TrackingOutcome) (admin.TrackingDomain, bool, error)
+}
+
+// domainTrackingChecker is what the tracking kind needs from a checker.
+type domainTrackingChecker interface {
+	Check(ctx context.Context, domain string) customdomain.TrackingOutcome
 }
 
 // tick claims and runs one round for every kind. It returns when every

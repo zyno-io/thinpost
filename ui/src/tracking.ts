@@ -30,7 +30,14 @@ export function parseRuntimeInfo(data: unknown): RuntimeInfo {
         if (typeof tracking.origin !== 'string' || !tracking.origin || !isCount(tracking.link_event_limit, 1000) || tracking.link_event_limit < 1) {
             throw new InvalidResponseError();
         }
-        info.tracking = { origin: tracking.origin, link_event_limit: tracking.link_event_limit };
+        // A server that predates custom tracking domains omits both fields: no custom domains.
+        const extra = tracking as { custom_domains?: unknown; cname_target?: unknown };
+        info.tracking = {
+            origin: tracking.origin,
+            link_event_limit: tracking.link_event_limit,
+            custom_domains: extra.custom_domains === true,
+            cname_target: typeof extra.cname_target === 'string' ? extra.cname_target : ''
+        };
     }
     return info;
 }

@@ -154,7 +154,15 @@ type Status struct {
 // not_cname, other_ip, wrong_target) take an active domain out of use at once;
 // the claim already stopped using it if the target moved.
 func Next(current Status, result Result) Status {
-	if result == ResultOK {
+	return advance(current, result == ResultOK, result.Indeterminate())
+}
+
+// advance is the transition both kinds of domain share: a pass makes the
+// domain active and clears the failure count; a definitive failure takes an
+// active domain out of use at once; an indeterminate one only after
+// FailuresToFail in a row.
+func advance(current Status, ok, indeterminate bool) Status {
+	if ok {
 		return Status{State: StateActive}
 	}
 	failures := current.Failures + 1
@@ -162,7 +170,7 @@ func Next(current Status, result Result) Status {
 		failures = maxFailures
 	}
 	next := Status{State: current.State, Failures: failures}
-	if current.State == StateActive && (!result.Indeterminate() || failures >= FailuresToFail) {
+	if current.State == StateActive && (!indeterminate || failures >= FailuresToFail) {
 		next.State = StateFailing
 	}
 	return next

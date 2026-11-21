@@ -139,7 +139,7 @@ data:
 - `THINPOST_LISTEN` must be `:8080`. Its default is `127.0.0.1:8080`, which the probes and the Service cannot reach.
 - The database URL carries no credentials. The chart sets `THINPOST_DATABASE_USERNAME_FILE` and `THINPOST_DATABASE_PASSWORD_FILE`. See [Database](/deploy/database).
 - The OIDC settings are explained in [Operator authentication](/deploy/operator-auth), the S3 settings in [Object storage](/deploy/object-storage).
-- `THINPOST_ADMIN_ORIGIN` is optional. Leave it unset to serve the console on every hostname that reaches the Service. Set it to keep the console off the tracking hostname; see [Tracking](/guide/tracking#keep-the-console-off-the-tracking-hostname).
+- `THINPOST_ADMIN_ORIGIN` is optional. Leave it unset to serve the console on every hostname that reaches the Service. Set it to keep the console off the tracking hostname; see [Tracking](/guide/tracking#keep-the-console-off-the-tracking-hostname). It is also required for apps to use their own tracking domains: when set (with tracking configured), the console offers them, and each custom host needs its own route for `/t/`, a certificate and an unchanged `Host` header at your gateway. See [What your gateway must provide](/guide/tracking#what-your-gateway-must-provide).
 
 ### `thinpost-mail-runtime`
 
