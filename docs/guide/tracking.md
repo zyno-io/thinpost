@@ -25,6 +25,16 @@ Tracking needs configuration on the control plane. Setting only some of the opti
 
 It also needs the submission fingerprint key, encrypted object storage, the signing catalog and the edge connection to be configured. The origin must keep working for as long as issued links might be used, so choose it once and keep its DNS, certificate and route in place. See [Configuration](/reference/configuration).
 
+### Keep the console off the tracking hostname
+
+Every recipient sees the tracking hostname in their links. If the console is served on it too, anyone who receives a message can find the console. To prevent that, give the console its own hostname and set `THINPOST_ADMIN_ORIGIN` to it, for example `https://thinpost-admin.example.com`. The console and operator API then answer only there. On the tracking hostname, and any other, the root and the admin paths return an empty 404, while tracking links keep working.
+
+- The tracking origin is part of every issued link. Keep the tracking origin and move the console to a new hostname.
+- Route both hostnames to the control service. Your identity provider needs the console's new redirect URI.
+- Matching uses the request's hostname and ignores the port. That hostname comes from the `Host` header, or from the request line when it carries an absolute URI. The gateway must forward the hostname it routed on unchanged and must not let clients set it through `X-Forwarded-Host`. For defense in depth, also have the gateway send only `/t/` paths to Thinpost on the tracking hostname.
+- This hides the console rather than protecting it; operator sign-in still guards it. Certificate Transparency logs publish the hostnames on publicly trusted certificates, so put the admin hostname under a wildcard certificate if it should not be easy to find. Never use one certificate that names both hostnames: anyone who connects to the tracking hostname can read it.
+- Health probes use the pod address and keep working.
+
 ## Per-app defaults and per-message choices
 
 An app can default opens and clicks on. Both are off by default. Set them in the console (app, **Tracking**) or with `PUT /api/v1/apps/{appId}/tracking-defaults`.

@@ -365,6 +365,34 @@ func TestConsoleConnectOrigins(t *testing.T) {
 	}
 }
 
+func TestAdminOrigin(t *testing.T) {
+	values := env()
+	config, err := load(values)
+	if err != nil || config.AdminHost != "" {
+		t.Fatal("admin origin must default to none", err)
+	}
+	for origin, want := range map[string]string{
+		"https://admin.example.com":      "admin.example.com",
+		"https://Admin.Example.com:8443": "admin.example.com",
+		"https://admin.example.com.:443": "admin.example.com",
+		"https://[2001:db8::1]:8443":     "[2001:db8::1]",
+		"https://[2001:DB8:0::1]":        "[2001:db8::1]",
+		"https://xn--bcher-kva.example":  "xn--bcher-kva.example",
+	} {
+		values["THINPOST_ADMIN_ORIGIN"] = origin
+		config, err = load(values)
+		if err != nil || config.AdminHost != want {
+			t.Errorf("%q: %q %v", origin, config.AdminHost, err)
+		}
+	}
+	for _, bad := range []string{"http://admin.example.com", "https://admin.example.com/", "https://admin.example.com/console", "admin.example.com", "https://u:p@admin.example.com", "https://admin.example.com?x=1", "https://*.example.com", "https://a.example.com,https://b.example.com", "https://.", "https://...", "https://.:443", "https://bücher.example", "https://admin_x.example.com", "https://[fe80::1%25eth0]"} {
+		values["THINPOST_ADMIN_ORIGIN"] = bad
+		if _, err := load(values); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
 func TestMaxAttachmentBytesConfiguration(t *testing.T) {
 	values := env()
 	config, err := load(values)

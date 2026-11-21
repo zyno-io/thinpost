@@ -131,6 +131,8 @@ data:
   THINPOST_OIDC_ADMIN_ROLE: "thinpost-admin"
   THINPOST_OIDC_CLIENT_ID: "thinpost-console"
   THINPOST_OIDC_SCOPES: "openid thinpost-admin"
+  # Optional: serve the console and operator API only on this hostname
+  THINPOST_ADMIN_ORIGIN: "https://thinpost-admin.example.com"
 
   THINPOST_S3_ENDPOINT: "s3.example.com"
   THINPOST_S3_BUCKET: "thinpost-messages"
@@ -142,6 +144,7 @@ data:
 - `THINPOST_LISTEN` must be `:8080`. Its default is `127.0.0.1:8080`, which the probes and the Service cannot reach.
 - The database URL carries no credentials. The chart sets `THINPOST_DATABASE_USERNAME_FILE` and `THINPOST_DATABASE_PASSWORD_FILE`. See [Database](/deploy/database).
 - The OIDC settings are explained in [Operator authentication](/deploy/operator-auth), the S3 settings in [Object storage](/deploy/object-storage).
+- `THINPOST_ADMIN_ORIGIN` is optional. Leave it unset to serve the console on every hostname that reaches the Service. Set it to keep the console off the tracking hostname; see [Tracking](/guide/tracking#keep-the-console-off-the-tracking-hostname).
 
 ### `thinpost-mail-runtime`
 
