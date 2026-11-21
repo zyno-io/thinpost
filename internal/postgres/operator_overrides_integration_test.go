@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/zyno-io/thinpost/internal/acceptance"
-	"github.com/zyno-io/thinpost/internal/delivery"
 	"github.com/zyno-io/thinpost/internal/submission"
 )
 
@@ -301,7 +300,7 @@ func TestClaimReturnsTheRecipientPolicyOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	for remaining := len(want); remaining > 0; remaining-- {
-		claim, claimErr := f.repo.ClaimDelivery(f.ctx, lease, f.id(), delivery.EdgeCapabilities{})
+		claim, claimErr := f.repo.ClaimDelivery(f.ctx, lease, f.id(), claimCaps())
 		if claimErr != nil {
 			t.Fatal(claimErr)
 		}

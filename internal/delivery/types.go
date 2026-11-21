@@ -62,70 +62,62 @@ type Claim struct {
 	// console test send with the recipient allowlist skipped. The dispatch
 	// recheck then does not apply the allowlist; the egress policy still runs.
 	RecipientPolicyOverride bool
-	// The sending IP chosen at claim time. SourceAddress and HeloName are set
-	// only when the worker reported per-delivery sources and the app resolves to
-	// a named IP; both are empty for an app on the worker's primary address with
-	// no named record, and always for a legacy worker. SourceName is the log-safe
-	// name of the app's named IP even then. BounceDomain is the return-path
-	// domain; empty means the global one.
+	// The sending IP chosen at claim time, always from the live session's
+	// report. SourceAddress and HeloName are set only for an app pinned to an
+	// IP; both are empty for an app on the primary address, which the worker
+	// sends from under its own name. SourceName is the log-safe name of the
+	// pinned IP's record. BounceDomain is the return-path domain: the
+	// reported name of the address the delivery leaves from, never empty on a
+	// claim. It stays separate from HeloName so a later change can give an app
+	// its own.
 	SourceAddress, HeloName, SourceName, BounceDomain string
-	// ResolvedAddress is always the address of the sending IP row the claim
-	// joined (the app's pinned IP, or the primary's named record), whatever the
-	// worker's mode; empty when no row joined. The provider checks it against
-	// the worker's reported addresses independently of the claim query.
+	// ResolvedAddress is the address of the app's pinned sending IP; empty for
+	// an app on the primary. The provider checks it against the worker's
+	// reported addresses independently of the claim query.
 	ResolvedAddress string
 }
 
-// EdgeCapabilities is what a worker reported in Ready, or the legacy
-// equivalent for a worker that reported nothing. Explicit is true only when
-// the worker reported source addresses: then Addresses lists them with the
-// primary first and control may name one in a DeliveryStart. Control never
-// sets the DeliveryStart source fields for a legacy worker, which sends only
-// from its primary address and its own hostname. A legacy worker's Addresses
-// and BounceDomains still hold the one address and domain it can serve; they
-// gate the claim.
+// Source is one sending address a worker reported and the name it greets, is
+// reached by and receives bounces under.
+type Source struct {
+	Address  netip.Addr
+	Hostname string
+}
+
+// EdgeCapabilities is what a worker reported in Ready. Sources lists every
+// address it can send from with its name, the primary first; control addresses
+// each delivery from them and never from its own configuration. A worker that
+// reported no sources, or no names for them, has an empty list and is given no
+// deliveries.
 type EdgeCapabilities struct {
-	Explicit      bool
-	Addresses     []netip.Addr
-	BounceDomains []string
-	// Hostnames is the SMTP name each address greets with, parallel to
-	// Addresses. It is empty for a worker that does not report names.
-	Hostnames []string
+	Sources []Source
 	// SubmissionPorts are the SMTP submission ports the worker reported
 	// listening on; nil means it reported none. They only drive a console hint.
 	SubmissionPorts []int
 }
 
-// HostnameFor returns the name the worker reported for address, if any. Control
-// sends it as the HELO name so the HELO, the banner and the PTR agree.
-func (c EdgeCapabilities) HostnameFor(address string) (string, bool) {
-	if len(c.Hostnames) != len(c.Addresses) {
-		return "", false
+// Primary is the source that apps with no assigned sending IP send from.
+func (c EdgeCapabilities) Primary() (Source, bool) {
+	if len(c.Sources) == 0 {
+		return Source{}, false
 	}
-	for i, candidate := range c.Addresses {
-		if candidate.String() == address {
-			return c.Hostnames[i], true
-		}
-	}
-	return "", false
+	return c.Sources[0], true
 }
 
-// Primary is the address that apps with no assigned sending IP send from.
-func (c EdgeCapabilities) Primary() (netip.Addr, bool) {
-	if len(c.Addresses) == 0 {
-		return netip.Addr{}, false
+// Source returns the reported source for address, if any.
+func (c EdgeCapabilities) Source(address string) (Source, bool) {
+	for _, candidate := range c.Sources {
+		if candidate.Address.String() == address {
+			return candidate, true
+		}
 	}
-	return c.Addresses[0], true
+	return Source{}, false
 }
 
 // Has reports whether the worker can send from address.
 func (c EdgeCapabilities) Has(address string) bool {
-	for _, candidate := range c.Addresses {
-		if candidate.String() == address {
-			return true
-		}
-	}
-	return false
+	_, ok := c.Source(address)
+	return ok
 }
 
 // Committed identifies the parent records of a committed delivery result so

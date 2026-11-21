@@ -366,6 +366,7 @@ func newSubmissionRig(t *testing.T, opts rigOptions) *subRig {
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.edge.Advertise([]string{"45.0.1.22"}, []string{"bounce.example.com"}, []string{"bounce.example.com"})
 	if err = r.edge.EnableSubmission(587, 465); err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +389,7 @@ func newSubmissionRig(t *testing.T, opts rigOptions) *subRig {
 	// fake MX.
 	policyAll := &integrationSwitchPolicy{}
 	policyAll.allowed.Store(true)
-	envelopes := &bounceaddress.Service{Repository: r.repo, Domain: "bounce.example.com", ActiveVersion: "v1", Keys: map[string][]byte{"v1": []byte("0123456789abcdef0123456789abcdef")}}
+	envelopes := &bounceaddress.Service{Repository: r.repo, ActiveVersion: "v1", Keys: map[string][]byte{"v1": []byte("0123456789abcdef0123456789abcdef")}}
 	work := &dispatch.Provider{Repository: r.repo, Objects: r.objects, Routes: &mailroute.Resolver{DNS: &integrationMXDNS{}, Filter: integrationMXFilter{}}, Envelopes: envelopes, Recipients: policyAll}
 	r.start = func(controller string, sub Submission) func() {
 		runner := &Runner{WorkerID: "worker", ControllerID: controller, JournalID: journalID, Issuer: &controllease.Issuer{Repository: r.repo, Signer: signer, Identity: controllerIdentity, JournalID: journalID},

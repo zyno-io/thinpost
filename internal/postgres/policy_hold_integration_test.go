@@ -79,7 +79,7 @@ func TestRecipientPolicyHoldPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claim, err := repo.ClaimDelivery(ctx, lease, id(100), delivery.EdgeCapabilities{})
+	claim, err := repo.ClaimDelivery(ctx, lease, id(100), claimCaps())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestRecipientPolicyHoldPostgres(t *testing.T) {
 	if err = owner.QueryRowContext(ctx, `SELECT d.state,m.pending,(SELECT count(*) FROM webhook_events WHERE attempt_id=$1), (SELECT outcome FROM webhook_events WHERE attempt_id=$1) FROM deliveries d JOIN messages m ON m.id=d.message_id WHERE d.id=$2`, claim.AttemptID, deliveryID).Scan(&state, &pending, &count, &event); err != nil || state != "recipient_policy_held" || !pending || count != 1 || event != delivery.OutcomeRecipientPolicyDenied {
 		t.Fatal("hold state, pending or event", state, pending, count, event, err)
 	}
-	if _, err = repo.ClaimDelivery(ctx, lease, id(101), delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+	if _, err = repo.ClaimDelivery(ctx, lease, id(101), claimCaps()); !errors.Is(err, delivery.ErrNoWork) {
 		t.Fatal("held delivery claimed", err)
 	}
 	if err = repo.RetryPolicyHold(ctx, "operator", other, message, deliveryID); !errors.Is(err, admin.ErrNotFound) {
@@ -172,7 +172,7 @@ func TestRecipientPolicyHoldPostgres(t *testing.T) {
 	// More than 12 operator releases and policy denials must not exhaust the
 	// independent SMTP retry budget. The following ordinary rejection retries.
 	for i := 0; i < 12; i++ {
-		claim, err = repo.ClaimDelivery(ctx, lease, id(200+i), delivery.EdgeCapabilities{})
+		claim, err = repo.ClaimDelivery(ctx, lease, id(200+i), claimCaps())
 		if err != nil {
 			t.Fatal("claim after release", i, err)
 		}
@@ -184,7 +184,7 @@ func TestRecipientPolicyHoldPostgres(t *testing.T) {
 			t.Fatal("release", i, err)
 		}
 	}
-	claim, err = repo.ClaimDelivery(ctx, lease, id(300), delivery.EdgeCapabilities{})
+	claim, err = repo.ClaimDelivery(ctx, lease, id(300), claimCaps())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestRecipientPolicyHoldPostgres(t *testing.T) {
 	if _, err = owner.ExecContext(ctx, `UPDATE deliveries SET retry_after=now()-interval '1 second' WHERE id=$1`, deliveryID); err != nil {
 		t.Fatal(err)
 	}
-	claim, err = repo.ClaimDelivery(ctx, lease, id(301), delivery.EdgeCapabilities{})
+	claim, err = repo.ClaimDelivery(ctx, lease, id(301), claimCaps())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestRecipientPolicyHoldPostgres(t *testing.T) {
 		if _, err := repo.ClaimPreparation(ctx, id(403), 30*time.Second); !errors.Is(err, preparation.ErrNoWork) {
 			t.Fatal("inactive app preparation claimed", err)
 		}
-		if _, err := repo.ClaimDelivery(ctx, lease, id(404), delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+		if _, err := repo.ClaimDelivery(ctx, lease, id(404), claimCaps()); !errors.Is(err, delivery.ErrNoWork) {
 			t.Fatal("inactive app delivery claimed", err)
 		}
 		if _, err := owner.ExecContext(ctx, `UPDATE apps SET active=true WHERE id=$1`, other); err != nil {
@@ -306,7 +306,7 @@ func TestRecipientPolicyHoldPostgres(t *testing.T) {
 		if err != nil || prep.MessageID != queued {
 			t.Fatal("active app preparation unavailable", err)
 		}
-		c, err := repo.ClaimDelivery(ctx, lease, id(404), delivery.EdgeCapabilities{})
+		c, err := repo.ClaimDelivery(ctx, lease, id(404), claimCaps())
 		if err != nil || c.DeliveryID != inactiveDelivery {
 			t.Fatal("active app delivery unavailable", err)
 		}
@@ -348,13 +348,13 @@ func TestRecipientPolicyHoldPostgres(t *testing.T) {
 		if _, err = owner.ExecContext(ctx, `UPDATE deliveries SET retry_after=now()-interval '1 second' WHERE id=$1`, inactiveDelivery); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = repo.ClaimDelivery(ctx, lease, id(407), delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+		if _, err = repo.ClaimDelivery(ctx, lease, id(407), claimCaps()); !errors.Is(err, delivery.ErrNoWork) {
 			t.Fatal("inactive queued delivery retried", err)
 		}
 		if _, err = owner.ExecContext(ctx, `UPDATE apps SET active=true WHERE id=$1`, other); err != nil {
 			t.Fatal(err)
 		}
-		c, err = repo.ClaimDelivery(ctx, lease, id(407), delivery.EdgeCapabilities{})
+		c, err = repo.ClaimDelivery(ctx, lease, id(407), claimCaps())
 		if err != nil {
 			t.Fatal("reactivated delivery unavailable", err)
 		}

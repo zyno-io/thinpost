@@ -17,12 +17,16 @@ import (
 // Expired or disconnected in-flight attempts are not automatically retried:
 // journal reconciliation must first establish what the worker did.
 //
-// caps is what the connected worker can send from. A delivery whose sending IP
-// (or that IP's bounce domain) the worker did not report is never claimed: it
-// stays queued rather than being sent from another address.
+// caps is what the connected worker reported it can send from; each claim is
+// addressed from it. A delivery whose pinned sending IP the worker did not
+// report is never claimed: it stays queued rather than being sent from another
+// address. A worker that reported no sources is given no work at all.
 func (r *Repository) ClaimDelivery(ctx context.Context, lease ControllerLease, attemptID string, caps delivery.EdgeCapabilities) (delivery.Claim, error) {
 	if !leaseID(lease.WorkerID) || !leaseID(lease.ControllerID) || lease.Epoch == 0 || !opaqueID(attemptID) {
 		return delivery.Claim{}, errors.New("invalid delivery claim")
+	}
+	if len(caps.Sources) == 0 {
+		return delivery.Claim{}, delivery.ErrNoWork
 	}
 	// A suppressed delivery is resolved without work for the Edge. Claim again
 	// in a fresh transaction, bounded, instead of idling for the poll interval.
@@ -66,34 +70,33 @@ func (r *Repository) claimDeliveryOnce(ctx context.Context, lease ControllerLeas
 	var trackingCutoff sql.NullTime
 	var firstAttempt sql.NullTime
 	var suppression sql.NullString
-	var ipID, ipName, ipAddress, ipHelo, ipBounce sql.NullString
+	var ipID, ipName, ipAddress sql.NullString
 	var now time.Time
-	// Apps with no assigned sending IP use the worker's primary address; a
-	// named record for it supplies the bounce domain (and the HELO name, for a
-	// worker that takes per-delivery sources). A legacy worker's primary is
-	// control's own configuration; its record is joined and gated on its bounce
-	// domain exactly like an app pinned to that record, so both behave alike.
-	var primary any
-	if address, ok := caps.Primary(); ok {
-		primary = address.String()
+	// Every delivery is addressed from the live session's report: the HELO and
+	// bounce domain are the reported name of the address it leaves from. An app
+	// pinned to an IP is claimed only while that address is reported, and waits
+	// otherwise; it is never sent from another. An unpinned app uses the
+	// primary. A worker that reported no sources (or no names) is given nothing.
+	primary, ok := caps.Primary()
+	if !ok {
+		return claim, false, delivery.ErrNoWork
 	}
-	addresses := make([]string, 0, len(caps.Addresses))
-	for _, address := range caps.Addresses {
-		addresses = append(addresses, address.String())
+	addresses := make([]string, 0, len(caps.Sources))
+	for _, source := range caps.Sources {
+		addresses = append(addresses, source.Address.String())
 	}
-	bounceDomains := append([]string{}, caps.BounceDomains...)
 	err = tx.QueryRowContext(ctx, `SELECT d.id,d.message_id,m.app_id,m.object_key,d.final_object_key,d.recipient_index,m.enhanced_protection,m.accepted_at,d.route_attempts,m.recipient_policy_override,
 		EXISTS (SELECT 1 FROM tracking_objects t WHERE t.delivery_id=d.id AND (t.object_key IS NULL OR t.revoked_at IS NOT NULL OR (t.expires_at IS NOT NULL AND (t.post_send_validity_seconds IS NULL OR t.expires_at-t.post_send_validity_seconds*interval '1 second'<=clock_timestamp()+$1*interval '1 millisecond')))),
 		(SELECT expires_at-post_send_validity_seconds*interval '1 second' FROM tracking_objects t WHERE t.delivery_id=d.id),
 		(SELECT min(a.started_at) FROM delivery_attempts a WHERE a.delivery_id=d.id AND a.outcome IS DISTINCT FROM 'recipient_policy_denied'),clock_timestamp(),
 		(SELECT s.reason FROM message_recipients r JOIN suppressions s ON s.app_id=r.app_id AND s.address_lower=r.address_lower
 			WHERE r.message_id=d.message_id AND r.recipient_index=d.recipient_index),
-		ip.id,ip.name,host(ip.address),ip.helo_name,ip.bounce_domain
+		ip.id,ip.name,host(ip.address)
 		FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN apps app ON app.id=m.app_id
-		LEFT JOIN sending_ips ip ON ip.id=app.sending_ip_id OR (app.sending_ip_id IS NULL AND host(ip.address)=$2::text)
+		LEFT JOIN sending_ips ip ON ip.id=app.sending_ip_id
 		WHERE app.active AND d.state='queued' AND d.retry_after<=clock_timestamp()
-		AND (ip.id IS NULL OR (host(ip.address)=ANY($3::text[]) AND ip.bounce_domain=ANY($4::text[])))
-		ORDER BY d.retry_after,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1`, delivery.TrackingMinimumRemaining.Milliseconds(), primary, addresses, bounceDomains).Scan(&claim.DeliveryID, &claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.FinalKey, &claim.RecipientIndex, &claim.EnhancedProtection, &claim.AcceptedAt, &claim.RouteAttempt, &claim.RecipientPolicyOverride, &trackingUnavailable, &trackingCutoff, &firstAttempt, &now, &suppression, &ipID, &ipName, &ipAddress, &ipHelo, &ipBounce)
+		AND (app.sending_ip_id IS NULL OR host(ip.address)=ANY($2::text[]))
+		ORDER BY d.retry_after,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1`, delivery.TrackingMinimumRemaining.Milliseconds(), addresses).Scan(&claim.DeliveryID, &claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.FinalKey, &claim.RecipientIndex, &claim.EnhancedProtection, &claim.AcceptedAt, &claim.RouteAttempt, &claim.RecipientPolicyOverride, &trackingUnavailable, &trackingCutoff, &firstAttempt, &now, &suppression, &ipID, &ipName, &ipAddress)
 	if errors.Is(err, sql.ErrNoRows) {
 		return claim, false, delivery.ErrNoWork
 	}
@@ -114,19 +117,17 @@ func (r *Repository) claimDeliveryOnce(ctx context.Context, lease ControllerLeas
 		}
 	}
 	// The address recorded is the one the worker is asked to send from; NULL
-	// means its primary (or a worker that reports no sources).
+	// means its primary, which it uses when the start names no source.
 	var sourceAddress any
+	claim.BounceDomain = primary.Hostname
 	if ipID.Valid {
-		claim.SourceName, claim.BounceDomain, claim.ResolvedAddress = ipName.String, ipBounce.String, ipAddress.String
-		if caps.Explicit {
-			claim.SourceAddress, claim.HeloName = ipAddress.String, ipHelo.String
-			// The name the Edge reports for the address is the one it greets
-			// with and the one its PTR carries; prefer it over the stored name.
-			if name, ok := caps.HostnameFor(ipAddress.String); ok {
-				claim.HeloName = name
-			}
-			sourceAddress = ipAddress.String
+		source, ok := caps.Source(ipAddress.String)
+		if !ok {
+			return claim, false, errors.New("claimed sending IP is not reported by the worker")
 		}
+		claim.SourceName, claim.ResolvedAddress = ipName.String, ipAddress.String
+		claim.SourceAddress, claim.HeloName, claim.BounceDomain = ipAddress.String, source.Hostname, source.Hostname
+		sourceAddress = ipAddress.String
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO delivery_attempts(id,delivery_id,worker_id,epoch,start_authorized,source_address) VALUES ($1,$2,$3,$4,false,$5::text::inet)`, attemptID, claim.DeliveryID, lease.WorkerID, lease.Epoch, sourceAddress); err != nil {
 		return claim, false, err

@@ -87,9 +87,6 @@ type Runner struct {
 	Bounces                             Bounces
 	Connect                             ConnectFunc
 	LeaseTTL, ClockMargin, PollInterval time.Duration
-	// Legacy is what a worker that reports no sources can serve: its primary
-	// address (control's own configuration) and the global bounce domain.
-	Legacy delivery.EdgeCapabilities
 	// Sources is optional. When set, an Edge whose Ready reports a source the
 	// policy refuses (outside the infrastructure ranges, or named by a route
 	// exception) is refused like any invalid Ready. The Edge applies no
@@ -338,8 +335,9 @@ func (r *Runner) RunDraining(parent context.Context, drain <-chan struct{}) erro
 		}()
 		return true
 	}
-	// caps is set from Ready, before any work is requested.
-	caps := r.Legacy
+	// caps is set from Ready, before any work is requested. Until then, and for
+	// a Ready that reports no sources or names, it is empty and nothing is claimed.
+	caps := delivery.EdgeCapabilities{}
 	startWork := func() {
 		if !draining {
 			select {
@@ -430,11 +428,11 @@ func (r *Runner) RunDraining(parent context.Context, drain <-chan struct{}) erro
 				if ready || body.Ready.GetWorkerId() != r.WorkerID || body.Ready.GetJournalId() != r.JournalID || body.Ready.GetEpoch() != lease.Epoch || body.Ready.GetSessionId() != sessionID || body.Ready.GetProtocolVersion() != edgeprotocol.Version {
 					return errors.New("invalid edge readiness")
 				}
-				reported, valid := capabilitiesFromReady(body.Ready, r.Legacy)
+				reported, valid := capabilitiesFromReady(body.Ready)
 				if !valid || !edgeprotocol.ValidCapabilities(body.Ready.GetCapabilities()) {
 					return errors.New("invalid edge readiness")
 				}
-				if r.Sources != nil && reported.Explicit && r.Sources.CheckSources(reported.Addresses) != nil {
+				if r.Sources != nil && len(reported.Sources) > 0 && r.Sources.CheckSources(sourceAddresses(reported.Sources)) != nil {
 					return errors.New("invalid edge readiness")
 				}
 				inboundOn = r.Inbound != nil && edgeprotocol.HasCapability(body.Ready.GetCapabilities(), edgeprotocol.CapInbound)
@@ -969,15 +967,28 @@ const (
 	maxReportedBounceDomains = 24
 )
 
-// capabilitiesFromReady validates a worker's reported sources, their optional
-// SMTP names (absent, or one per source), and bounce domains. No sources means a legacy worker, which gets legacy. Reported
-// sources must be unique, literal, canonical public IPv4 addresses; the first is
-// the primary. Bounce domains must be normalized and unique, and a worker that
-// reports domains without sources is malformed.
-func capabilitiesFromReady(ready *controlv1.Ready, legacy delivery.EdgeCapabilities) (delivery.EdgeCapabilities, bool) {
+func sourceAddresses(sources []delivery.Source) []netip.Addr {
+	addresses := make([]netip.Addr, len(sources))
+	for i, source := range sources {
+		addresses[i] = source.Address
+	}
+	return addresses
+}
+
+// capabilitiesFromReady validates a worker's reported sources, the SMTP name of
+// each (parallel to the sources), and its bounce domains. Reported sources must
+// be unique, literal, canonical public IPv4 addresses; the first is the
+// primary. Names must be normalized and unique. A worker that reports no
+// sources, or sources without names, is still valid (its session serves replay,
+// bounces, inbound and submission) but yields no capabilities, so nothing is
+// claimed for it: control never addresses a delivery from anything but the
+// worker's own report. Bounce domains are checked for form and otherwise
+// ignored; a source's name is its bounce domain. Names without sources, or a
+// different count of names, are malformed.
+func capabilitiesFromReady(ready *controlv1.Ready) (delivery.EdgeCapabilities, bool) {
 	sources, domains, hostnames := ready.GetSourceAddresses(), ready.GetBounceDomains(), ready.GetSourceHostnames()
 	if len(sources) == 0 {
-		return legacy, len(domains) == 0 && len(hostnames) == 0
+		return delivery.EdgeCapabilities{}, len(domains) == 0 && len(hostnames) == 0
 	}
 	if len(hostnames) != 0 && len(hostnames) != len(sources) {
 		return delivery.EdgeCapabilities{}, false
@@ -985,7 +996,7 @@ func capabilitiesFromReady(ready *controlv1.Ready, legacy delivery.EdgeCapabilit
 	if len(sources) > maxReportedSources || len(domains) > maxReportedBounceDomains {
 		return delivery.EdgeCapabilities{}, false
 	}
-	caps := delivery.EdgeCapabilities{Explicit: true}
+	addresses := make([]netip.Addr, 0, len(sources))
 	seen := make(map[netip.Addr]struct{}, len(sources))
 	for _, value := range sources {
 		address, err := netip.ParseAddr(value)
@@ -996,7 +1007,7 @@ func capabilitiesFromReady(ready *controlv1.Ready, legacy delivery.EdgeCapabilit
 			return delivery.EdgeCapabilities{}, false
 		}
 		seen[address] = struct{}{}
-		caps.Addresses = append(caps.Addresses, address)
+		addresses = append(addresses, address)
 	}
 	seenHostnames := make(map[string]struct{}, len(hostnames))
 	for _, name := range hostnames {
@@ -1008,7 +1019,6 @@ func capabilitiesFromReady(ready *controlv1.Ready, legacy delivery.EdgeCapabilit
 			return delivery.EdgeCapabilities{}, false
 		}
 		seenHostnames[name] = struct{}{}
-		caps.Hostnames = append(caps.Hostnames, name)
 	}
 	seenDomains := make(map[string]struct{}, len(domains))
 	for _, domain := range domains {
@@ -1020,7 +1030,13 @@ func capabilitiesFromReady(ready *controlv1.Ready, legacy delivery.EdgeCapabilit
 			return delivery.EdgeCapabilities{}, false
 		}
 		seenDomains[domain] = struct{}{}
-		caps.BounceDomains = append(caps.BounceDomains, domain)
+	}
+	if len(hostnames) == 0 {
+		return delivery.EdgeCapabilities{}, true
+	}
+	caps := delivery.EdgeCapabilities{Sources: make([]delivery.Source, len(addresses))}
+	for i, address := range addresses {
+		caps.Sources[i] = delivery.Source{Address: address, Hostname: hostnames[i]}
 	}
 	return caps, true
 }

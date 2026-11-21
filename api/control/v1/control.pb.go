@@ -1154,8 +1154,9 @@ type Ready struct {
 	// frames; a worker without it never receives them.
 	Capabilities []string `protobuf:"bytes,8,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	// Additive: the SMTP name each source address greets and sends HELO with, one
-	// per source_addresses entry in the same order. Absent from an older worker;
-	// control then uses the name it has stored for the address.
+	// per source_addresses entry in the same order. Control addresses every
+	// delivery from these names (HELO and bounce domain); a worker that reports
+	// none receives no deliveries.
 	SourceHostnames []string `protobuf:"bytes,9,rep,name=source_hostnames,json=sourceHostnames,proto3" json:"source_hostnames,omitempty"`
 	// Additive (submission/1): public ports on which this worker currently accepts
 	// AUTH (465, 587). Observed availability only: never used to tell clients

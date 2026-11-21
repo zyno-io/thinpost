@@ -14,7 +14,6 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/zyno-io/thinpost/internal/delivery"
 	"github.com/zyno-io/thinpost/internal/postgres"
 	"github.com/zyno-io/thinpost/internal/submission"
 )
@@ -101,7 +100,7 @@ func TestNextAfterSuppressedDeliveryKeepsCallerAttemptID(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &Provider{Repository: repo, Objects: sourceObjects{source}, Routes: routes{}, Envelopes: envelopes{}, Recipients: allowRecipients(true)}
-	start, mime, err := p.Next(ctx, lease, delivery.EdgeCapabilities{})
+	start, mime, err := p.Next(ctx, lease, primaryCaps())
 	if err != nil || start == nil || start.DeliveryId != clean || len(mime) == 0 {
 		t.Fatal("clean delivery after a suppressed one was not dispatched", start, err)
 	}

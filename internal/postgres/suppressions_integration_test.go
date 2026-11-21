@@ -213,7 +213,7 @@ func TestSuppressionsPostgres(t *testing.T) {
 		clearMessage, clearDeliveries := message("clear@example.com")
 		exec(`UPDATE deliveries SET retry_after=now()-interval '1 minute' WHERE id=$1`, clearDeliveries[0])
 		claimID := id()
-		claim, err := repo.ClaimDelivery(ctx, lease, claimID, delivery.EdgeCapabilities{})
+		claim, err := repo.ClaimDelivery(ctx, lease, claimID, claimCaps())
 		if err != nil || claim.DeliveryID != clearDeliveries[0] || claim.MessageID != clearMessage || claim.AttemptID != claimID {
 			t.Fatal("claim must skip suppressed deliveries", claim, err)
 		}
@@ -267,7 +267,7 @@ func TestSuppressionsPostgres(t *testing.T) {
 		mixed, mixedDeliveries := message("blocked@example.com", "ok@example.com")
 		exec(`UPDATE deliveries SET retry_after=now()-interval '1 second' WHERE message_id=$1`, mixed)
 		nextID := id()
-		next, err := repo.ClaimDelivery(ctx, lease, nextID, delivery.EdgeCapabilities{})
+		next, err := repo.ClaimDelivery(ctx, lease, nextID, claimCaps())
 		if err != nil || next.DeliveryID != mixedDeliveries[1] || next.AttemptID != nextID {
 			t.Fatal("mixed claim", next, err)
 		}
@@ -279,7 +279,7 @@ func TestSuppressionsPostgres(t *testing.T) {
 		// A pre-schema-28 message has no recipient rows: sent as before.
 		legacy, _ := message()
 		exec(`INSERT INTO deliveries(id,message_id,recipient_index,final_object_key,retry_after) VALUES ($1,$2,0,$3,now()-interval '1 second')`, id(), legacy, "signed-"+legacy)
-		legacyClaim, err := repo.ClaimDelivery(ctx, lease, id(), delivery.EdgeCapabilities{})
+		legacyClaim, err := repo.ClaimDelivery(ctx, lease, id(), claimCaps())
 		if err != nil || legacyClaim.MessageID != legacy {
 			t.Fatal("legacy message without recipient rows", legacyClaim, err)
 		}
@@ -288,7 +288,7 @@ func TestSuppressionsPostgres(t *testing.T) {
 	t.Run("suppression added mid-flight does not affect the attempt", func(t *testing.T) {
 		m, ds := message("midflight@example.com")
 		exec(`UPDATE deliveries SET retry_after=now()-interval '1 second' WHERE id=$1`, ds[0])
-		claim, err := repo.ClaimDelivery(ctx, lease, id(), delivery.EdgeCapabilities{})
+		claim, err := repo.ClaimDelivery(ctx, lease, id(), claimCaps())
 		if err != nil || claim.DeliveryID != ds[0] {
 			t.Fatal("claim", claim, err)
 		}
@@ -361,14 +361,14 @@ func TestSuppressionClaimPassLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = repo.ClaimDelivery(ctx, lease, id(), delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+	if _, err = repo.ClaimDelivery(ctx, lease, id(), claimCaps()); !errors.Is(err, delivery.ErrNoWork) {
 		t.Fatal("first call", err)
 	}
 	var queued, failed int
 	if err = db.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE state='queued'),count(*) FILTER (WHERE state='failed') FROM deliveries`).Scan(&queued, &failed); err != nil || queued != 1 || failed != 32 {
 		t.Fatal("pass limit", queued, failed, err)
 	}
-	if _, err = repo.ClaimDelivery(ctx, lease, id(), delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+	if _, err = repo.ClaimDelivery(ctx, lease, id(), claimCaps()); !errors.Is(err, delivery.ErrNoWork) {
 		t.Fatal("second call", err)
 	}
 	if err = db.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE state='queued'),count(*) FILTER (WHERE state='failed') FROM deliveries`).Scan(&queued, &failed); err != nil || queued != 0 || failed != 33 {

@@ -1112,7 +1112,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if _, err = repo.RenewControllerLease(ctx, reconnected, 30*time.Second); !errors.Is(err, ErrLeaseHeld) {
 			t.Fatal("stale session renewed", err)
 		}
-		if _, err = repo.ClaimDelivery(ctx, reconnected, "00000000000000000000000000000abc", delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrLeaseInvalid) {
+		if _, err = repo.ClaimDelivery(ctx, reconnected, "00000000000000000000000000000abc", claimCaps()); !errors.Is(err, delivery.ErrLeaseInvalid) {
 			t.Fatal("stale session claimed delivery", err)
 		}
 		if _, err = db.ExecContext(ctx, `UPDATE controller_leases SET expires_at=clock_timestamp()-interval '1 second' WHERE worker_id='reconnect-worker'`); err != nil {
@@ -1240,10 +1240,10 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		}
 		stale := lease
 		stale.Epoch = 1
-		if _, err = repo.ClaimDelivery(ctx, stale, "00000000000000000000000000000101", delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrLeaseInvalid) {
+		if _, err = repo.ClaimDelivery(ctx, stale, "00000000000000000000000000000101", claimCaps()); !errors.Is(err, delivery.ErrLeaseInvalid) {
 			t.Fatalf("stale lease: %v", err)
 		}
-		claim, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000101", delivery.EdgeCapabilities{})
+		claim, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000101", claimCaps())
 		if err != nil || !claim.EnhancedProtection {
 			t.Fatalf("delivery claim: %+v %v", claim, err)
 		}
@@ -1273,9 +1273,9 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if err = repo.AuthorizeDeliveryStart(ctx, lease, claim.AttemptID, claim.DeliveryID, "00000000000000000000000000000aab", "0123456789abcdef0123456789abcdef", descriptor, 0); !errors.Is(err, delivery.ErrResultConflict) {
 			t.Fatal("different session authorized", err)
 		}
-		bounce := &bounceaddress.Service{Repository: repo, Domain: "bounce.example.com", ActiveVersion: "old", Keys: map[string][]byte{"old": []byte("0123456789abcdef0123456789abcdef")}}
+		bounce := &bounceaddress.Service{Repository: repo, ActiveVersion: "old", Keys: map[string][]byte{"old": []byte("0123456789abcdef0123456789abcdef")}}
 		address, err := bounce.ForDelivery(ctx, claim)
-		if err != nil || len(address) != len("b+0123456789abcdef0123456789abcdef@bounce.example.com") {
+		if err != nil || claim.BounceDomain != "mx.example.net" || len(address) != len("b+0123456789abcdef0123456789abcdef@")+len(claim.BounceDomain) || !strings.HasSuffix(address, "@"+claim.BounceDomain) {
 			t.Fatalf("bounce address: %q %v", address, err)
 		}
 		token := address[2:34]
@@ -1464,7 +1464,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if err = db.QueryRowContext(ctx, `SELECT state FROM deliveries WHERE id=$1`, claim.DeliveryID).Scan(&state); err != nil || state != "accepted" {
 			t.Fatal("delivery not accepted")
 		}
-		second, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000102", delivery.EdgeCapabilities{})
+		second, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000102", claimCaps())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1481,7 +1481,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if err = repo.CommitDeliveryResult(ctx, unknown); err != nil {
 			t.Fatal("recovered uncertainty replay", err)
 		}
-		if _, err = repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000103", delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+		if _, err = repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000103", claimCaps()); !errors.Is(err, delivery.ErrNoWork) {
 			t.Fatal("uncertain delivery retried without reconciliation")
 		}
 	})
@@ -1694,7 +1694,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		}
 		for i := 1; i <= maxDeliveryAttempts; i++ {
 			attempt := fmt.Sprintf("%032x", 3000+i)
-			claim, err := repo.ClaimDelivery(ctx, lease, attempt, delivery.EdgeCapabilities{})
+			claim, err := repo.ClaimDelivery(ctx, lease, attempt, claimCaps())
 			if err != nil {
 				t.Fatal("claim", i, err)
 			}
@@ -1729,14 +1729,14 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 				t.Fatal("attempt limit did not fail delivery")
 			}
 		}
-		if _, err = repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000ffe", delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+		if _, err = repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000ffe", claimCaps()); !errors.Is(err, delivery.ErrNoWork) {
 			t.Fatal("exhausted delivery retried", err)
 		}
 		const prepDelivery = "00000000000000000000000000000804"
 		if _, err = db.ExecContext(ctx, `INSERT INTO deliveries(id,message_id,recipient_index,final_object_key) VALUES ($1,$2,1,'final/preparation-retry')`, prepDelivery, message); err != nil {
 			t.Fatal(err)
 		}
-		claim, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000805", delivery.EdgeCapabilities{})
+		claim, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000805", claimCaps())
 		if err != nil || claim.RouteAttempt != 0 {
 			t.Fatal("preparation claim", err)
 		}
@@ -1747,7 +1747,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if _, err = db.ExecContext(ctx, `UPDATE deliveries SET retry_after=clock_timestamp()-interval '1 second' WHERE id=$1`, prepDelivery); err != nil {
 			t.Fatal(err)
 		}
-		retry, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000806", delivery.EdgeCapabilities{})
+		retry, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000806", claimCaps())
 		if err != nil || retry.RouteAttempt != 0 {
 			t.Fatal("preparation failure advanced route", retry.RouteAttempt, err)
 		}
@@ -1770,7 +1770,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		claim, err := repo.ClaimDelivery(ctx, lease, "cb935c4f9d134210bacdff0a570ab904", delivery.EdgeCapabilities{})
+		claim, err := repo.ClaimDelivery(ctx, lease, "cb935c4f9d134210bacdff0a570ab904", claimCaps())
 		if err != nil || claim.DeliveryID != deliveryID {
 			t.Fatal("claim", claim, err)
 		}
@@ -1793,7 +1793,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if _, err = db.ExecContext(ctx, `UPDATE deliveries SET retry_after=clock_timestamp()-interval '1 second' WHERE id=$1`, deliveryID); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = repo.ClaimDelivery(ctx, lease, expiredAttempt, delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+		if _, err = repo.ClaimDelivery(ctx, lease, expiredAttempt, claimCaps()); !errors.Is(err, delivery.ErrNoWork) {
 			t.Fatal("expired delivery dispatched", err)
 		}
 		var outcome string
@@ -1823,7 +1823,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		claim, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000e04", delivery.EdgeCapabilities{})
+		claim, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000e04", claimCaps())
 		if err != nil || claim.DeliveryID != deliveryID || claim.RouteAttempt != 0 {
 			t.Fatal("first route claim", claim, err)
 		}
@@ -1847,7 +1847,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if _, err = db.ExecContext(ctx, `UPDATE deliveries SET retry_after=clock_timestamp()-interval '1 second' WHERE id=$1`, deliveryID); err != nil {
 			t.Fatal(err)
 		}
-		next, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000e05", delivery.EdgeCapabilities{})
+		next, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000e05", claimCaps())
 		if err != nil || next.DeliveryID != deliveryID || next.RouteAttempt != 1 {
 			t.Fatal("retry did not advance route", next, err)
 		}
@@ -1884,7 +1884,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 			if _, err = db.ExecContext(ctx, `INSERT INTO deliveries(id,message_id,recipient_index,final_object_key) VALUES ($1,$2,$3,$4)`, deliveryID, message, i, "final/"+deliveryID); err != nil {
 				t.Fatal(err)
 			}
-			claim, err := repo.ClaimDelivery(ctx, lease, attemptID, delivery.EdgeCapabilities{})
+			claim, err := repo.ClaimDelivery(ctx, lease, attemptID, claimCaps())
 			if err != nil || claim.DeliveryID != deliveryID {
 				t.Fatal("claim", claim.DeliveryID, err)
 			}
@@ -1900,7 +1900,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 			if err = db.QueryRowContext(ctx, `SELECT d.state,e.outcome,e.smtp_code,COALESCE(e.delivery_state,'') FROM deliveries d JOIN webhook_events e ON e.delivery_id=d.id WHERE d.id=$1`, deliveryID).Scan(&state, &eventOutcome, &code, &eventState); err != nil || state != "failed" || eventState != "failed" || eventOutcome != outcome || code != 0 {
 				t.Fatal("incorrect durable local failure", state, eventOutcome, code, err)
 			}
-			if _, err = repo.ClaimDelivery(ctx, lease, fmt.Sprintf("%032x", 4200+i), delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+			if _, err = repo.ClaimDelivery(ctx, lease, fmt.Sprintf("%032x", 4200+i), claimCaps()); !errors.Is(err, delivery.ErrNoWork) {
 				t.Fatal("permanent DNS result was retried", err)
 			}
 		}
@@ -1908,7 +1908,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if _, err = db.ExecContext(ctx, `INSERT INTO deliveries(id,message_id,recipient_index,final_object_key) VALUES ($1,$2,2,'final/dns-authorized')`, sentID, message); err != nil {
 			t.Fatal(err)
 		}
-		claim, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000d04", delivery.EdgeCapabilities{})
+		claim, err := repo.ClaimDelivery(ctx, lease, "00000000000000000000000000000d04", claimCaps())
 		if err != nil {
 			t.Fatal(err)
 		}

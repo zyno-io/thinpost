@@ -15,27 +15,31 @@ func readyWithNames(sources, names, domains []string) *controlv1.Ready {
 
 func TestReadyReportsPerAddressHostnames(t *testing.T) {
 	sources := []string{"45.0.1.22", "45.0.2.11"}
-	caps, valid := capabilitiesFromReady(readyWithNames(sources, []string{"smtp.mx.example", "smtp.hosting.example"}, []string{"b.example", "smtp.hosting.example"}), legacyCaps)
-	if !valid || !caps.Explicit || len(caps.Hostnames) != 2 {
+	caps, valid := capabilitiesFromReady(readyWithNames(sources, []string{"smtp.mx.example", "smtp.hosting.example"}, []string{"b.example", "smtp.hosting.example"}))
+	if !valid || len(caps.Sources) != 2 {
 		t.Fatalf("valid names rejected: %+v %v", caps, valid)
 	}
-	if name, ok := caps.HostnameFor("45.0.2.11"); !ok || name != "smtp.hosting.example" {
-		t.Fatalf("hostname for the second address: %q %v", name, ok)
+	if source, ok := caps.Source("45.0.2.11"); !ok || source.Hostname != "smtp.hosting.example" {
+		t.Fatalf("source for the second address: %+v %v", source, ok)
 	}
-	if _, ok := caps.HostnameFor("203.0.113.9"); ok {
-		t.Fatal("a name for an address the worker did not report")
+	if primary, ok := caps.Primary(); !ok || primary.Address.String() != "45.0.1.22" || primary.Hostname != "smtp.mx.example" {
+		t.Fatalf("primary: %+v %v", primary, ok)
+	}
+	if _, ok := caps.Source("203.0.113.9"); ok {
+		t.Fatal("a source for an address the worker did not report")
 	}
 }
 
-// An older Edge reports addresses without names; control keeps using the name it
-// has stored for the address.
-func TestReadyWithoutHostnamesStaysCompatible(t *testing.T) {
-	caps, valid := capabilitiesFromReady(readyWithNames([]string{"45.0.1.22", "45.0.0.10"}, nil, []string{"b.example"}), legacyCaps)
-	if !valid || !caps.Explicit || len(caps.Hostnames) != 0 {
-		t.Fatalf("an Edge without names was not accepted as before: %+v %v", caps, valid)
+// An Edge that reports addresses without names is accepted, so its session
+// runs, but control invents no name: it yields no sources and nothing is
+// claimed for it.
+func TestReadyWithoutHostnamesYieldsNoSources(t *testing.T) {
+	caps, valid := capabilitiesFromReady(readyWithNames([]string{"45.0.1.22", "45.0.0.10"}, nil, []string{"b.example"}))
+	if !valid || len(caps.Sources) != 0 {
+		t.Fatalf("an Edge without names was not accepted without sources: %+v %v", caps, valid)
 	}
-	if _, ok := caps.HostnameFor("45.0.0.10"); ok {
-		t.Fatal("a name was invented for an Edge that reported none")
+	if _, ok := caps.Primary(); ok || caps.Has("45.0.0.10") {
+		t.Fatal("a source was invented for an Edge that reported no names")
 	}
 }
 
@@ -55,12 +59,12 @@ func TestReadyHostnamesAreValidated(t *testing.T) {
 		"names without addresses":    readyWithNames(nil, []string{"smtp.a.example"}, nil),
 		"more domains than the cap":  readyWithNames(sources, []string{"smtp.a.example", "smtp.b.example"}, many),
 	} {
-		if _, valid := capabilitiesFromReady(ready, legacyCaps); valid {
+		if _, valid := capabilitiesFromReady(ready); valid {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 	// Exactly the cap is fine.
-	if _, valid := capabilitiesFromReady(readyWithNames(sources, []string{"smtp.a.example", "smtp.b.example"}, many[:maxReportedBounceDomains]), legacyCaps); !valid {
+	if _, valid := capabilitiesFromReady(readyWithNames(sources, []string{"smtp.a.example", "smtp.b.example"}, many[:maxReportedBounceDomains])); !valid {
 		t.Error("exactly the domain cap was rejected")
 	}
 }

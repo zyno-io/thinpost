@@ -2,6 +2,7 @@ package controlsession
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"net/netip"
 	"strings"
@@ -47,15 +48,13 @@ func (r *recordingReports) RecordEdgeSources(_ context.Context, _ postgres.Contr
 	return r.err
 }
 
-var legacyCaps = delivery.EdgeCapabilities{Addresses: []netip.Addr{netip.MustParseAddr("45.0.1.22")}, BounceDomains: []string{"bounce.example.net"}}
-
 // pullOnce drives a session through Ready, replay and one Pull, and returns the
 // capabilities the work source saw.
 func pullOnce(t *testing.T, ready func(*controlv1.Ready), reports *recordingReports) delivery.EdgeCapabilities {
 	t.Helper()
 	work := &capsWork{seen: make(chan struct{}, 1)}
 	runner, out, in := setupRunner(&fakeIssuer{}, &fakeResults{})
-	runner.Work, runner.Legacy = work, legacyCaps
+	runner.Work = work
 	if reports != nil {
 		runner.Reports = reports
 	}
@@ -85,32 +84,119 @@ func pullOnce(t *testing.T, ready func(*controlv1.Ready), reports *recordingRepo
 	return work.caps[0]
 }
 
-func TestReadyWithoutSourcesIsLegacy(t *testing.T) {
+// An old-shape Ready (no sources, no names) is valid and keeps the session, but
+// control has nothing to address a delivery from, so it claims nothing.
+func TestReadyWithoutSourcesYieldsNoCapabilities(t *testing.T) {
 	caps := pullOnce(t, func(*controlv1.Ready) {}, nil)
-	if caps.Explicit || len(caps.Addresses) != 1 || caps.Addresses[0] != legacyCaps.Addresses[0] || len(caps.BounceDomains) != 1 || caps.BounceDomains[0] != "bounce.example.net" {
-		t.Fatalf("legacy capabilities %+v", caps)
+	if len(caps.Sources) != 0 {
+		t.Fatalf("capabilities from a Ready that reported nothing: %+v", caps)
+	}
+	if _, ok := caps.Primary(); ok {
+		t.Fatal("a primary from a Ready that reported nothing")
 	}
 }
 
-func TestReadyWithSourcesIsExplicit(t *testing.T) {
+// Sources without names (an edge that predates reporting them) are as good as
+// none: the session runs, but nothing may be claimed.
+func TestReadyWithSourcesButNoNamesYieldsNoCapabilities(t *testing.T) {
+	caps := pullOnce(t, func(r *controlv1.Ready) {
+		r.SourceAddresses = []string{"45.0.1.22", "45.0.0.10"}
+		r.BounceDomains = []string{"bounce.example.net"}
+	}, nil)
+	if len(caps.Sources) != 0 {
+		t.Fatalf("capabilities from a Ready with no names: %+v", caps)
+	}
+}
+
+func TestReadyWithSourcesAndNames(t *testing.T) {
 	reports := &recordingReports{done: make(chan struct{})}
 	caps := pullOnce(t, func(r *controlv1.Ready) {
 		r.SourceAddresses = []string{"45.0.1.22", "45.0.0.10"}
-		r.BounceDomains = []string{"bounce.example.net", "bounce.hosting.example.org"}
+		r.SourceHostnames = []string{"mx.example.net", "smtp.hosting.example.org"}
+		// Only checked for form; the names are the bounce domains.
+		r.BounceDomains = []string{"unrelated.example.net"}
 	}, reports)
-	if !caps.Explicit || len(caps.Addresses) != 2 || caps.Addresses[0].String() != "45.0.1.22" || caps.Addresses[1].String() != "45.0.0.10" || len(caps.BounceDomains) != 2 {
-		t.Fatalf("explicit capabilities %+v", caps)
+	if len(caps.Sources) != 2 || caps.Sources[0].Address.String() != "45.0.1.22" || caps.Sources[0].Hostname != "mx.example.net" || caps.Sources[1].Address.String() != "45.0.0.10" || caps.Sources[1].Hostname != "smtp.hosting.example.org" {
+		t.Fatalf("capabilities %+v", caps)
 	}
-	if primary, ok := caps.Primary(); !ok || primary.String() != "45.0.1.22" || !caps.Has("45.0.0.10") || caps.Has("45.0.0.11") {
+	if primary, ok := caps.Primary(); !ok || primary.Address.String() != "45.0.1.22" || !caps.Has("45.0.0.10") || caps.Has("45.0.0.11") {
 		t.Fatal("capability accessors")
+	}
+	if source, ok := caps.Source("45.0.0.10"); !ok || source.Hostname != "smtp.hosting.example.org" {
+		t.Fatal("source lookup")
 	}
 	select {
 	case <-reports.done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the report was not recorded")
 	}
-	if len(reports.caps) != 1 || !reports.caps[0].Explicit {
+	if len(reports.caps) != 1 || len(reports.caps[0].Sources) != 2 {
 		t.Fatal("recorded the wrong report")
+	}
+}
+
+// A worker that reports no names still gets everything but deliveries: replay
+// reconciliation completes, a pull is offered no sources, and a bounce is
+// committed and acknowledged.
+func TestSessionWithoutNamesStillServesBounces(t *testing.T) {
+	for name, mutate := range map[string]func(*controlv1.Ready){
+		"old shape":             func(*controlv1.Ready) {},
+		"sources without names": func(r *controlv1.Ready) { r.SourceAddresses = []string{"45.0.1.22"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			work := &capsWork{seen: make(chan struct{}, 1)}
+			runner, out, in := setupRunner(&fakeIssuer{}, &fakeResults{})
+			store := &bounceStore{started: make(chan struct{}), release: make(chan error, 1)}
+			runner.Work, runner.Bounces = work, store
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- runner.Run(ctx) }()
+			open := (<-out).GetOpen()
+			frame := readyFrame(open)
+			mutate(frame.GetReady())
+			in <- frame
+			in <- &controlv1.EdgeFrame{Body: &controlv1.EdgeFrame_ReplayComplete{ReplayComplete: &controlv1.ReplayComplete{}}}
+			assertReconciled(t, <-out, open)
+			<-out // wake
+			in <- &controlv1.EdgeFrame{Body: &controlv1.EdgeFrame_Pull{Pull: &controlv1.Pull{AvailableSlots: 1}}}
+			select {
+			case <-work.seen:
+			case err := <-done:
+				t.Fatalf("session ended before work was requested: %v", err)
+			case <-ctx.Done():
+				t.Fatal("work was never requested")
+			}
+			body := []byte("untrusted bounce")
+			digest := sha256.Sum256(body)
+			id := "abcdef0123456789abcdef0123456789"
+			in <- &controlv1.EdgeFrame{Body: &controlv1.EdgeFrame_Bounce{Bounce: &controlv1.BounceStart{BounceId: id, RecipientToken: "0123456789abcdef0123456789abcdef", ExpectedSize: uint64(len(body)), Sha256: digest[:]}}}
+			in <- &controlv1.EdgeFrame{Body: &controlv1.EdgeFrame_BounceChunk{BounceChunk: &controlv1.DataChunk{Id: id, Data: body, Last: true}}}
+			<-store.started
+			store.release <- nil
+			select {
+			case frame := <-out:
+				if ack := frame.GetBounceAck(); ack == nil || ack.BounceId != id || !ack.DurablyAccepted {
+					t.Fatalf("incorrect acknowledgement: %v", frame)
+				}
+			case err := <-done:
+				t.Fatalf("session ended: %v", err)
+			case <-ctx.Done():
+				t.Fatal("missing ack")
+			}
+			cancel()
+			<-done
+			work.mu.Lock()
+			defer work.mu.Unlock()
+			if len(work.caps) == 0 {
+				t.Fatal("work was never asked for")
+			}
+			for _, caps := range work.caps {
+				if len(caps.Sources) != 0 {
+					t.Fatalf("work was offered capabilities: %+v", caps)
+				}
+			}
+		})
 	}
 }
 
@@ -119,9 +205,9 @@ func TestFailedReportWriteDoesNotEndTheSession(t *testing.T) {
 	reports := &recordingReports{done: make(chan struct{}), err: errors.New("database unavailable")}
 	caps := pullOnce(t, func(r *controlv1.Ready) {
 		r.SourceAddresses = []string{"45.0.1.22"}
-		r.BounceDomains = []string{"bounce.example.net"}
+		r.SourceHostnames = []string{"mx.example.net"}
 	}, reports)
-	if !caps.Explicit {
+	if len(caps.Sources) != 1 {
 		t.Fatal("work was not requested after a failed report write")
 	}
 }
@@ -153,6 +239,20 @@ func TestInvalidReadyEndsTheSession(t *testing.T) {
 			r.SourceAddresses, r.BounceDomains = []string{"45.0.0.10"}, strings.Split(strings.Repeat("a.example,", 9)[:89], ",")
 		},
 		"domains without sources": func(r *controlv1.Ready) { r.BounceDomains = []string{"bounce.example.net"} },
+		"names without sources":   func(r *controlv1.Ready) { r.SourceHostnames = []string{"mx.example.net"} },
+		"fewer names than sources": func(r *controlv1.Ready) {
+			r.SourceAddresses, r.SourceHostnames = []string{"45.0.0.10", "45.0.0.11"}, []string{"mx.example.net"}
+		},
+		"uppercase name": func(r *controlv1.Ready) {
+			r.SourceAddresses, r.SourceHostnames = []string{"45.0.0.10"}, []string{"MX.example.net"}
+		},
+		"duplicate name": func(r *controlv1.Ready) {
+			r.SourceAddresses, r.SourceHostnames = []string{"45.0.0.10", "45.0.0.11"}, []string{"mx.example.net", "mx.example.net"}
+		},
+		"name that is an address": func(r *controlv1.Ready) {
+			r.SourceAddresses, r.SourceHostnames = []string{"45.0.0.10"}, []string{"45.0.0.10"}
+		},
+		"overlong name": func(r *controlv1.Ready) { r.SourceAddresses, r.SourceHostnames = []string{"45.0.0.10"}, []string{long} },
 		"domain that is an address": func(r *controlv1.Ready) {
 			r.SourceAddresses, r.BounceDomains = []string{"45.0.0.10"}, []string{"45.0.0.10"}
 		},
@@ -160,7 +260,7 @@ func TestInvalidReadyEndsTheSession(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			work := &capsWork{seen: make(chan struct{}, 1)}
 			runner, out, in := setupRunner(&fakeIssuer{}, &fakeResults{})
-			runner.Work, runner.Legacy = work, legacyCaps
+			runner.Work = work
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			done := make(chan error, 1)

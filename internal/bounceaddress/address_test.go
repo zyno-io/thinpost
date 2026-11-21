@@ -22,14 +22,14 @@ func (r *repository) AssignBounceAddress(_ context.Context, _ delivery.Claim, ac
 
 func TestOpaqueAddressIsBoundToDeliveryAndPersistedHash(t *testing.T) {
 	r := &repository{}
-	s := &Service{Repository: r, Domain: "bounce.example.com", ActiveVersion: "v1", Keys: map[string][]byte{"v1": []byte("0123456789abcdef0123456789abcdef")}}
-	claim := delivery.Claim{DeliveryID: "00000000000000000000000000000001"}
+	s := &Service{Repository: r, ActiveVersion: "v1", Keys: map[string][]byte{"v1": []byte("0123456789abcdef0123456789abcdef")}}
+	claim := delivery.Claim{DeliveryID: "00000000000000000000000000000001", BounceDomain: "mx.example.com"}
 	address, err := s.ForDelivery(context.Background(), claim)
 	if err != nil {
 		t.Fatal(err)
 	}
 	local, domain, ok := strings.Cut(address, "@")
-	if !ok || domain != s.Domain || len(local) != 34 || !strings.HasPrefix(local, "b+") || strings.Contains(local, claim.DeliveryID) {
+	if !ok || domain != claim.BounceDomain || len(local) != 34 || !strings.HasPrefix(local, "b+") || strings.Contains(local, claim.DeliveryID) {
 		t.Fatalf("invalid address %q", address)
 	}
 	if r.hashes["v1"] != sha256.Sum256([]byte(local[2:])) {
@@ -44,8 +44,18 @@ func TestOpaqueAddressIsBoundToDeliveryAndPersistedHash(t *testing.T) {
 	if _, err = s.ForDelivery(context.Background(), claim); err == nil {
 		t.Fatal("address returned without durable assignment")
 	}
-	s.Domain = "BAD.example.com"
+	claim.BounceDomain = "BAD.example.com"
 	if _, err = s.ForDelivery(context.Background(), claim); err == nil {
 		t.Fatal("noncanonical domain accepted")
+	}
+}
+
+// There is no service-wide domain to fall back on: a claim without one gets no
+// return path, and nothing is assigned.
+func TestClaimWithoutBounceDomainGetsNoAddress(t *testing.T) {
+	r := &repository{}
+	s := &Service{Repository: r, ActiveVersion: "v1", Keys: map[string][]byte{"v1": []byte("0123456789abcdef0123456789abcdef")}}
+	if address, err := s.ForDelivery(context.Background(), delivery.Claim{DeliveryID: "00000000000000000000000000000001"}); err == nil || address != "" || r.hashes != nil {
+		t.Fatalf("address %q without a bounce domain: %v", address, err)
 	}
 }

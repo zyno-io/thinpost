@@ -22,20 +22,22 @@ import (
 const maxSendingIPs = 64
 
 // RecordEdgeSources stores what the worker reported in Ready, for the console
-// only: it never gates delivery. Only the live lease holder may write, and a
-// stale epoch cannot overwrite a newer one. A worker that reports no sources
-// is stored with NULL lists (unknown, not empty).
+// only: delivery is addressed from the live session's report, never from this
+// copy. Only the live lease holder may write, and a stale epoch cannot
+// overwrite a newer one. The names are stored in the bounce_domains column,
+// since a source's name is its bounce domain. A worker that reports no usable
+// sources is stored with NULL lists (unknown, not empty).
 func (r *Repository) RecordEdgeSources(ctx context.Context, lease ControllerLease, caps delivery.EdgeCapabilities) error {
 	if !leaseID(lease.WorkerID) || !leaseID(lease.ControllerID) || lease.Epoch == 0 {
 		return errors.New("invalid controller lease")
 	}
 	var addresses, domains any
-	if caps.Explicit {
-		list := make([]string, 0, len(caps.Addresses))
-		for _, address := range caps.Addresses {
-			list = append(list, address.String())
+	if len(caps.Sources) > 0 {
+		list, names := make([]string, 0, len(caps.Sources)), make([]string, 0, len(caps.Sources))
+		for _, source := range caps.Sources {
+			list, names = append(list, source.Address.String()), append(names, source.Hostname)
 		}
-		addresses, domains = list, append([]string{}, caps.BounceDomains...)
+		addresses, domains = list, names
 	}
 	var ports any
 	if caps.SubmissionPorts != nil {
@@ -131,7 +133,11 @@ func (r *Repository) ListSendingIPs(ctx context.Context) (admin.SendingIPList, e
 	named := make(map[string]bool, len(out.IPs))
 	for i := range out.IPs {
 		ip := &out.IPs[i]
-		onEdge, bounceOnEdge := slices.Contains(addresses, ip.Address), slices.Contains(domains, ip.BounceDomain)
+		// Mail is addressed from the edge's report: the bounce domain is the
+		// reported name of the address it leaves from, so nothing waits on the
+		// stored bounce domain any more.
+		onEdge := slices.Contains(addresses, ip.Address)
+		bounceOnEdge := onEdge
 		ip.OnEdge, ip.BounceOnEdge = &onEdge, &bounceOnEdge
 		ip.IsPrimary = len(addresses) > 0 && addresses[0] == ip.Address
 		named[ip.Address] = true

@@ -80,8 +80,9 @@ message Ready {
   // frames; a worker without it never receives them.
   repeated string capabilities = 8;
   // Additive: the SMTP name each source address greets and sends HELO with, one
-  // per source_addresses entry in the same order. Absent from an older worker;
-  // control then uses the name it has stored for the address.
+  // per source_addresses entry in the same order. Control addresses every
+  // delivery from these names (HELO and bounce domain); a worker that reports
+  // none receives no deliveries.
   repeated string source_hostnames = 9;
   // Additive (submission/1): public ports on which this worker currently accepts
   // AUTH (465, 587). Observed availability only: never used to tell clients

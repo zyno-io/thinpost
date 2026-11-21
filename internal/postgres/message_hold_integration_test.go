@@ -205,11 +205,11 @@ func TestMessageHoldPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sent, err := f.repo.ClaimDelivery(ctx, lease, f.id(), delivery.EdgeCapabilities{})
+	sent, err := f.repo.ClaimDelivery(ctx, lease, f.id(), claimCaps())
 	if err != nil || sent.MessageID != held || sent.DeliveryID != deliveryID {
 		t.Fatal("released message not dispatched", err)
 	}
-	if _, err = f.repo.ClaimDelivery(ctx, lease, f.id(), delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+	if _, err = f.repo.ClaimDelivery(ctx, lease, f.id(), claimCaps()); !errors.Is(err, delivery.ErrNoWork) {
 		t.Fatal("released message dispatched twice", err)
 	}
 	if events, _, _ := f.events(held, "released"); events != 1 || f.audits(held, "message.hold.released") != 1 {

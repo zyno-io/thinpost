@@ -254,9 +254,12 @@ func TestSendingIPsPostgres(t *testing.T) {
 		exec(`UPDATE apps SET sending_ip_id=$2 WHERE id=$1`, appPrimary, primaryRow.ID)
 	}
 	prim, host := netip.MustParseAddr(primaryAddr), netip.MustParseAddr(hostingAddr)
-	explicit := func(addresses []netip.Addr, domains ...string) delivery.EdgeCapabilities {
-		return delivery.EdgeCapabilities{Explicit: true, Addresses: addresses, BounceDomains: domains}
+	// reported is what a worker reports in Ready: each address with its name.
+	const primaryName, hostingName = "mx.example.net", "smtp.hosting.example.org"
+	reported := func(sources ...delivery.Source) delivery.EdgeCapabilities {
+		return delivery.EdgeCapabilities{Sources: sources}
 	}
+	primarySource, hostingSource := delivery.Source{Address: prim, Hostname: primaryName}, delivery.Source{Address: host, Hostname: hostingName}
 	// queue adds one queued delivery for appID and returns its ID.
 	queue := func(appID string) string {
 		m, d := id(), id()
@@ -281,24 +284,21 @@ func TestSendingIPsPostgres(t *testing.T) {
 		pinned, free := queue(appHosting), queue(appNull)
 		// The worker reports only its primary: the hosting app's delivery must
 		// stay queued, while another app's delivery is claimed.
-		claim, err := repo.ClaimDelivery(ctx, lease, id(), explicit([]netip.Addr{prim}, "mx.example.net"))
+		claim, err := repo.ClaimDelivery(ctx, lease, id(), reported(primarySource))
 		if err != nil || claim.DeliveryID != free {
 			t.Fatal("expected the unpinned app's delivery", claim.DeliveryID, err)
 		}
-		if _, err = repo.ClaimDelivery(ctx, lease, id(), explicit([]netip.Addr{prim}, "mx.example.net")); !errors.Is(err, delivery.ErrNoWork) {
+		if _, err = repo.ClaimDelivery(ctx, lease, id(), reported(primarySource)); !errors.Is(err, delivery.ErrNoWork) {
 			t.Fatal("claimed a delivery whose source the worker did not report", err)
 		}
 		var state string
 		if err = owner.QueryRowContext(ctx, `SELECT state FROM deliveries WHERE id=$1`, pinned).Scan(&state); err != nil || state != "queued" {
 			t.Fatal("delivery was not left queued", state, err)
 		}
-		// Reporting the address but not its bounce domain also holds it.
-		if _, err = repo.ClaimDelivery(ctx, lease, id(), explicit([]netip.Addr{prim, host}, "mx.example.net")); !errors.Is(err, delivery.ErrNoWork) {
-			t.Fatal("claimed a delivery whose bounce domain the worker did not report", err)
-		}
-		// Once both are reported it is claimed, from that address and HELO.
-		claim, err = repo.ClaimDelivery(ctx, lease, id(), explicit([]netip.Addr{prim, host}, "mx.example.net", "hosting.example.org"))
-		if err != nil || claim.DeliveryID != pinned || claim.SourceAddress != hostingAddr || claim.HeloName != "smtp.hosting.example.org" || claim.BounceDomain != "hosting.example.org" || claim.SourceName != "hosting" {
+		// Once the address is reported it is claimed, from that address, with
+		// the name reported for it as both HELO and bounce domain.
+		claim, err = repo.ClaimDelivery(ctx, lease, id(), reported(primarySource, hostingSource))
+		if err != nil || claim.DeliveryID != pinned || claim.SourceAddress != hostingAddr || claim.HeloName != hostingName || claim.BounceDomain != hostingName || claim.ResolvedAddress != hostingAddr || claim.SourceName != "hosting" {
 			t.Fatalf("pinned claim %+v %v", claim, err)
 		}
 		if source, ok := attemptSource(pinned); !ok || source.String != hostingAddr {
@@ -306,67 +306,71 @@ func TestSendingIPsPostgres(t *testing.T) {
 		}
 	})
 
-	t.Run("the HELO is the name the worker reports for the address", func(t *testing.T) {
+	t.Run("the HELO and bounce domain are the reported name, not the stored record", func(t *testing.T) {
 		reset()
-		// The worker reports the names it greets with. They win over the name
-		// stored for the address, so the HELO, banner and PTR agree.
+		// The stored record names smtp.hosting.example.org and hosting.example.org;
+		// what the worker reports for the address wins.
 		d := queue(appHosting)
-		caps := explicit([]netip.Addr{prim, host}, "mx.example.net", "hosting.example.org")
-		caps.Hostnames = []string{"smtp.mx.example.net", "smtp.reported.example.org"}
-		claim, err := repo.ClaimDelivery(ctx, lease, id(), caps)
-		if err != nil || claim.DeliveryID != d || claim.SourceAddress != hostingAddr || claim.HeloName != "smtp.reported.example.org" || claim.BounceDomain != "hosting.example.org" {
+		claim, err := repo.ClaimDelivery(ctx, lease, id(), reported(primarySource, delivery.Source{Address: host, Hostname: "smtp.reported.example.org"}))
+		if err != nil || claim.DeliveryID != d || claim.SourceAddress != hostingAddr || claim.HeloName != "smtp.reported.example.org" || claim.BounceDomain != "smtp.reported.example.org" {
 			t.Fatalf("reported name %+v %v", claim, err)
-		}
-		// A worker that reports no names keeps the stored one.
-		reset()
-		d = queue(appHosting)
-		claim, err = repo.ClaimDelivery(ctx, lease, id(), explicit([]netip.Addr{prim, host}, "mx.example.net", "hosting.example.org"))
-		if err != nil || claim.DeliveryID != d || claim.HeloName != "smtp.hosting.example.org" {
-			t.Fatalf("stored name %+v %v", claim, err)
 		}
 	})
 
-	t.Run("unassigned apps use the primary and its record when one exists", func(t *testing.T) {
+	t.Run("unassigned apps use the primary's reported name and keep the empty source fields", func(t *testing.T) {
 		reset()
-		// The primary has a record (primaryRow): an unassigned app takes its
-		// HELO and bounce domain, and the attempt records the primary.
+		// The primary has a record (primaryRow) with its own bounce domain and a
+		// different name; neither is used. The worker sends from its primary and
+		// its own name, the return path is the primary's reported name, and the
+		// attempt records no source.
+		exec(`UPDATE sending_ips SET bounce_domain='bounce.other.example.net' WHERE id=$1`, primaryRow.ID)
 		d := queue(appNull)
-		claim, err := repo.ClaimDelivery(ctx, lease, id(), explicit([]netip.Addr{prim, host}, "mx.example.net", "hosting.example.org"))
-		if err != nil || claim.DeliveryID != d || claim.SourceAddress != primaryAddr || claim.HeloName != "smtp.mx.example.net" || claim.BounceDomain != "mx.example.net" || claim.SourceName != "app-mail" {
-			t.Fatalf("named primary %+v %v", claim, err)
+		claim, err := repo.ClaimDelivery(ctx, lease, id(), reported(primarySource, hostingSource))
+		if err != nil || claim.DeliveryID != d || claim.SourceAddress != "" || claim.HeloName != "" || claim.BounceDomain != primaryName || claim.SourceName != "" || claim.ResolvedAddress != "" {
+			t.Fatalf("unassigned claim %+v %v", claim, err)
 		}
-		if source, _ := attemptSource(d); source.String != primaryAddr {
-			t.Fatal("primary not recorded")
+		if source, _ := attemptSource(d); source.Valid {
+			t.Fatal("an unassigned app's attempt recorded a source")
 		}
-		// The record's bounce domain not being reported holds the delivery.
-		reset()
-		queue(appNull)
-		if _, err = repo.ClaimDelivery(ctx, lease, id(), explicit([]netip.Addr{prim}, "other.example.net")); !errors.Is(err, delivery.ErrNoWork) {
-			t.Fatal("claimed with an unreported bounce domain", err)
-		}
-		// Without a record for the primary the fields stay empty (the worker's
-		// own hostname and the global bounce domain).
+		exec(`UPDATE sending_ips SET bounce_domain=$2 WHERE id=$1`, primaryRow.ID, primaryRow.BounceDomain)
+		// With no record for the primary at all it behaves the same.
 		exec(`UPDATE apps SET sending_ip_id=NULL WHERE id=$1`, appPrimary)
 		exec(`DELETE FROM sending_ips WHERE id=$1`, primaryRow.ID)
 		reset()
 		d = queue(appNull)
-		claim, err = repo.ClaimDelivery(ctx, lease, id(), explicit([]netip.Addr{prim}, "mx.example.net"))
-		if err != nil || claim.DeliveryID != d || claim.SourceAddress != "" || claim.HeloName != "" || claim.BounceDomain != "" || claim.SourceName != "" {
-			t.Fatalf("unnamed primary %+v %v", claim, err)
-		}
-		if source, _ := attemptSource(d); source.Valid {
-			t.Fatal("an unnamed primary recorded a source")
+		claim, err = repo.ClaimDelivery(ctx, lease, id(), reported(primarySource))
+		if err != nil || claim.DeliveryID != d || claim.SourceAddress != "" || claim.HeloName != "" || claim.BounceDomain != primaryName {
+			t.Fatalf("unrecorded primary %+v %v", claim, err)
 		}
 		restorePrimary()
 	})
 
-	t.Run("a legacy worker is claimed for only its primary and gets empty fields", func(t *testing.T) {
+	t.Run("an app pinned to the primary is sent from it, by name", func(t *testing.T) {
 		reset()
-		legacy := delivery.EdgeCapabilities{Addresses: []netip.Addr{prim}, BounceDomains: []string{"mx.example.net"}}
+		d := queue(appPrimary)
+		claim, err := repo.ClaimDelivery(ctx, lease, id(), reported(primarySource, hostingSource))
+		if err != nil || claim.DeliveryID != d || claim.SourceAddress != primaryAddr || claim.HeloName != primaryName || claim.BounceDomain != primaryName || claim.SourceName != "app-mail" {
+			t.Fatalf("primary-pinned claim %+v %v", claim, err)
+		}
+		if source, _ := attemptSource(d); source.String != primaryAddr {
+			t.Fatal("primary not recorded")
+		}
+	})
+
+	t.Run("a worker that reported no sources is given nothing, and the mail waits", func(t *testing.T) {
+		reset()
 		pinnedHosting, unassigned, pinnedPrimary := queue(appHosting), queue(appNull), queue(appPrimary)
+		if _, err := repo.ClaimDelivery(ctx, lease, id(), delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+			t.Fatal("claimed with no reported source", err)
+		}
+		var queued int
+		if err := owner.QueryRowContext(ctx, `SELECT count(*) FROM deliveries WHERE state='queued' AND id=ANY($1)`, "{"+pinnedHosting+","+unassigned+","+pinnedPrimary+"}").Scan(&queued); err != nil || queued != 3 {
+			t.Fatal("deliveries did not stay queued", queued, err)
+		}
+		// Once it reports, everything flows, each from its own address.
 		seen := map[string]delivery.Claim{}
 		for {
-			claim, err := repo.ClaimDelivery(ctx, lease, id(), legacy)
+			claim, err := repo.ClaimDelivery(ctx, lease, id(), reported(primarySource, hostingSource))
 			if errors.Is(err, delivery.ErrNoWork) {
 				break
 			}
@@ -375,51 +379,16 @@ func TestSendingIPsPostgres(t *testing.T) {
 			}
 			seen[claim.DeliveryID] = claim
 		}
-		if _, claimed := seen[pinnedHosting]; claimed {
-			t.Fatal("a legacy worker was handed a delivery pinned to another address")
+		if len(seen) != 3 || seen[pinnedHosting].BounceDomain != hostingName || seen[unassigned].BounceDomain != primaryName || seen[pinnedPrimary].BounceDomain != primaryName {
+			t.Fatalf("claims after reporting: %+v", seen)
 		}
-		if len(seen) != 2 {
-			t.Fatal("legacy claims", len(seen))
-		}
-		for _, d := range []string{unassigned, pinnedPrimary} {
-			claim, ok := seen[d]
-			if !ok || claim.SourceAddress != "" || claim.HeloName != "" {
-				t.Fatalf("legacy claim carries a source: %+v", claim)
-			}
-			if source, _ := attemptSource(d); source.Valid {
-				t.Fatal("a legacy attempt recorded a source")
-			}
-		}
-		// The unassigned app resolves to the primary's record exactly like the
-		// primary-pinned one (the source fields stay empty either way).
-		if u, p := seen[unassigned], seen[pinnedPrimary]; u.BounceDomain != "mx.example.net" || u.SourceName != "app-mail" || u.ResolvedAddress != primaryAddr || u.BounceDomain != p.BounceDomain || u.ResolvedAddress != p.ResolvedAddress {
-			t.Fatalf("legacy unassigned claim %+v differs from pinned %+v", u, p)
-		}
-		// When the primary's record names a bounce domain a legacy worker does not
-		// accept, unassigned and primary-pinned apps both wait.
-		reset()
-		queue(appNull)
-		queue(appPrimary)
-		exec(`UPDATE sending_ips SET bounce_domain='bounce.other.example.net' WHERE id=$1`, primaryRow.ID)
-		if _, err := repo.ClaimDelivery(ctx, lease, id(), legacy); !errors.Is(err, delivery.ErrNoWork) {
-			t.Fatal("claimed with a primary record whose bounce domain the legacy worker does not accept", err)
-		}
-		exec(`UPDATE sending_ips SET bounce_domain='mx.example.net' WHERE id=$1`, primaryRow.ID)
-		// A legacy worker whose primary is unknown to control claims no pinned
-		// delivery at all.
-		reset()
-		pinnedPrimary = queue(appPrimary)
-		if _, err := repo.ClaimDelivery(ctx, lease, id(), delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
-			t.Fatal("claimed a pinned delivery with no known source", err)
-		}
-		_ = pinnedPrimary
 	})
 
 	t.Run("the commit reports the IP name, never the address", func(t *testing.T) {
 		reset()
 		queue(appHosting)
 		attempt := id()
-		claim, err := repo.ClaimDelivery(ctx, lease, attempt, explicit([]netip.Addr{prim, host}, "mx.example.net", "hosting.example.org"))
+		claim, err := repo.ClaimDelivery(ctx, lease, attempt, reported(primarySource, hostingSource))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -429,26 +398,24 @@ func TestSendingIPsPostgres(t *testing.T) {
 		}
 		// A deleted IP is reported as removed.
 		reset()
-		queue(appNull)
-		exec(`UPDATE apps SET sending_ip_id=NULL WHERE id=$1`, appPrimary)
+		queue(appPrimary)
 		attempt = id()
-		claim, err = repo.ClaimDelivery(ctx, lease, attempt, explicit([]netip.Addr{prim}, "mx.example.net"))
+		claim, err = repo.ClaimDelivery(ctx, lease, attempt, reported(primarySource))
 		if err != nil || claim.SourceAddress != primaryAddr {
 			t.Fatal(claim, err)
 		}
+		exec(`UPDATE apps SET sending_ip_id=NULL WHERE id=$1`, appPrimary)
 		exec(`DELETE FROM sending_ips WHERE id=$1`, primaryRow.ID)
 		committed, err = repo.CommitDeliveryResultIdentified(ctx, delivery.Result{AttemptID: attempt, DeliveryID: claim.DeliveryID, WorkerID: lease.WorkerID, Epoch: lease.Epoch, Outcome: "rejected"})
 		if err != nil || committed.SourceName != "removed" {
 			t.Fatal("removed", committed, err)
 		}
 		restorePrimary()
-		// A delivery sent from an unnamed primary logs "primary".
+		// A delivery sent from the primary with no named source logs "primary".
 		reset()
 		queue(appNull)
-		exec(`UPDATE apps SET sending_ip_id=NULL WHERE id=$1`, appPrimary)
-		exec(`DELETE FROM sending_ips WHERE id=$1`, primaryRow.ID)
 		attempt = id()
-		claim, err = repo.ClaimDelivery(ctx, lease, attempt, explicit([]netip.Addr{prim}, "mx.example.net"))
+		claim, err = repo.ClaimDelivery(ctx, lease, attempt, reported(primarySource))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -456,7 +423,6 @@ func TestSendingIPsPostgres(t *testing.T) {
 		if err != nil || committed.SourceName != "primary" {
 			t.Fatal("primary", committed, err)
 		}
-		restorePrimary()
 	})
 	reset()
 
@@ -468,7 +434,7 @@ func TestSendingIPsPostgres(t *testing.T) {
 		if list.UnpinnedAppCount != 1 {
 			t.Fatal("unpinned apps", list.UnpinnedAppCount)
 		}
-		caps := explicit([]netip.Addr{prim, netip.MustParseAddr(thirdAddr)}, "mx.example.net")
+		caps := reported(primarySource, delivery.Source{Address: netip.MustParseAddr(thirdAddr), Hostname: "smtp.third.example.net"})
 		if err = repo.RecordEdgeSources(ctx, ControllerLease{WorkerID: "worker", ControllerID: "controller", Epoch: lease.Epoch + 1}, caps); !errors.Is(err, delivery.ErrLeaseInvalid) {
 			t.Fatal("a stale lease wrote a report", err)
 		}

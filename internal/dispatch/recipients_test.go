@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/zyno-io/thinpost/internal/delivery"
-
 	"github.com/zyno-io/thinpost/internal/submission"
 )
 
@@ -23,7 +21,7 @@ func TestDispatchSendsToTheEnvelopeRecipientAtTheDeliveryIndex(t *testing.T) {
 		p, r, o, lease := setup(t)
 		o.source = source
 		r.claim.RecipientIndex = index
-		start, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{})
+		start, _, err := p.Next(context.Background(), lease, primaryCaps())
 		if err != nil || start.Recipient != want {
 			t.Fatalf("index %d: recipient %q, %v", index, start.GetRecipient(), err)
 		}
@@ -31,7 +29,7 @@ func TestDispatchSendsToTheEnvelopeRecipientAtTheDeliveryIndex(t *testing.T) {
 	p, r, o, lease := setup(t)
 	o.source = source
 	r.claim.RecipientIndex = 3
-	if _, _, err = p.Next(context.Background(), lease, delivery.EdgeCapabilities{}); err == nil {
+	if _, _, err = p.Next(context.Background(), lease, primaryCaps()); err == nil {
 		t.Fatal("an index beyond To, Cc and Bcc must be rejected")
 	}
 }
@@ -48,7 +46,7 @@ func TestDispatchSendsToTheRawSourceRecipientAtTheDeliveryIndex(t *testing.T) {
 		p, r, o, lease := setup(t)
 		o.source = source
 		r.claim.RecipientIndex = index
-		start, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{})
+		start, _, err := p.Next(context.Background(), lease, primaryCaps())
 		if err != nil || start.Recipient != want {
 			t.Fatalf("index %d: recipient %q, %v", index, start.GetRecipient(), err)
 		}
@@ -56,7 +54,7 @@ func TestDispatchSendsToTheRawSourceRecipientAtTheDeliveryIndex(t *testing.T) {
 	p, r, o, lease := setup(t)
 	o.source = source
 	r.claim.RecipientIndex = 3
-	if _, _, err = p.Next(context.Background(), lease, delivery.EdgeCapabilities{}); err == nil {
+	if _, _, err = p.Next(context.Background(), lease, primaryCaps()); err == nil {
 		t.Fatal("an index beyond the raw envelope must be rejected")
 	}
 }

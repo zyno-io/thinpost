@@ -76,7 +76,7 @@ func TestLocalDNSFailuresAreCommittedWithoutInventingSMTPResponses(t *testing.T)
 	} {
 		p, r, _, lease := setup(t)
 		p.Routes = routes{err: tc.err}
-		start, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{})
+		start, _, err := p.Next(context.Background(), lease, primaryCaps())
 		if !errors.Is(err, delivery.ErrNoWork) || start != nil || len(r.results) != 1 || r.results[0].Outcome != tc.outcome || r.results[0].SMTPCode != 0 || r.results[0].JournalID != "" {
 			t.Fatalf("DNS failure %v not committed as %s: %+v, %v", tc.err, tc.outcome, r.results, err)
 		}
@@ -101,7 +101,7 @@ func setup(t *testing.T) (*Provider, *repo, *objects, postgres.ControllerLease) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &repo{claim: delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", EnhancedProtection: true}}
+	r := &repo{claim: delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", EnhancedProtection: true, BounceDomain: primaryHost}}
 	o := &objects{source: source, mime: []byte("signed MIME")}
 	return &Provider{Repository: r, Objects: o, Routes: routes{}, Envelopes: envelopes{}, Recipients: allowRecipients(true)}, r, o, postgres.ControllerLease{WorkerID: "worker", Epoch: 4}
 }
@@ -111,18 +111,18 @@ func TestRecipientPolicyHoldsBeforeDNSOrEnvelope(t *testing.T) {
 	p.Recipients = allowRecipients(false)
 	used := -1
 	p.Routes = routes{seen: &used}
-	start, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{})
+	start, _, err := p.Next(context.Background(), lease, primaryCaps())
 	if !errors.Is(err, delivery.ErrNoWork) || start != nil || used != -1 || len(r.results) != 1 || r.results[0].Outcome != delivery.OutcomeRecipientPolicyDenied || r.results[0].SMTPCode != 0 {
 		t.Fatal("denied recipient was not held before DNS", err, used, r.results)
 	}
 	r.commitErr = errors.New("db unavailable")
-	if _, _, err = p.Next(context.Background(), lease, delivery.EdgeCapabilities{}); err == nil || errors.Is(err, delivery.ErrNoWork) {
+	if _, _, err = p.Next(context.Background(), lease, primaryCaps()); err == nil || errors.Is(err, delivery.ErrNoWork) {
 		t.Fatal("failed policy hold commit was reported as safe")
 	}
 }
 func TestDispatchUsesCommittedAttemptAndStoredMIME(t *testing.T) {
 	p, r, _, lease := setup(t)
-	start, mime, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{})
+	start, mime, err := p.Next(context.Background(), lease, primaryCaps())
 	if err != nil || start.Recipient != "b@example.net" || start.MxName != "mx.example" || !start.EnhancedProtection || string(mime) != "signed MIME" || len(r.results) != 0 {
 		t.Fatalf("incorrect work: %+v %v", start, err)
 	}
@@ -131,7 +131,7 @@ func TestDispatchUsesCommittedAttemptAndStoredMIME(t *testing.T) {
 func TestDispatchCarriesTrackingCutoff(t *testing.T) {
 	p, r, _, lease := setup(t)
 	r.claim.TrackingSendCutoff = time.Now().Add(time.Hour)
-	start, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{})
+	start, _, err := p.Next(context.Background(), lease, primaryCaps())
 	if err != nil || start.TrackingSendCutoffUnixMs != r.claim.TrackingSendCutoff.UnixMilli() {
 		t.Fatal("tracking cutoff was not included in the delivery descriptor", err)
 	}
@@ -139,11 +139,11 @@ func TestDispatchCarriesTrackingCutoff(t *testing.T) {
 func TestPreparationFailureCommitsBeforeRetry(t *testing.T) {
 	p, r, o, lease := setup(t)
 	o.fail = true
-	if _, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) || len(r.results) != 1 || r.results[0].Outcome != "rejected" {
+	if _, _, err := p.Next(context.Background(), lease, primaryCaps()); !errors.Is(err, delivery.ErrNoWork) || len(r.results) != 1 || r.results[0].Outcome != "rejected" {
 		t.Fatal("failure not committed")
 	}
 	r.commitErr = errors.New("db down")
-	if _, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{}); err == nil || errors.Is(err, delivery.ErrNoWork) {
+	if _, _, err := p.Next(context.Background(), lease, primaryCaps()); err == nil || errors.Is(err, delivery.ErrNoWork) {
 		t.Fatal("failed result commit reported safe retry")
 	}
 }
@@ -153,7 +153,7 @@ func TestDispatchUsesPersistedAttemptNumber(t *testing.T) {
 	r.claim.RouteAttempt = 3
 	var used int
 	p.Routes = routes{seen: &used}
-	if _, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{}); err != nil || used != 3 {
+	if _, _, err := p.Next(context.Background(), lease, primaryCaps()); err != nil || used != 3 {
 		t.Fatal("persisted attempt did not reach route selection", used, err)
 	}
 }
@@ -164,7 +164,7 @@ func TestLocalOutcomeLogsIDsAfterCommit(t *testing.T) {
 	p, r, _, lease := setup(t)
 	r.claim.AppID, r.claim.MessageID, r.claim.DeliveryID = "0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210", "00112233445566778899aabbccddeeff"
 	p.Routes = routes{err: delivery.ErrNullMX}
-	if _, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{}); !errors.Is(err, delivery.ErrNoWork) {
+	if _, _, err := p.Next(context.Background(), lease, primaryCaps()); !errors.Is(err, delivery.ErrNoWork) {
 		t.Fatal(err)
 	}
 	want := "delivery app=0123456789abcdef0123456789abcdef message=fedcba9876543210fedcba9876543210 delivery=00112233445566778899aabbccddeeff status=null_mx smtp=0 ip=primary"
@@ -173,7 +173,7 @@ func TestLocalOutcomeLogsIDsAfterCommit(t *testing.T) {
 	}
 	lines = nil
 	r.commitErr = errors.New("db down")
-	if _, _, err := p.Next(context.Background(), lease, delivery.EdgeCapabilities{}); err == nil || len(lines) != 0 {
+	if _, _, err := p.Next(context.Background(), lease, primaryCaps()); err == nil || len(lines) != 0 {
 		t.Fatalf("logged without a committed result: %q %v", lines, err)
 	}
 }
@@ -184,14 +184,14 @@ func TestLocalOutcomeLogsIDsAfterCommit(t *testing.T) {
 func TestRouteToAnEdgeSourceIsRefused(t *testing.T) {
 	for _, source := range []string{"8.8.8.8"} {
 		p, r, _, lease := setup(t)
-		caps := delivery.EdgeCapabilities{Explicit: true, Addresses: []netip.Addr{netip.MustParseAddr("45.0.1.22"), netip.MustParseAddr(source)}}
+		caps := delivery.EdgeCapabilities{Sources: []delivery.Source{{Address: primaryAddr, Hostname: primaryHost}, {Address: netip.MustParseAddr(source), Hostname: "smtp.extra.example"}}}
 		start, _, err := p.Next(context.Background(), lease, caps)
 		if !errors.Is(err, delivery.ErrNoWork) || start != nil || len(r.results) != 1 || r.results[0].Outcome != "rejected" {
 			t.Fatalf("route to extra source %s was dispatched: %v %+v", source, err, r.results)
 		}
 	}
 	p, _, _, lease := setup(t)
-	caps := delivery.EdgeCapabilities{Explicit: true, Addresses: []netip.Addr{netip.MustParseAddr("45.0.1.22")}}
+	caps := primaryCaps()
 	if start, _, err := p.Next(context.Background(), lease, caps); err != nil || start == nil {
 		t.Fatal("an ordinary route was refused", err)
 	}
