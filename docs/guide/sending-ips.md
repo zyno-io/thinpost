@@ -53,7 +53,7 @@ None of these records are published by Thinpost. Set them at the address owner (
 - The **HELO name** is the PTR of the address. The edge greets with it and control sends it as the outbound HELO, so the banner, the HELO and the PTR agree.
 - `v=spf1 a -all` uses the name's own A record, so it follows the address. Do not use `ptr`, which RFC 7208 deprecates.
 - The **MX** record makes bounces and inbound mail for the address arrive at the address itself.
-- The **bounce domain** is the HELO name. Every message leaves with a return path like `b+<token>@<HELO name>`, using the name the edge reported for the address the message is sent from. The edge accepts bounces at every one of its own names, so the MX record above is all bounces need. There is no separate bounce domain to set.
+- The **bounce domain** is the HELO name. Every message leaves with a return path like `b+<token>@<HELO name>`, using the name the edge reported for the address the message is sent from. The edge accepts bounces at every one of its own names, so the MX record above is all bounces need. There is no separate bounce domain to set. An app can also use a bounce domain under its own sending domain, which points at this name: see [Your own bounce domain](/guide/domains#your-own-bounce-domain).
 - The edge accepts a bounce addressed to `b+<token>@<any name>` as long as that name's DNS points at the edge, so bounces for mail sent under an old HELO name keep arriving after you rename it, until you remove that name's DNS. Keep the old name's A and MX records for your longest retry window, then drop them. Rename in this order: certificate first, then DNS and PTR, then the Helm values.
 
 A customer's own SPF record does not need to mention Thinpost.

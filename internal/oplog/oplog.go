@@ -245,3 +245,30 @@ func Submission(result, appID, transferID string) {
 	}
 	emit("submission result=%s app=%s transfer=%s", result, ID(appID), ID(transferID))
 }
+
+var domainKinds = map[string]bool{"bounce": true, "tracking": true}
+
+var domainStates = map[string]bool{"pending": true, "active": true, "failing": true, "removed": true}
+
+var domainResults = map[string]bool{
+	"ok": true, "missing": true, "not_cname": true, "other_ip": true, "wrong_target": true,
+	"lookup_failed": true, "no_sending_ip": true, "unreachable": true, "certificate": true,
+	"redirected": true, "not_thinpost": true,
+}
+
+// DomainCheck logs `domain_check app=<id> kind=<enum> state=<enum> result=<enum>`
+// when a customer domain's state changes. The domain itself, what its DNS
+// answered and any error text never reach the log; anything outside the enums
+// is logged as "other".
+func DomainCheck(appID, kind, state, result string) {
+	if !domainKinds[kind] {
+		kind = string(StatusOther)
+	}
+	if !domainStates[state] {
+		state = string(StatusOther)
+	}
+	if !domainResults[result] {
+		result = string(StatusOther)
+	}
+	emit("domain_check app=%s kind=%s state=%s result=%s", ID(appID), kind, state, result)
+}

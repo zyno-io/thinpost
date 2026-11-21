@@ -108,6 +108,9 @@ func (r *Repository) RequestInboundDomain(ctx context.Context, actor, appID, dom
 	if err != nil {
 		return result, err
 	}
+	if err = requireNoBounceDomain(ctx, tx, domain); err != nil {
+		return admin.InboundDomainChallenge{}, err
+	}
 	row := tx.QueryRowContext(ctx, `INSERT INTO inbound_domains(id,app_id,domain,verification_hash) VALUES ($1,$2,$3,$4)
 		ON CONFLICT (app_id,domain) DO UPDATE SET verification_hash=EXCLUDED.verification_hash,updated_at=clock_timestamp() WHERE inbound_domains.state='pending'
 		RETURNING `+inboundDomainColumns, id, appID, domain, digest[:])
@@ -127,6 +130,23 @@ func (r *Repository) RequestInboundDomain(ctx context.Context, actor, appID, dom
 	result.DNSName = "_thinpost." + domain
 	result.DNSValue = value
 	return result, nil
+}
+
+// requireNoBounceDomain refuses a receiving domain that any app uses as its
+// bounce domain. It takes the domain-name lock, which adding a bounce domain
+// takes too, so the two checks cannot both pass for one name.
+func requireNoBounceDomain(ctx context.Context, tx *sql.Tx, domain string) error {
+	if err := lockDomainName(ctx, tx, domain); err != nil {
+		return err
+	}
+	var taken bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM bounce_domains WHERE domain=$1)`, domain).Scan(&taken); err != nil {
+		return err
+	}
+	if taken {
+		return admin.ErrBounceDomainClash
+	}
+	return nil
 }
 
 // InboundDomainChallenge returns the domain and, for a pending claim, the
@@ -178,6 +198,9 @@ func (r *Repository) VerifyInboundDomain(ctx context.Context, actor, appID, doma
 		return admin.InboundDomain{}, err
 	}
 	defer tx.Rollback()
+	if err = requireNoBounceDomain(ctx, tx, domain); err != nil {
+		return admin.InboundDomain{}, err
+	}
 	row := tx.QueryRowContext(ctx, `UPDATE inbound_domains SET state='active',verified_at=clock_timestamp(),verification_hash=NULL,updated_at=clock_timestamp()
 		WHERE app_id=$1 AND domain=$2 AND state='pending' AND verification_hash=$3 RETURNING `+inboundDomainColumns, appID, domain, digest[:])
 	result, err := scanInboundDomain(row)

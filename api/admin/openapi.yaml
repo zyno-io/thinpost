@@ -740,6 +740,92 @@ paths:
       responses:
         '204': { description: The pending key was removed }
         default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/domains/{domain}/bounce-domain:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: domain
+        in: path
+        required: true
+        description: The verified sender domain the bounce domain belongs to.
+        schema: { type: string }
+    get:
+      operationId: getAppBounceDomain
+      description: The sender domain's own bounce (Return-Path) domain. 404 when it has none.
+      responses:
+        '200':
+          description: The bounce domain, with the name its CNAME must point at
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BounceDomainView' }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: setAppBounceDomain
+      description: >-
+        Gives the sender domain its own bounce domain, or replaces the one it has
+        in the same transaction. The name must be a strict subdomain of the
+        sender domain (bounces.example.com for example.com), and the sender
+        domain must be verified. The new domain starts pending: mail keeps using
+        Thinpost's standard bounce address until a check finds a CNAME to
+        cname_target that is not proxied (DNS only), then the domain turns
+        active. Setting the name it already has changes nothing. 400 for a name
+        that is not a strict subdomain, is invalid, longer than 219 bytes, or is
+        one of Thinpost's own host names, and for a sender domain that is not
+        verified. 409 when the name already receives mail through Thinpost (an
+        active or disabled receiving domain), when it is already the bounce
+        domain of another of the app's sender domains, or when the app is
+        paused. Several apps may use the same name. Audited as
+        bounce_domain.added (and bounce_domain.removed for a replaced one).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 219, description: ASCII DNS name under the sender domain; use punycode for IDNs. }
+      responses:
+        '200':
+          description: The bounce domain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BounceDomainView' }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteAppBounceDomain
+      description: >-
+        Removes the bounce domain. Mail uses the standard bounce address from the
+        next delivery on; bounces already on their way to the old name are still
+        accepted. Audited as bounce_domain.removed.
+      responses:
+        '204': { description: Removed }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/domains/{domain}/bounce-domain/check:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: domain
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: checkAppBounceDomain
+      description: >-
+        Looks at the bounce domain's DNS now (at most 8 seconds) and records the
+        result, which can turn the domain active or failing. A check started here
+        replaces any background check in flight for the same domain. A lookup that
+        fails is recorded and answers 200 with result lookup_failed. 409 when a
+        newer check or an IP change took the row while this one ran (nothing was
+        recorded); 503 when the deployment has no resolver, is deploying (gate
+        closed) or the store failed. A change of state is audited as bounce_domain.activated or
+        bounce_domain.failing.
+      responses:
+        '200':
+          description: The bounce domain after the check
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BounceDomainView' }
+        default: { $ref: '#/components/responses/Error' }
   /apps/{appId}/inbound-limits:
     parameters:
       - { $ref: '#/components/parameters/AppId' }
@@ -2143,6 +2229,55 @@ components:
           $ref: '#/components/schemas/DkimKey'
         retired_key:
           $ref: '#/components/schemas/DkimRetiredKey'
+        bounce_domain:
+          $ref: '#/components/schemas/BounceDomain'
+        cname_target:
+          type: string
+          description: >-
+            The name a bounce domain's CNAME must point at: the HELO name of the app's current
+            sending IP. Present on verified domains only when public DNS confirms the name
+            (cname_target_status ok).
+        cname_target_status:
+          type: string
+          enum: [ok, not_reported, dns_unconfirmed]
+          description: ok shows cname_target; not_reported means the sending worker has not reported its IPs; dns_unconfirmed means DNS does not tie the name to its address, so it is withheld. Present on verified domains.
+    BounceDomain:
+      type: object
+      description: >-
+        A sender domain's own Return-Path domain. Mail uses it only while state is
+        active and the CNAME still points at the HELO name of the IP the mail leaves
+        from, a check passed within the last 3 hours, and nothing else uses the name;
+        it is decided for each delivery when it is claimed. Otherwise mail uses
+        Thinpost's standard bounce address and nothing is lost. It applies to the
+        sender domain and to the app's verified subdomains of it; the most specific
+        wins. The CNAME must be DNS only: a proxied record is reported as not_cname.
+      required: [name, state, checking, created_at]
+      properties:
+        name: { type: string }
+        state:
+          type: string
+          enum: [pending, active, failing]
+          description: pending has not passed a check yet; active is in use; failing was active or pending and its last checks failed (the standard bounce address is used).
+        checking: { type: boolean, description: A check is in flight. }
+        result:
+          type: string
+          enum: [ok, missing, not_cname, other_ip, wrong_target, lookup_failed, no_sending_ip]
+          description: The last check's result. Absent before the first. other_ip means the CNAME points at another of Thinpost's sending names (the app now sends from a different IP).
+        observed_target: { type: string, description: The name the CNAME pointed at on the last check. }
+        checked_at: { type: string, format: date-time }
+        last_ok_at: { type: string, format: date-time }
+        verified_at: { type: string, format: date-time, description: When it first passed. }
+        created_at: { type: string, format: date-time }
+    BounceDomainView:
+      allOf:
+        - $ref: '#/components/schemas/BounceDomain'
+        - type: object
+          required: [cname_target_status]
+          properties:
+            cname_target: { type: string, description: The name the CNAME must point at, when confirmed. }
+            cname_target_status:
+              type: string
+              enum: [ok, not_reported, dns_unconfirmed]
     DkimKey:
       type: object
       required: [selector, dns_name, dns_value]

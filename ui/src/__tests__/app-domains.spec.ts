@@ -12,6 +12,9 @@ const api = vi.hoisted(() => ({
     createAppDomainDkimKey: vi.fn(),
     activateAppDomainDkimKey: vi.fn(),
     cancelAppDomainDkimKey: vi.fn(),
+    setAppBounceDomain: vi.fn(),
+    checkAppBounceDomain: vi.fn(),
+    deleteAppBounceDomain: vi.fn(),
     getPublicConfig: vi.fn()
 }));
 vi.mock('@/openapi-client-generated', () => ({ DefaultApi: api }));
@@ -353,5 +356,141 @@ describe('sending domains screen', () => {
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(wrapper!.text()).toContain("something the console didn't understand");
         expect(wrapper!.text()).not.toContain('No sending domains');
+    });
+});
+
+describe('bounce domains', () => {
+    const TARGET = { cname_target: 'smtp.example.net', cname_target_status: 'ok' };
+    const none = { ...verified, ...TARGET };
+    const bounce = (patch: object = {}) => ({ name: 'bounces.mail.example.com', state: 'pending', checking: false, created_at: '2026-11-21T12:00:00Z', ...patch });
+    const withBounce = (patch: object = {}) => ({ ...verified, ...TARGET, bounce_domain: bounce(patch) });
+
+    function bouncePanel() {
+        return wrapper!.find('[data-testid="bounce-mail.example.com"]');
+    }
+
+    it('offers a bounce domain on a verified domain, and not on one that is not verified', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [pending, { ...verified, name: 'ok.example.com' }] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.find('[data-testid="bounce-mail.example.com"]').exists()).toBe(false);
+        expect(wrapper!.find('[data-testid="bounce-ok.example.com"]').exists()).toBe(true);
+        expect(wrapper!.text()).toContain("Mail from ok.example.com uses Thinpost's standard bounce address");
+        const help = await openHelp(wrapper!, 'bounce domains');
+        expect(help).toContain('DNS only, not proxied');
+        expect(help).toContain('aspf=s');
+        expect(help).toContain('different IP');
+    });
+
+    it('adds a bounce domain after checking the name against the sending domain', async () => {
+        api.listAppDomains.mockResolvedValueOnce({ data: { domains: [none] } }).mockResolvedValue({ data: { domains: [withBounce()] } });
+        api.setAppBounceDomain.mockResolvedValue({ data: bounce() });
+        await mountAt(`/apps/${APP_ID}/domains`);
+
+        await bouncePanel().findAll('button').find(b => b.text().includes('Add bounce domain'))!.trigger('click');
+        const input = () => wrapper!.find<HTMLInputElement>('input[placeholder="bounces.mail.example.com"]');
+        await input().setValue('bounces.example.org');
+        await wrapper!.find('form').trigger('submit');
+        await flushPromises();
+        expect(api.setAppBounceDomain).not.toHaveBeenCalled();
+        expect(wrapper!.text()).toContain('Use a subdomain of mail.example.com');
+
+        await input().setValue(' Bounces.Mail.Example.com ');
+        await wrapper!.find('form').trigger('submit');
+        await flushPromises();
+        expect(api.setAppBounceDomain).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' }, body: { name: 'bounces.mail.example.com' } });
+        expect(vf.showToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Bounce domain saved for mail.example.com' }));
+        // The list is read again and the CNAME to add is shown, DNS only.
+        expect(api.listAppDomains).toHaveBeenCalledTimes(2);
+        expect(bouncePanel().text()).toContain('Waiting for DNS record');
+        expect(inputValues()).toContain('smtp.example.net');
+        expect(inputValues()).toContain('bounces.mail.example.com');
+        expect(bouncePanel().text()).toContain('DNS only, not proxied');
+    });
+
+    it.each([
+        [400, 'Use a subdomain of mail.example.com, such as bounces.mail.example.com'],
+        [409, "can't be used"],
+        [503, 'temporarily unavailable']
+    ])('explains a %s answer when saving', async (status, expected) => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [none] } });
+        api.setAppBounceDomain.mockRejectedValue(httpError(status));
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await bouncePanel().findAll('button').find(b => b.text().includes('Add bounce domain'))!.trigger('click');
+        await wrapper!.find<HTMLInputElement>('input[placeholder="bounces.mail.example.com"]').setValue('bounces.mail.example.com');
+        await wrapper!.find('form').trigger('submit');
+        await flushPromises();
+        expect(wrapper!.text()).toContain(expected);
+        expect(vf.showToast).not.toHaveBeenCalled();
+    });
+
+    it('shows an active domain as in use, without the record to add', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withBounce({ state: 'active', result: 'ok', checked_at: '2026-11-21T12:30:00Z' })] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(bouncePanel().find('[data-testid="bounce-status"]').text()).toBe('In use');
+        expect(bouncePanel().find('[data-testid="bounce-message"]').text()).toContain('SPF passes for your domain too');
+        expect(inputValues()).toEqual([]);
+        expect(bouncePanel().text()).toContain('Last checked');
+    });
+
+    it('checks now and reads the list again', async () => {
+        api.listAppDomains.mockResolvedValueOnce({ data: { domains: [withBounce()] } }).mockResolvedValue({ data: { domains: [withBounce({ state: 'active', result: 'ok' })] } });
+        api.checkAppBounceDomain.mockResolvedValue({ data: bounce({ state: 'active', result: 'ok' }) });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await bouncePanel().findAll('button').find(b => b.text().includes('Check now'))!.trigger('click');
+        await flushPromises();
+        expect(api.checkAppBounceDomain).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' } });
+        expect(bouncePanel().find('[data-testid="bounce-status"]').text()).toBe('In use');
+    });
+
+    it.each([
+        [503, "couldn't look up DNS just now"],
+        [409, 'Another check was already running']
+    ])('explains a %s answer from a check', async (status, expected) => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withBounce()] } });
+        api.checkAppBounceDomain.mockRejectedValue(httpError(status));
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await bouncePanel().findAll('button').find(b => b.text().includes('Check now'))!.trigger('click');
+        await flushPromises();
+        expect(bouncePanel().text()).toContain(expected);
+    });
+
+    it('explains a failing domain for each result, without inventing a target', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [{ ...withBounce({ state: 'failing', result: 'other_ip' }), cname_target: 'smtp2.example.net' }] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(bouncePanel().find('[data-testid="bounce-status"]').text()).toBe('Not in use');
+        expect(bouncePanel().find('[data-testid="bounce-message"]').text()).toContain('Point the CNAME at smtp2.example.net.');
+        wrapper!.unmount();
+
+        api.listAppDomains.mockResolvedValue({ data: { domains: [{ ...verified, cname_target_status: 'dns_unconfirmed', bounce_domain: bounce({ state: 'failing', result: 'missing' }) }] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(bouncePanel().find('[data-testid="bounce-message"]').text()).toContain("can't confirm the name to point at");
+        expect(inputValues()).toEqual([]);
+    });
+
+    it('removes a bounce domain only after confirming', async () => {
+        api.listAppDomains.mockResolvedValueOnce({ data: { domains: [withBounce({ state: 'active', result: 'ok' })] } }).mockResolvedValue({ data: { domains: [none] } });
+        api.deleteAppBounceDomain.mockResolvedValue({});
+        await mountAt(`/apps/${APP_ID}/domains`);
+        const remove = () => bouncePanel().findAll('button').find(b => b.text().includes('Remove'))!;
+
+        vf.showConfirm.mockResolvedValueOnce(false);
+        await remove().trigger('click');
+        await flushPromises();
+        expect(api.deleteAppBounceDomain).not.toHaveBeenCalled();
+
+        vf.showConfirm.mockResolvedValueOnce(true);
+        await remove().trigger('click');
+        await flushPromises();
+        expect(vf.showConfirm).toHaveBeenLastCalledWith('Remove the bounce domain?', expect.stringContaining("standard bounce address"));
+        expect(api.deleteAppBounceDomain).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' } });
+        expect(bouncePanel().text()).toContain("uses Thinpost's standard bounce address");
+    });
+
+    it('does not let a paused app change its bounce domain', async () => {
+        api.listApps.mockResolvedValue({ data: { apps: [{ ...app, active: false }] } });
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withBounce()] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        const change = bouncePanel().findAll('button').find(b => b.text().includes('Change'))!;
+        expect(change.attributes('disabled')).toBeDefined();
     });
 });
