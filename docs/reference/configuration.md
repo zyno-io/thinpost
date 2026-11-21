@@ -141,7 +141,7 @@ The bridge is the control plane's client side of the [control protocol](/referen
 
 ## Edge worker
 
-The `thinpost-edge` binary reads these when it starts. See the [command-line reference](/reference/cli#thinpost-edge) for its subcommands. It reads no recipient policy and no egress policy: the control plane is the sole authority for both. An Edge whose environment still sets `THINPOST_RECIPIENT_POLICY`, `THINPOST_RECIPIENT_ALLOWLIST_FILE`, `THINPOST_EDGE_INFRASTRUCTURE_CIDRS` or `THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE` from an earlier release starts normally and ignores them. So does one that sets `THINPOST_EDGE_BOUNCE_DOMAIN` or `THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS`: the Edge accepts bounces at each listener's own name and has no other bounce domain. The Edge refuses to run as root.
+The `thinpost-edge` binary reads these when it starts. See the [command-line reference](/reference/cli#thinpost-edge) for its subcommands. It reads no recipient policy and no egress policy: the control plane is the sole authority for both. An Edge whose environment still sets `THINPOST_RECIPIENT_POLICY`, `THINPOST_RECIPIENT_ALLOWLIST_FILE`, `THINPOST_EDGE_INFRASTRUCTURE_CIDRS` or `THINPOST_EDGE_ROUTE_EXCEPTIONS_FILE` from an earlier release starts normally and ignores them. So does one that sets `THINPOST_EDGE_BOUNCE_DOMAIN` or `THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS`: the Edge has no bounce-domain setting: it accepts bounces at each listener's own name, and a bounce address (`b+<token>@…`) at any other domain, checked against the message it belongs to. The Edge refuses to run as root.
 
 ### Identity and listeners
 

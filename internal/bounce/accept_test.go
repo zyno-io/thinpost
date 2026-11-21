@@ -10,8 +10,9 @@ import (
 )
 
 // The Edge passes its listener hostnames as the bounce domains: a bounce
-// address is accepted at every one of them, on any listener, and nowhere else.
-func TestBouncesAreAcceptedAtEveryListenerHostnameAndNotElsewhere(t *testing.T) {
+// address is accepted at every one of them, on any listener, and at any other
+// domain too (the token, not the domain, identifies the message).
+func TestBouncesAreAcceptedAtEveryListenerHostnameAndElsewhere(t *testing.T) {
 	hostnames := []string{"mx.example.net", "smtp.hosting.example", "smtp.second.example"}
 	var listeners []Listener
 	for _, name := range hostnames {
@@ -46,14 +47,15 @@ func TestBouncesAreAcceptedAtEveryListenerHostnameAndNotElsewhere(t *testing.T) 
 				t.Fatal(err)
 			}
 		}
-		// Names that are not a listener hostname, including a former global
-		// bounce domain and a parent of a listener name.
+		// Names that are not a listener hostname are accepted too (a valid token
+		// is accepted at any domain, so a customer's Return-Path domain works);
+		// control still validates the token before anything is acknowledged.
 		for _, domain := range []string{"bounce.example.net", "example.net", "other.example", "mx.example.net.evil.example"} {
 			if err = client.Mail(""); err != nil {
 				t.Fatal(err)
 			}
-			if err = client.Rcpt("b+" + recipientID + "@" + domain); smtpCode(err) != 550 {
-				t.Errorf("listener %s accepted a bounce at %s: %v", hostnames[i], domain, err)
+			if err = client.Rcpt("b+" + recipientID + "@" + domain); err != nil {
+				t.Errorf("listener %s refused a bounce at %s: %v", hostnames[i], domain, err)
 			}
 			if err = client.Reset(); err != nil {
 				t.Fatal(err)

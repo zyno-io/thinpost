@@ -45,6 +45,7 @@ flowchart LR
 - **It never connects into the trusted zone.** The control plane dials the edge, and the edge never opens a connection into the trusted zone. It holds no address or credential for the database or object store.
 - **It cannot decide to send.** Before any SMTP connection it must ask for a start permit, and the control plane commits the authorization in the database first.
 - **It cannot accept inbound mail or bounces on its own.** The edge answers `250` to a bounce or inbound message only after the control plane has stored and committed it, and answers `451` otherwise.
+- **Accepting bounces at any domain adds no power.** The edge takes a `b+<token>` recipient at any domain whose DNS points at it, not only its own names. That changes nothing about what a compromised edge can do: it still cannot acknowledge a bounce without the control plane's commit, and the control plane still refuses unknown tokens. Anyone could already connect to the edge and send to its own names.
 - **It cannot accept submitted mail on its own.** With SMTP submission on, the edge answers `250` only after the control plane has verified the credential, applied the app's policy and limits and committed the message. It cannot verify a credential itself: it relays the control plane's verdict.
 - **It runs as non-root.** The process refuses to start as root.
 

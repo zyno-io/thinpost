@@ -28,7 +28,7 @@ An administrator adds a receiving domain in the console (app, **Inbound**, **Add
 | MX | `mail.example.com` | `10 <mx_host>.` (published **after** verification) |
 
 1. Publish the TXT record and verify the domain.
-2. Only then publish the MX record. Until the domain is verified the edge refuses mail for it with `550`, so senders get it back.
+2. Only then publish the MX record. Until the domain is verified the edge refuses mail for it with `550`, so senders get it back. (The one exception is a bounce address, `b+<token>@…`, which the edge accepts at any domain and checks against the message it belongs to.)
 
 Verification looks up the TXT record through the control plane's resolver, like sender domains, with no DNSSEC validation. It shares the `_thinpost` TXT name with [sender-domain](/guide/domains) verification, and one domain can carry both challenges. Asking again for a pending domain replaces the challenge.
 
@@ -67,6 +67,7 @@ Mail for a receiving domain arrives at the same port-25 listener that handles bo
 | --- | --- |
 | A receiving domain that can receive now | `250` after the message is durably committed |
 | A listed domain that cannot receive now | `451`, so the sender queues and retries |
+| A bounce address, `b+<token>@<any domain>` | Handled as a bounce: accepted only if the token matches a message Thinpost sent, otherwise refused |
 | Anything else | `550 5.7.1` (no relaying) |
 
 A domain **cannot receive now** when its app is paused, the domain is disabled, the app has no enabled inbound endpoint, the app's pending inbound deliveries are at their limit, the deploy gate is closed, or the edge has no live control session. Thinpost never stores mail nobody will receive and never generates a bounce, so it creates no backscatter. There is no AUTH on the port 25 listener (authenticated submission is on ports 465 and 587), and nothing in the inbound path forwards, auto-replies or sends a DSN.

@@ -187,10 +187,9 @@ func mixedTransaction() error {
 	return &smtp.SMTPError{Code: 452, EnhancedCode: smtp.EnhancedCode{4, 5, 3}, Message: "Too many recipients for this message, send them in a later transaction"}
 }
 
-// inboundRecipient routes one recipient at a non-bounce domain.
-func (s *session) inboundRecipient(local, domain string) error {
-	inbound := s.backend.config.Inbound
-	group, state := inbound.Lookup(domain)
+// inboundRecipient routes one recipient at a domain whose route Rcpt already
+// looked up (state is never RouteUnknown there).
+func (s *session) inboundRecipient(local, domain string, group uint32, state RouteState) error {
 	switch state {
 	case RouteAccept:
 	case RouteTempfailState:

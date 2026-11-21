@@ -53,6 +53,9 @@ func startInboundSession(t *testing.T, s *Server, withCap bool) *inboundSession 
 	if got := edgeprotocol.HasCapability(ready.GetReady().Capabilities, edgeprotocol.CapInbound); !got {
 		t.Fatal("an inbound-enabled worker did not advertise the capability")
 	}
+	if !edgeprotocol.HasCapability(ready.GetReady().Capabilities, edgeprotocol.CapAnyBounceDomain) {
+		t.Fatal("the edge did not advertise bounce-any-domain/1")
+	}
 	if (<-stream.sent).GetReplayComplete() == nil {
 		t.Fatal("missing replay barrier")
 	}

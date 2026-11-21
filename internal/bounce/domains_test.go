@@ -7,7 +7,7 @@ import (
 )
 
 // Each sending IP may use its own bounce domain; every configured one is
-// accepted and any other is refused.
+// accepted, and a valid token is accepted at any other domain.
 func TestBounceAcceptsEveryConfiguredDomain(t *testing.T) {
 	client, _ := setupDomains(t, 1024, "bounce.example", "bounce.hosting.example")
 	if err := client.Mail(""); err != nil {
@@ -24,7 +24,7 @@ func TestBounceAcceptsEveryConfiguredDomain(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := client.Rcpt("b+0123456789abcdef0123456789abcdef@other.example"); smtpCode(err) != 550 {
+	if err := client.Rcpt("b+0123456789abcdef0123456789abcdef@other.example"); err != nil {
 		t.Fatalf("unconfigured domain: %v", err)
 	}
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{{}}}
