@@ -355,7 +355,7 @@ describe('apps list and create form', () => {
         api.listApps.mockResolvedValue({ data: { apps: [app, { ...app, id: 'a'.repeat(32), name: 'Hosted', sending_ip_id: HOSTING_ID }, { ...app, id: 'b'.repeat(32), name: 'Gone', sending_ip_id: '9'.repeat(32) }] } });
     });
 
-    it('has a Sending IP column that shows each app's IP as HELO name (address), or Unknown', async () => {
+    it('has a Sending IP column that shows each IP as HELO name (address), or Unknown', async () => {
         await mountApps();
         const cells = wrapper!.findAll('[data-testid="sending-ip-cell"]').map(c => c.text());
         expect(cells).toEqual([MAIN_LABEL, HOSTING_LABEL, 'Unknown']);
