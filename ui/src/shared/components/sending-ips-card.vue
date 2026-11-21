@@ -48,8 +48,10 @@
                             <template v-for="ip in data.ips" :key="ip.id">
                                 <tr :data-ip="ip.address">
                                     <th scope="row" class="nowrap">
-                                        <code>{{ ip.address }}</code>
-                                        <span v-if="ip.is_primary" class="tag" data-testid="main-tag">Main IP</span>
+                                        <span class="ip-cell">
+                                            <code>{{ ip.address }}</code>
+                                            <span v-if="ip.is_primary" class="tag" data-testid="main-tag">Main IP</span>
+                                        </span>
                                     </th>
                                     <td class="nowrap"><code>{{ ip.helo_name }}</code></td>
                                     <td class="num" :title="ip.is_primary ? `${ip.app_count} chose it, ${data.unpinned_app_count} haven't chosen an IP` : undefined">{{ formatCount(appsUsing(ip, data.unpinned_app_count)) }}</td>
@@ -186,6 +188,12 @@ onBeforeUnmount(() => {
 </script>
 
 <style lang="scss" scoped>
+.ip-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .rows {
     display: flex;
     flex-direction: column;
