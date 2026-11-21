@@ -247,7 +247,7 @@
                         <i class="fa-solid fa-triangle-exclamation" aria-hidden="true" />
                         <p class="notice-body">
                             <strong>Mail from {{ unsigned.join(', ') }} isn't being signed yet.</strong> Without a DKIM signature, mailbox providers are more likely to send it to spam.
-                            Ask your Thinpost administrator to finish setting up signing for {{ unsigned.length === 1 ? 'this domain' : 'these domains' }}.
+                            Open Sending domains to create or verify the DKIM key for {{ unsigned.length === 1 ? 'this domain' : 'these domains' }}.
                         </p>
                     </div>
 

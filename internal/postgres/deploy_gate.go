@@ -20,7 +20,7 @@ const DeployMigrationFloor = 27
 // added: the lock, drain and compatibility behavior of every migration up to
 // and including this one has been reviewed for unattended application.
 // A test asserts it equals len(migrations).
-const deployReviewedThrough = 45
+const deployReviewedThrough = 46
 
 // deployManual lists migrations that must never be applied by a deploy, keyed
 // by version, with the reason. A deploy that would cross one is refused.

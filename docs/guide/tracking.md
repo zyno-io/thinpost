@@ -23,7 +23,7 @@ Tracking needs configuration on the control plane. Setting only some of the opti
 | `THINPOST_TRACKING_LINK_KEYS_FILE` | Absolute path to the key file for link encryption. |
 | `THINPOST_TRACKING_EVENT_LIMIT` | A per-link event limit from 1 to 1,000. |
 
-It also needs the submission fingerprint key, encrypted object storage, the signing catalog and the edge connection to be configured. The origin must keep working for as long as issued links might be used, so choose it once and keep its DNS, certificate and route in place. See [Configuration](/reference/configuration).
+It also needs the submission fingerprint key, encrypted object storage (its keyring also seals the DKIM keys kept in PostgreSQL) and the edge connection to be configured. The origin must keep working for as long as issued links might be used, so choose it once and keep its DNS, certificate and route in place. See [Configuration](/reference/configuration).
 
 ### Keep the console off the tracking hostname
 

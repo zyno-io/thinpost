@@ -175,12 +175,6 @@ spec:
         - mountPath: /run/thinpost/control
           name: mail-control
           readOnly: true
-        - mountPath: /run/thinpost/signing
-          name: mail-signing
-          readOnly: true
-        - mountPath: /run/thinpost/dkim
-          name: mail-dkim
-          readOnly: true
         - mountPath: /run/thinpost/tracking
           name: mail-tracking
           readOnly: true
@@ -228,14 +222,6 @@ spec:
         secret:
           defaultMode: 288
           secretName: thinpost-control-client
-      - configMap:
-          defaultMode: 288
-          name: thinpost-signing-catalog
-        name: mail-signing
-      - name: mail-dkim
-        secret:
-          defaultMode: 288
-          secretName: thinpost-dkim
       - name: mail-tracking
         secret:
           defaultMode: 288

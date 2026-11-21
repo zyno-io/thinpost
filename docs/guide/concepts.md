@@ -31,7 +31,7 @@ Thinpost accepts SMTP submission on ports 465 (SSL/TLS) and 587 (STARTTLS) of it
 
 ## Sender domains
 
-A **sender domain** is a domain an app may use in its `From` address. An administrator requests it, publishes a TXT record that Thinpost generates, and asks Thinpost to verify it. Verification only proves control of the name; DKIM, SPF and DMARC are separate DNS setup. See [Sender domains](/guide/domains).
+A **sender domain** is a domain an app may use in its `From` address. An administrator adds it, and Thinpost generates a DKIM key for it. Publishing that key's TXT record in DNS verifies the domain and lets receivers check Thinpost's signatures. SPF and DMARC are separate DNS setup. See [Sender domains](/guide/domains).
 
 ## Receiving domains
 

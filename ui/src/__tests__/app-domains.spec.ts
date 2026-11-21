@@ -9,6 +9,9 @@ const api = vi.hoisted(() => ({
     listAppDomains: vi.fn(),
     requestAppDomain: vi.fn(),
     verifyAppDomain: vi.fn(),
+    createAppDomainDkimKey: vi.fn(),
+    activateAppDomainDkimKey: vi.fn(),
+    cancelAppDomainDkimKey: vi.fn(),
     getPublicConfig: vi.fn()
 }));
 vi.mock('@/openapi-client-generated', () => ({ DefaultApi: api }));
@@ -27,9 +30,17 @@ const { default: AppDomains } = await import('@/screens/app-domains.vue');
 
 const APP_ID = '0123456789abcdef0123456789abcdef';
 const app = { id: APP_ID, name: 'Billing', active: true, created_at: '2026-10-01T12:00:00Z' };
-const pending = { name: 'mail.example.com', active: false, created_at: '2026-10-02T12:00:00Z' };
-const verified = { ...pending, active: true, verified_at: '2026-10-03T12:00:00Z' };
-const CHALLENGE = { domain: pending, dns_name: '_thinpost.mail.example.com', dns_value: 'thinpost-verification=abc123' };
+const LONG_VALUE = `v=DKIM1; k=rsa; p=${'A'.repeat(392)}`;
+const keyOne = { selector: 'thinpost1', dns_name: 'thinpost1._domainkey.mail.example.com', dns_value: LONG_VALUE, activated_at: '2026-10-03T12:00:00Z' };
+const keyTwo = { selector: 'thinpost2', dns_name: 'thinpost2._domainkey.mail.example.com', dns_value: `${LONG_VALUE}B` };
+const base = { name: 'mail.example.com', created_at: '2026-10-02T12:00:00Z' };
+// Not verified, first key waiting for its record.
+const pending = { ...base, active: false, pending_key: { ...keyOne, activated_at: undefined } };
+const verified = { ...base, active: true, verified_at: '2026-10-03T12:00:00Z', active_key: keyOne };
+// Verified before keys existed: no key at all.
+const noKey = { ...base, active: true, verified_at: '2026-10-03T12:00:00Z' };
+const rotating = { ...verified, pending_key: keyTwo };
+const CHALLENGE = { domain: pending, dns_name: keyOne.dns_name, dns_value: LONG_VALUE };
 
 let wrapper: VueWrapper | undefined;
 
@@ -81,22 +92,23 @@ describe('sending domains screen', () => {
         expect(api.listAppDomains).not.toHaveBeenCalled();
     });
 
-    it('distinguishes ownership verification from DKIM/SPF readiness', async () => {
+    it('explains that the DKIM record verifies the domain', async () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
         await mountAt(`/apps/${APP_ID}/domains`);
         const help = await openHelp(wrapper!, 'sending domains');
-        expect(help).toContain('Verified means you own the domain, not that mail is ready to send');
-        expect(help).toContain("Verifying ownership doesn't set up or check DKIM, SPF, DMARC or reverse DNS");
-        expect(help).toContain('Sending also needs a DKIM key, which your Thinpost administrator sets up.');
+        expect(help).toContain('Verified means Thinpost can see your DKIM record');
+        expect(help).toContain("Verifying doesn't set up or check SPF, DMARC or reverse DNS");
+        expect(help).not.toContain('_thinpost');
         const text = wrapper!.text();
         expect(text).toContain('Verified');
-        expect(text).toContain('Not shown');
-        // A verified domain has no verify or reissue actions; the API rejects reissue for active domains.
+        expect(text).toContain('thinpost1');
+        // A verified domain with a key offers a test send and a rotation, not verification.
+        expect(hasButton('Send test')).toBe(true);
+        expect(hasButton('Rotate key')).toBe(true);
         expect(hasButton('Verify')).toBe(false);
-        expect(hasButton('New TXT record')).toBe(false);
     });
 
-    it('requests a TXT record with a normalized domain and shows copyable TXT values', async () => {
+    it('adds a domain and shows its persistent DKIM record with a split-strings copy option', async () => {
         api.listAppDomains.mockResolvedValueOnce({ data: { domains: [] } }).mockResolvedValue({ data: { domains: [pending] } });
         api.requestAppDomain.mockResolvedValue({ data: CHALLENGE });
         const writeText = vi.fn().mockResolvedValue(undefined);
@@ -107,16 +119,25 @@ describe('sending domains screen', () => {
         await submitDomain('  Mail.Example.COM ');
 
         expect(api.requestAppDomain).toHaveBeenCalledWith({ path: { appId: APP_ID }, body: { domain: 'mail.example.com' } });
-        expect(inputValues()).toEqual([CHALLENGE.dns_name, CHALLENGE.dns_value]);
-        expect(wrapper!.text()).toContain('Not verified');
+        expect(inputValues()).toEqual([keyOne.dns_name, LONG_VALUE]);
+        expect(wrapper!.text()).toContain('Waiting for DNS record');
+        expect(wrapper!.text()).toContain('Keep exactly one record at this name.');
         expect(api.listAppDomains).toHaveBeenCalledTimes(2);
 
         await button('Copy Record value').trigger('click');
         await flushPromises();
-        expect(writeText).toHaveBeenCalledWith(CHALLENGE.dns_value);
+        expect(writeText).toHaveBeenLastCalledWith(LONG_VALUE);
         expect(wrapper!.text()).toContain('Copied to clipboard.');
 
-        expect(setItem.mock.calls.flat().join(' ')).not.toContain(CHALLENGE.dns_value);
+        // The split option shows and copies the value as quoted strings of at most 255 characters.
+        await wrapper!.find('input[type="checkbox"]').setValue(true);
+        const split = inputValues()[1];
+        expect(split).toBe(`"${LONG_VALUE.slice(0, 255)}" "${LONG_VALUE.slice(255)}"`);
+        await button('Copy Record value (split into 255-character strings)').trigger('click');
+        await flushPromises();
+        expect(writeText).toHaveBeenLastCalledWith(split);
+
+        expect(setItem.mock.calls.flat().join(' ')).not.toContain(LONG_VALUE);
         setItem.mockRestore();
     });
 
@@ -126,6 +147,12 @@ describe('sending domains screen', () => {
         await submitDomain('bücher.example');
         expect(api.requestAppDomain).not.toHaveBeenCalled();
         expect(wrapper!.text()).toContain('xn-- form');
+    });
+
+    it('shows the record of a domain that is waiting, even after a reload', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [pending] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(inputValues()).toEqual([keyOne.dns_name, LONG_VALUE]);
     });
 
     it('verifies a pending domain and reloads its status from the API', async () => {
@@ -139,32 +166,40 @@ describe('sending domains screen', () => {
         expect(api.verifyAppDomain).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' } });
         expect(vf.showToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'mail.example.com verified' }));
         expect(hasButton('Verify')).toBe(false);
+        expect(inputValues()).toEqual([]);
     });
 
-    it('explains a 409 from verification as a non-matching TXT record', async () => {
+    it.each([
+        ['not_found', "Thinpost can't see a TXT record at thinpost1._domainkey.mail.example.com yet"],
+        ['multiple_records', 'There is more than one TXT record at thinpost1._domainkey.mail.example.com. Keep exactly one'],
+        ['different_key', "isn't the key shown here"],
+        ['testing_mode', 'marked as a test (t=y)'],
+        ['unsupported', "isn't a standard DKIM key record"]
+    ])('explains a %s result from the DNS check', async (reason, expected) => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [pending] } });
-        api.verifyAppDomain.mockRejectedValue(httpError(409));
+        api.verifyAppDomain.mockRejectedValue(httpError(409, { error: 'Conflict', reason }));
 
         await mountAt(`/apps/${APP_ID}/domains`);
         await button('Verify').trigger('click');
         await flushPromises();
 
-        expect(wrapper!.text()).toContain('TXT records exist at _thinpost.mail.example.com, but none matches the current value');
+        expect(wrapper!.text()).toContain(expected);
         expect(vf.showToast).not.toHaveBeenCalled();
     });
 
-    it('explains a 503 from verification as a missing or unpropagated record, or a failed lookup', async () => {
-        // The API maps any TXT lookup error, including NXDOMAIN for an unpublished record, to 503.
+    it('explains a failed DNS lookup and a missing pending key', async () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [pending] } });
-        api.verifyAppDomain.mockRejectedValue(httpError(503));
-
+        api.verifyAppDomain.mockRejectedValueOnce(httpError(503));
         await mountAt(`/apps/${APP_ID}/domains`);
         await button('Verify').trigger('click');
         await flushPromises();
-
-        expect(wrapper!.text()).toContain("Thinpost can't see a TXT record at _thinpost.mail.example.com yet");
-        expect(wrapper!.text()).toContain('DNS changes can take a while to spread');
+        expect(wrapper!.text()).toContain("Thinpost couldn't look up DNS just now");
         expect(api.listAppDomains).toHaveBeenCalledTimes(2);
+
+        api.verifyAppDomain.mockRejectedValueOnce(httpError(409));
+        await button('Verify').trigger('click');
+        await flushPromises();
+        expect(wrapper!.text()).toContain('There is no new key waiting for a record');
     });
 
     it('reports an uncertain outcome when verification gets no response', async () => {
@@ -176,53 +211,109 @@ describe('sending domains screen', () => {
         expect(wrapper!.text()).toContain("We can't tell whether the change went through");
     });
 
-    it('confirms before re-adding an unverified domain, because that replaces its TXT record', async () => {
-        api.listAppDomains.mockResolvedValue({ data: { domains: [pending] } });
-        api.requestAppDomain.mockResolvedValue({ data: CHALLENGE });
+    it('lets a domain verified before DKIM keys existed create one', async () => {
+        api.listAppDomains.mockResolvedValueOnce({ data: { domains: [noKey] } }).mockResolvedValue({ data: { domains: [{ ...noKey, pending_key: keyOne }] } });
+        api.createAppDomainDkimKey.mockResolvedValue({ data: { domain: noKey, dns_name: keyOne.dns_name, dns_value: LONG_VALUE } });
+
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.text()).toContain('No DKIM key yet');
+        expect(hasButton('Send test')).toBe(false);
+        await button('Create DKIM key').trigger('click');
+        await flushPromises();
+
+        // A first key needs no confirmation.
+        expect(vf.showConfirm).not.toHaveBeenCalled();
+        expect(api.createAppDomainDkimKey).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' } });
+        expect(inputValues()).toEqual([keyOne.dns_name, LONG_VALUE]);
+        expect(hasButton('Verify')).toBe(true);
+    });
+
+    it('rotates a key: confirm, create, check, switch', async () => {
+        api.listAppDomains
+            .mockResolvedValueOnce({ data: { domains: [verified] } })
+            .mockResolvedValueOnce({ data: { domains: [rotating] } })
+            .mockResolvedValueOnce({ data: { domains: [{ ...rotating, pending_key: { ...keyTwo, published_at: '2026-10-04T12:00:00Z' } }] } })
+            .mockResolvedValue({ data: { domains: [{ ...verified, active_key: { ...keyTwo, activated_at: '2026-10-05T12:00:00Z' }, retired_key: { selector: 'thinpost1', keep_record_until: '2026-10-12T12:00:00Z' } }] } });
+        api.createAppDomainDkimKey.mockResolvedValue({ data: { domain: rotating, dns_name: keyTwo.dns_name, dns_value: keyTwo.dns_value } });
+        api.verifyAppDomain.mockResolvedValue({ data: verified });
+        api.activateAppDomainDkimKey.mockResolvedValue({ data: verified });
         await mountAt(`/apps/${APP_ID}/domains`);
 
         vf.showConfirm.mockResolvedValueOnce(false);
-        await submitDomain('mail.example.com');
-        expect(vf.showConfirm).toHaveBeenCalledWith('Request a new TXT record?', expect.stringContaining('the current one will stop working'));
-        expect(api.requestAppDomain).not.toHaveBeenCalled();
+        await button('Rotate key').trigger('click');
+        await flushPromises();
+        expect(api.createAppDomainDkimKey).not.toHaveBeenCalled();
 
         vf.showConfirm.mockResolvedValueOnce(true);
-        await wrapper!.find('form').trigger('submit');
+        await button('Rotate key').trigger('click');
         await flushPromises();
-        expect(api.requestAppDomain).toHaveBeenCalledTimes(1);
-        expect(inputValues()).toEqual([CHALLENGE.dns_name, CHALLENGE.dns_value]);
-    });
+        expect(api.createAppDomainDkimKey).toHaveBeenCalledTimes(1);
+        expect(wrapper!.text()).toContain('New DKIM record for mail.example.com');
+        expect(wrapper!.text()).toContain('New key thinpost2: waiting for its DNS record.');
+        expect(inputValues()).toEqual([keyTwo.dns_name, keyTwo.dns_value]);
 
-    it('requests a new TXT record only after confirmation and replaces the shown value', async () => {
-        api.listAppDomains.mockResolvedValue({ data: { domains: [pending] } });
-        api.requestAppDomain.mockResolvedValue({ data: { ...CHALLENGE, dns_value: 'thinpost-verification=new' } });
-
-        await mountAt(`/apps/${APP_ID}/domains`);
-        vf.showConfirm.mockResolvedValueOnce(false);
-        await button('New TXT record').trigger('click');
+        await button('Check record').trigger('click');
         await flushPromises();
-        expect(api.requestAppDomain).not.toHaveBeenCalled();
+        expect(api.verifyAppDomain).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' } });
+        expect(wrapper!.text()).toContain('New key thinpost2: record found, ready to switch.');
 
         vf.showConfirm.mockResolvedValueOnce(true);
-        await button('New TXT record').trigger('click');
+        await button('Switch').trigger('click');
         await flushPromises();
-        expect(api.requestAppDomain).toHaveBeenCalledWith({ path: { appId: APP_ID }, body: { domain: 'mail.example.com' } });
-        expect(inputValues()).toEqual([CHALLENGE.dns_name, 'thinpost-verification=new']);
+        expect(vf.showConfirm).toHaveBeenLastCalledWith('Switch to the new key?', expect.stringContaining('the current key is deleted for good'));
+        expect(api.activateAppDomainDkimKey).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com', selector: 'thinpost2' } });
+        expect(wrapper!.text()).toContain('Old record thinpost1 can stay in DNS until');
+        expect(hasButton('Switch')).toBe(false);
     });
 
-    it('reports an already-verified conflict when reissuing', async () => {
-        api.listAppDomains.mockResolvedValue({ data: { domains: [pending] } });
-        api.requestAppDomain.mockRejectedValue(httpError(409));
+    it('does not switch when the new record is not in DNS yet', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [rotating] } });
+        api.activateAppDomainDkimKey.mockRejectedValue(httpError(409, { error: 'Conflict', reason: 'not_found' }));
         vf.showConfirm.mockResolvedValue(true);
-
         await mountAt(`/apps/${APP_ID}/domains`);
-        await button('New TXT record').trigger('click');
+        await button('Switch').trigger('click');
         await flushPromises();
-        expect(wrapper!.text()).toContain('already verified');
+        expect(wrapper!.text()).toContain("Thinpost can't see a TXT record at thinpost2._domainkey.mail.example.com yet");
+        expect(vf.showToast).not.toHaveBeenCalled();
+    });
+
+    it('cancels a pending rotation only after confirmation', async () => {
+        api.listAppDomains.mockResolvedValueOnce({ data: { domains: [rotating] } }).mockResolvedValue({ data: { domains: [verified] } });
+        api.cancelAppDomainDkimKey.mockResolvedValue({});
+        await mountAt(`/apps/${APP_ID}/domains`);
+
+        vf.showConfirm.mockResolvedValueOnce(false);
+        await button('Cancel').trigger('click');
+        await flushPromises();
+        expect(api.cancelAppDomainDkimKey).not.toHaveBeenCalled();
+
+        vf.showConfirm.mockResolvedValueOnce(true);
+        await button('Cancel').trigger('click');
+        await flushPromises();
+        expect(api.cancelAppDomainDkimKey).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com', selector: 'thinpost2' } });
+        expect(hasButton('Switch')).toBe(false);
         expect(inputValues()).toEqual([]);
     });
 
-    it('reports an uncertain outcome when the TXT record request gets no response', async () => {
+    it('shows and hides the current record of a verified domain on request', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(inputValues()).toEqual([]);
+        await button('Show record').trigger('click');
+        expect(inputValues()).toEqual([keyOne.dns_name, LONG_VALUE]);
+        await button('Hide record').trigger('click');
+        expect(inputValues()).toEqual([]);
+    });
+
+    it('explains an already-keyed domain when adding it again', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.requestAppDomain.mockRejectedValue(httpError(409));
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await submitDomain('mail.example.com');
+        expect(wrapper!.text()).toContain('already has a DKIM key');
+    });
+
+    it('reports an uncertain outcome when the request gets no response', async () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [] } });
         api.requestAppDomain.mockRejectedValue(networkError());
         await mountAt(`/apps/${APP_ID}/domains`);
@@ -231,22 +322,21 @@ describe('sending domains screen', () => {
         expect(inputValues()).toEqual([]);
     });
 
-    it('treats a TXT record response without a TXT value as invalid', async () => {
+    it('treats a response without a DKIM record as invalid', async () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [] } });
         api.requestAppDomain.mockResolvedValue({ data: { domain: pending, dns_name: CHALLENGE.dns_name } });
         await mountAt(`/apps/${APP_ID}/domains`);
         await submitDomain('mail.example.com');
         expect(wrapper!.text()).toContain("something the console didn't understand");
-        expect(inputValues()).toEqual([]);
     });
 
-    it('does not offer TXT record requests for an inactive app', async () => {
+    it('does not offer new keys for an inactive app', async () => {
         api.listApps.mockResolvedValue({ data: { apps: [{ ...app, active: false }] } });
-        api.listAppDomains.mockResolvedValue({ data: { domains: [pending] } });
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified, { ...noKey, name: 'b.example.com' }] } });
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(button('Add domain').attributes('disabled')).toBeDefined();
-        expect(button('New TXT record').attributes('disabled')).toBeDefined();
-        expect(button('Verify').attributes('disabled')).toBeUndefined();
+        expect(button('Rotate key').attributes('disabled')).toBeDefined();
+        expect(button('Create DKIM key').attributes('disabled')).toBeDefined();
     });
 
     it('disables mutations once the session has ended', async () => {

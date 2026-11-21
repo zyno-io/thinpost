@@ -31,6 +31,12 @@ const maxSourceSize = 16 << 20
 type Claim struct {
 	MessageID, AppID, SourceKey, Token string
 	SigningDomain                      string
+	// SigningKeyID is the DKIM key that signed the message (empty when the key
+	// source has no ids). The commit requires it to still be the domain's
+	// active key, so a key switched out mid-preparation cannot sign a message
+	// that then becomes visible: the commit fails and the message is prepared
+	// again with the new key.
+	SigningKeyID string
 	// SenderDomain is the From domain recorded at acceptance (lowercase). The
 	// shared Message-ID is built on it, so preparation requires the signing key
 	// to be for exactly this domain.
@@ -87,7 +93,9 @@ type Objects interface {
 }
 type SigningKey struct {
 	Domain, Selector string
-	Signer           crypto.Signer
+	// KeyID identifies the stored key behind Signer.
+	KeyID  string
+	Signer crypto.Signer
 }
 
 // Keys must resolve only keys authorized for the authenticated application's
@@ -273,6 +281,7 @@ func (s *Service) PrepareNext(ctx context.Context) (resultErr error) {
 		return errors.New("signing domain does not match the recorded sender domain")
 	}
 	claim.SigningDomain = key.Domain
+	claim.SigningKeyID = key.KeyID
 	if payload.Version == submission.RawSourceVersion {
 		if payload.RawHeader.SenderDomain != claim.SenderDomain {
 			return errors.New("signing domain does not match the recorded sender domain")

@@ -1,8 +1,9 @@
 package admin
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"net/http/httptest"
 	"strings"
@@ -23,6 +24,9 @@ type fakeStore struct {
 	calls           int
 	actor, app, key string
 	domainActive    bool
+	pendingKey      bool
+	switched        bool
+	cancelled       string
 	query           MessageQuery
 	searchErr       error
 	page            MessagePage
@@ -56,17 +60,39 @@ func (s *fakeStore) ListDomains(context.Context, string) ([]Domain, error) {
 func (s *fakeStore) RequestDomain(_ context.Context, actor, app, domain string) (DomainChallenge, error) {
 	s.calls++
 	s.actor, s.app = actor, app
-	return DomainChallenge{Domain: Domain{Name: domain}, DNSName: "_thinpost." + domain, DNSValue: "thinpost-verification=test"}, nil
+	return DomainChallenge{Domain: Domain{Name: domain}, DNSName: "thinpost1._domainkey." + domain, DNSValue: "v=DKIM1; k=rsa; p=" + testKeyB64}, nil
 }
-func (s *fakeStore) DomainChallenge(_ context.Context, app, domain string) (Domain, [32]byte, error) {
+func (s *fakeStore) CreateDKIMKey(_ context.Context, actor, app, domain string) (DomainChallenge, error) {
 	s.calls++
-	return Domain{Name: domain, Active: s.domainActive}, sha256.Sum256([]byte("thinpost-verification=test")), nil
+	s.actor, s.app = actor, app
+	if s.pendingKey {
+		return DomainChallenge{}, ErrConflict
+	}
+	s.pendingKey = true
+	return DomainChallenge{Domain: Domain{Name: domain}, DNSName: "thinpost2._domainkey." + domain, DNSValue: "v=DKIM1; k=rsa; p=" + testKeyB64}, nil
 }
-func (s *fakeStore) VerifyDomain(_ context.Context, actor, app, domain string, digest [32]byte) (Domain, error) {
+func (s *fakeStore) PendingDKIMKey(_ context.Context, app, domain, selector string) (DKIMKeyRef, error) {
+	s.calls++
+	if selector != "" && selector != "thinpost1" {
+		return DKIMKeyRef{}, ErrNotFound
+	}
+	return DKIMKeyRef{Selector: "thinpost1", PublicKey: testKey}, nil
+}
+func (s *fakeStore) ActivateDKIMKey(_ context.Context, actor, app, domain string, key DKIMKeyRef, switchActive bool) (Domain, error) {
 	s.calls++
 	s.domainActive = true
+	s.switched = switchActive
 	return Domain{Name: domain, Active: true}, nil
 }
+func (s *fakeStore) CancelDKIMKey(_ context.Context, actor, app, domain, selector string) error {
+	s.calls++
+	s.cancelled = selector
+	return nil
+}
+
+// testKey stands in for a public key; the handler only passes it to the checker.
+var testKey = bytes.Repeat([]byte{0x30, 0x82, 0x01, 0x22}, 70)
+var testKeyB64 = base64.StdEncoding.EncodeToString(testKey)
 
 type fakeDNS struct{ records []string }
 
@@ -291,29 +317,81 @@ func TestRawDownloadIsAnOpaqueAttachment(t *testing.T) {
 	}
 }
 
-func TestDomainVerificationRequiresMatchingTXT(t *testing.T) {
+func TestDomainVerificationRequiresMatchingDKIMRecord(t *testing.T) {
 	store := &fakeStore{}
+	value := "v=DKIM1; k=rsa; p=" + testKeyB64
 	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store, DNS: fakeDNS{records: []string{"unrelated"}}}
 	app := strings.Repeat("a", 32)
 	w := send(h, "POST", "/api/v1/apps/"+app+"/domains", `{"domain":"Example.COM"}`, "valid")
-	if w.Code != 201 || !strings.Contains(w.Body.String(), "_thinpost.example.com") {
-		t.Fatal("domain challenge failed")
+	if w.Code != 201 || !strings.Contains(w.Body.String(), `"dns_name":"thinpost1._domainkey.example.com"`) || !strings.Contains(w.Body.String(), "v=DKIM1; k=rsa; p=") {
+		t.Fatal("domain challenge failed", w.Body.String())
 	}
 	path := "/api/v1/apps/" + app + "/domains/example.com/verify"
-	w = send(h, "POST", path, "", "valid")
-	if w.Code != 409 || store.domainActive {
-		t.Fatal("verified without matching TXT")
+	for name, tc := range map[string]struct {
+		records []string
+		reason  string
+	}{
+		"unrelated record": {[]string{"unrelated"}, "unsupported"},
+		"no record":        {nil, "not_found"},
+		"two records":      {[]string{value, value}, "multiple_records"},
+		"different key":    {[]string{"v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString([]byte("another key"))}, "different_key"},
+		"testing mode":     {[]string{value + "; t=y"}, "testing_mode"},
+	} {
+		h.DNS = fakeDNS{records: tc.records}
+		w = send(h, "POST", path, "", "valid")
+		if w.Code != 409 || store.domainActive || !strings.Contains(w.Body.String(), `"reason":"`+tc.reason+`"`) {
+			t.Fatal(name, "verified or wrong reason", w.Code, w.Body.String())
+		}
 	}
-	h.DNS = fakeDNS{records: []string{"unrelated", "thinpost-verification=test"}}
-	w = send(h, "POST", path, "", "valid")
-	if w.Code != 200 || !store.domainActive {
-		t.Fatal("matching TXT did not verify")
+	h.DNS = fakeDNS{records: []string{value}}
+	if w = send(h, "POST", path, "", "valid"); w.Code != 200 || !store.domainActive || store.switched {
+		t.Fatal("matching record did not verify", w.Code)
 	}
 	if _, ok := NormalizeDomain("127.0.0.1"); ok {
 		t.Fatal("accepted IP as domain")
 	}
 	if _, ok := NormalizeDomain("example.com."); ok {
 		t.Fatal("accepted malformed domain")
+	}
+}
+
+func TestDKIMRotationRoutes(t *testing.T) {
+	store := &fakeStore{}
+	value := "v=DKIM1; k=rsa; p=" + testKeyB64
+	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store, DNS: fakeDNS{}}
+	base := "/api/v1/apps/" + strings.Repeat("a", 32) + "/domains/example.com/dkim-keys"
+	if w := send(h, "POST", base, "", "valid"); w.Code != 201 || !strings.Contains(w.Body.String(), "thinpost2._domainkey.example.com") {
+		t.Fatal("create", w.Code)
+	}
+	if w := send(h, "POST", base, "", "valid"); w.Code != 409 {
+		t.Fatal("second pending key allowed", w.Code)
+	}
+	// Switching rechecks DNS first.
+	if w := send(h, "POST", base+"/thinpost1/activate", "", "valid"); w.Code != 409 || store.switched {
+		t.Fatal("switched without the record", w.Code)
+	}
+	h.DNS = fakeDNS{records: []string{value}}
+	if w := send(h, "POST", base+"/thinpost1/activate", "", "valid"); w.Code != 200 || !store.switched {
+		t.Fatal("switch failed", w.Code)
+	}
+	if w := send(h, "POST", base+"/other/activate", "", "valid"); w.Code != 404 {
+		t.Fatal("unknown selector", w.Code)
+	}
+	if w := send(h, "POST", base+"/Bad_Selector/activate", "", "valid"); w.Code != 400 {
+		t.Fatal("bad selector accepted", w.Code)
+	}
+	if w := send(h, "DELETE", base+"/thinpost1", "", "valid"); w.Code != 204 || store.cancelled != "thinpost1" {
+		t.Fatal("cancel", w.Code)
+	}
+	if w := send(h, "GET", base, "", "valid"); w.Code != 405 {
+		t.Fatal("GET allowed", w.Code)
+	}
+	if w := send(h, "POST", base, "", ""); w.Code != 401 {
+		t.Fatal("unauthenticated", w.Code)
+	}
+	h2 := &Handler{Authenticator: fakeAuth{admin: false}, Store: store, DNS: fakeDNS{}}
+	if w := send(h2, "POST", base, "", "valid"); w.Code != 403 {
+		t.Fatal("non-admin", w.Code)
 	}
 }
 

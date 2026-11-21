@@ -7,11 +7,11 @@ description: Rotate Thinpost DKIM keys, the bounce, idempotency, tracking and ob
 
 Thinpost reads most keys and certificates at process start, and every control replica needs the same key material. The pattern is the same for every secret that protects existing data: **add the new key first, roll everything, switch the active key, roll again, and keep old keys for as long as anything depends on them.** Deleting an old key breaks whatever it protected.
 
-Thinpost is not a key manager. Create and store keys in your secret system, mount them as files, and keep them out of source control, logs and documentation.
+Thinpost is not a key manager for the secrets you provide. Create and store those in your secret system, mount them as files, and keep them out of source control, logs and documentation. DKIM keys are the exception: Thinpost generates and holds them itself.
 
 | Secret | Loaded | Rotation | Keep old keys while |
 | --- | --- | --- | --- |
-| [DKIM signing key](#dkim-keys) | Startup | New selector, switch, retire later | Mail signed with it can still be verified or retried |
+| [DKIM signing key](#dkim-keys) | Database | Create a new key, publish it, switch | Its DNS record stays until mail signed with it can no longer be retried (the console shows the date) |
 | [Bounce keyring](#bounce-keyring) | Startup | Add version, switch active | A delivery bearing it can still retry or bounce |
 | [Idempotency fingerprint key](#idempotency-fingerprint-key) | Startup | Prepend to the key list | The 24-hour idempotency window |
 | [Tracking link keys](#tracking-link-keys) | Startup | Two-phase seeds | Indefinitely, for links already sent |
@@ -22,14 +22,18 @@ Thinpost is not a key manager. Create and store keys in your secret system, moun
 
 ## DKIM keys
 
-A DKIM key is bound to an app, a sender domain and a selector in the signing catalog. To rotate:
+Thinpost generates each sender domain's DKIM key, seals it with the [object keyring](#object-keyring) and keeps it in the database, so rotating one needs no files, restart or deploy. It is a manual change, in the console or the API, that you control:
 
-1. Create a new RSA key (2048 to 8192 bits) and publish its public record at `<new-selector>._domainkey.<domain>`.
-2. Wait for the record to propagate. Thinpost rechecks DNS before it signs and does not sign with a key whose record is missing or does not match.
-3. Update the catalog to use the new selector and key path, and restart the control replicas.
-4. Keep the old selector's public record published until every message signed with it has aged out of retries and recipients' queues.
+1. **Create the next key.** In the app's **Sending domains**, choose **Rotate key** (`POST /api/v1/apps/{appId}/domains/{domain}/dkim-keys`). Thinpost makes a key with the next selector (`thinpost2`, and so on) and shows its record. The current key keeps signing, and only one new key can be waiting at a time.
+2. **Publish the record** at `<new-selector>._domainkey.<domain>` and choose **Check record**. Thinpost looks it up and marks the key ready to switch. Thinpost rechecks DNS before it signs and never signs with a key whose record is missing or does not match.
+3. **Switch** when you are ready (`POST .../dkim-keys/{selector}/activate`). Thinpost checks DNS once more and, in one transaction, makes the new key the signing key and retires the old one. **The old private key is deleted from the database** (copies in backups stay sealed and need the keyring to open) and its selector is never used again. Messages signed with the old key before the switch still verify while its record stays in DNS.
+4. **Keep the old record in DNS** until the date the console shows (`keep_record_until`): at least 7 days, and at least the delivery [retry policy](/operations/recovery)'s maximum message age plus 2 days. Messages signed with the old key may still be in the retry queue.
 
-See [Sender domains](/guide/domains#dkim-signing) for the catalog format and DNS record.
+To back out before switching, **Cancel** deletes the pending key (`DELETE .../dkim-keys/{selector}`). A pending key can also simply be left in place.
+
+The private keys are sealed with the object keyring, so keep every keyring version that sealed a key you still use: a version that is missing makes that key unopenable and mail from the domain stops signing. When you [rotate the object keyring](#object-keyring), existing DKIM keys stay sealed under the version that was active when they were created; only a new key uses the new active version, so keep old versions until those keys are rotated out.
+
+See [Sender domains](/guide/domains#rotate-a-key) for the DNS records and the checks.
 
 ## Bounce keyring
 
@@ -84,7 +88,7 @@ The file format, key derivation and constraints are in [Tracking](/guide/trackin
 
 ## Object keyring
 
-The object keyring encrypts stored messages and seals small secrets such as webhook signing secrets. It is set with `THINPOST_OBJECT_KEYRING_FILE`. The file is a JSON object with an `active` version and a `keys` map. Each value is the standard base64 encoding of a distinct random 32-byte key. IDs are ASCII letters, digits, hyphen and underscore, at most 64 characters, with at most 32 versions.
+The object keyring encrypts stored messages and seals small secrets such as webhook signing secrets and DKIM private keys. It is set with `THINPOST_OBJECT_KEYRING_FILE`. The file is a JSON object with an `active` version and a `keys` map. Each value is the standard base64 encoding of a distinct random 32-byte key. IDs are ASCII letters, digits, hyphen and underscore, at most 64 characters, with at most 32 versions.
 
 ```json
 {

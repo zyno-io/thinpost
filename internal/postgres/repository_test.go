@@ -19,6 +19,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/bounceaddress"
 	"github.com/zyno-io/thinpost/internal/bounceingest"
 	"github.com/zyno-io/thinpost/internal/delivery"
+	"github.com/zyno-io/thinpost/internal/dkimkey"
 	"github.com/zyno-io/thinpost/internal/objectkey"
 	"github.com/zyno-io/thinpost/internal/oplog"
 	"github.com/zyno-io/thinpost/internal/preparation"
@@ -68,7 +69,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 	collectorDB, cleanupCollector := restrictedCollectorForTest(t, ctx, db, dsn)
 	defer cleanupCollector()
 	present := objectVerifierFunc(func(context.Context, string) error { return nil })
-	repo := &Repository{DB: runtimeDB, Generation: testGeneration, Objects: present}
+	repo := &Repository{DB: runtimeDB, Generation: testGeneration, Objects: present, DKIMKeys: testKeyring(t)}
 	collectorRepo := &Repository{DB: collectorDB, Generation: testGeneration}
 	t.Run("admission readiness does not require a worker", func(t *testing.T) {
 		if err := repo.CheckAdmission(ctx); err != nil {
@@ -652,19 +653,34 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if _, err := db.ExecContext(ctx, `INSERT INTO apps(id,name) VALUES ($1,'signing')`, app); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.ExecContext(ctx, `INSERT INTO sender_domains(app_id,domain,active,verified_at) VALUES ($1,'signing.example',true,now())`, app); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO sender_domains(app_id,domain,active,verified_at) VALUES ($1,'signing.example',true,now()),($1,'nokey.example',true,now())`, app); err != nil {
 			t.Fatal(err)
 		}
-		if active, err := repo.SigningDomainActive(ctx, app, "signing.example"); err != nil || !active {
-			t.Fatal("verified domain rejected", err)
+		if _, err := db.ExecContext(ctx, `INSERT INTO dkim_keys(id,app_id,domain,selector,public_key,sealed_private_key,state,activated_at) VALUES ('00000000000000000000000000000611',$1,'signing.example','thinpost1',decode(repeat('ab',270),'hex'),decode(repeat('cd',100),'hex'),'active',now())`, app); err != nil {
+			t.Fatal(err)
 		}
-		if active, err := repo.SigningDomainActive(ctx, "00000000000000000000000000000602", "signing.example"); err != nil || active {
+		if k, err := repo.ActiveSigningKey(ctx, app, "signing.example"); err != nil || k.Selector != "thinpost1" || len(k.PublicKey) != 270 || k.Sealed != nil {
+			t.Fatal("verified domain with an active key rejected", err)
+		}
+		if _, err := repo.ActiveSigningKey(ctx, app, "nokey.example"); !errors.Is(err, dkimkey.ErrNoKey) {
+			t.Fatal("verified domain without a key has a signing key", err)
+		}
+		if _, err := repo.ActiveSigningKey(ctx, "00000000000000000000000000000602", "signing.example"); !errors.Is(err, dkimkey.ErrNoKey) {
 			t.Fatal("cross-app domain allowed", err)
 		}
-		if _, err := db.ExecContext(ctx, `UPDATE apps SET active=false WHERE id=$1`, app); err != nil {
+		if k, err := repo.SealedSigningKey(ctx, "00000000000000000000000000000611"); err != nil || len(k.Sealed) != 100 || k.AppID != app {
+			t.Fatal("sealed key unavailable", err)
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE sender_domains SET active=false WHERE app_id=$1 AND domain='signing.example'`, app); err != nil {
 			t.Fatal(err)
 		}
-		if active, err := repo.SigningDomainActive(ctx, app, "signing.example"); err != nil || active {
+		if _, err := repo.ActiveSigningKey(ctx, app, "signing.example"); !errors.Is(err, dkimkey.ErrNoKey) {
+			t.Fatal("deactivated domain signs", err)
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE sender_domains SET active=true WHERE app_id=$1 AND domain='signing.example'; UPDATE apps SET active=false WHERE id=$1`, app); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.ActiveSigningKey(ctx, app, "signing.example"); !errors.Is(err, dkimkey.ErrNoKey) {
 			t.Fatal("inactive app allowed", err)
 		}
 	})
@@ -2041,26 +2057,37 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 			t.Fatal("EP raw read not audited", auditCount, err)
 		}
 		challenge, err := repo.RequestDomain(ctx, "operator-1", app.ID, "mail.example")
-		if err != nil || challenge.Domain.Active {
-			t.Fatal("domain challenge failed")
+		if err != nil || challenge.Domain.Active || challenge.DNSName != "thinpost1._domainkey.mail.example" || !strings.HasPrefix(challenge.DNSValue, "v=DKIM1; k=rsa; p=") {
+			t.Fatal("domain challenge failed", err)
 		}
-		oldHash := sha256.Sum256([]byte(challenge.DNSValue))
-		replacement, err := repo.RequestDomain(ctx, "operator-1", app.ID, "mail.example")
-		if err != nil {
-			t.Fatal(err)
+		again, err := repo.RequestDomain(ctx, "operator-1", app.ID, "mail.example")
+		if err != nil || again.DNSValue != challenge.DNSValue {
+			t.Fatal("asking again changed the pending record", err)
 		}
-		if _, err = repo.VerifyDomain(ctx, "operator-1", app.ID, "mail.example", oldHash); !errors.Is(err, admin.ErrConflict) {
-			t.Fatal("stale domain challenge accepted")
+		ref, err := repo.PendingDKIMKey(ctx, app.ID, "mail.example", "")
+		if err != nil || ref.Selector != "thinpost1" {
+			t.Fatal("pending key", err)
 		}
-		currentHash := sha256.Sum256([]byte(replacement.DNSValue))
-		domain, err := repo.VerifyDomain(ctx, "operator-1", app.ID, "mail.example", currentHash)
-		if err != nil || !domain.Active || domain.VerifiedAt == nil {
-			t.Fatal("verified domain not activated")
+		domain, err := repo.ActivateDKIMKey(ctx, "operator-1", app.ID, "mail.example", ref, false)
+		if err != nil || !domain.Active || domain.VerifiedAt == nil || domain.ActiveKey == nil || domain.PendingKey != nil {
+			t.Fatal("verified domain not activated", err)
 		}
 		if _, err = repo.RequestDomain(ctx, "operator-1", app.ID, "mail.example"); !errors.Is(err, admin.ErrConflict) {
-			t.Fatal("active domain challenge was reset")
+			t.Fatal("active domain was asked for a second first key", err)
 		}
-		if _, _, err = repo.DomainChallenge(ctx, other.ID, "mail.example"); !errors.Is(err, admin.ErrNotFound) {
+		if _, err = repo.ActivateDKIMKey(ctx, "operator-1", app.ID, "mail.example", ref, false); !errors.Is(err, admin.ErrConflict) {
+			t.Fatal("an activated key activated twice", err)
+		}
+		if _, err = repo.CreateDKIMKey(ctx, "operator-1", app.ID, "mail.example"); err != nil {
+			t.Fatal("rotation key", err)
+		}
+		if err = repo.CancelDKIMKey(ctx, "operator-1", app.ID, "mail.example", "thinpost2"); err != nil {
+			t.Fatal("restricted runtime cannot cancel a pending key", err)
+		}
+		if err = repo.CancelDKIMKey(ctx, "operator-1", app.ID, "mail.example", "thinpost1"); !errors.Is(err, admin.ErrNotFound) {
+			t.Fatal("active key cancelled", err)
+		}
+		if _, err = repo.PendingDKIMKey(ctx, other.ID, "mail.example", ""); !errors.Is(err, admin.ErrNotFound) {
 			t.Fatal("cross-app domain visible")
 		}
 	})
