@@ -147,7 +147,10 @@ grep -A1 'name: THINPOST_EDGE_SMTP_HOSTNAME$' "$tmp/edge_reordered.yaml" | grep 
 # attachment, interface or table churns live Multus attachments.
 for golden in single multi; do
   helm template thinpost "$chart" -n thinpost-edge -f "scripts/testdata/helm-edge/addresses-$golden.yaml" >"$tmp/golden_$golden.yaml" || fail "golden $golden values must render"
-  if ! diff "scripts/testdata/helm-edge/legacy-$golden.golden.yaml" "$tmp/golden_$golden.yaml" >"$tmp/golden_$golden.diff"; then
+  # Blank lines vary between Helm versions; every other byte must match.
+  sed '/^[[:space:]]*$/d' "scripts/testdata/helm-edge/legacy-$golden.golden.yaml" >"$tmp/golden_${golden}_want.yaml"
+  sed '/^[[:space:]]*$/d' "$tmp/golden_$golden.yaml" >"$tmp/golden_${golden}_got.yaml"
+  if ! diff "$tmp/golden_${golden}_want.yaml" "$tmp/golden_${golden}_got.yaml" >"$tmp/golden_$golden.diff"; then
     cat "$tmp/golden_$golden.diff" >&2
     fail "addresses ($golden) must render exactly what the legacy values rendered"
   fi

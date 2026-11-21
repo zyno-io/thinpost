@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"net"
 	"net/smtp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -21,7 +22,7 @@ func TestBouncesAreAcceptedAtEveryListenerHostnameAndNotElsewhere(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	const token = "0123456789abcdef0123456789abcdef"
+	recipientID := strings.Repeat("0123456789abcdef", 2)
 	for i, server := range servers {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -38,7 +39,7 @@ func TestBouncesAreAcceptedAtEveryListenerHostnameAndNotElsewhere(t *testing.T) 
 			if err = client.Mail(""); err != nil {
 				t.Fatal(err)
 			}
-			if err = client.Rcpt("b+" + token + "@" + domain); err != nil {
+			if err = client.Rcpt("b+" + recipientID + "@" + domain); err != nil {
 				t.Errorf("listener %s refused a bounce at %s: %v", hostnames[i], domain, err)
 			}
 			if err = client.Reset(); err != nil {
@@ -51,7 +52,7 @@ func TestBouncesAreAcceptedAtEveryListenerHostnameAndNotElsewhere(t *testing.T) 
 			if err = client.Mail(""); err != nil {
 				t.Fatal(err)
 			}
-			if err = client.Rcpt("b+" + token + "@" + domain); smtpCode(err) != 550 {
+			if err = client.Rcpt("b+" + recipientID + "@" + domain); smtpCode(err) != 550 {
 				t.Errorf("listener %s accepted a bounce at %s: %v", hostnames[i], domain, err)
 			}
 			if err = client.Reset(); err != nil {
