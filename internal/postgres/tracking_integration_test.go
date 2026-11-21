@@ -301,7 +301,7 @@ func TestTrackingPostgresAtomicReferencesAndBoundedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := &tracking.Handler{Origin: linkOrigin, Links: linkKeys, Visitor: service}
+	handler := &tracking.Handler{Links: linkKeys, Visitor: service}
 	linkPath := func(m tracking.Mapping) string {
 		link, linkErr := linkKeys.Link(linkOrigin, m.Kind, m.Token, m.Destination)
 		if linkErr != nil {
@@ -1072,7 +1072,7 @@ func TestTrackingPostgresAtomicReferencesAndBoundedEvents(t *testing.T) {
 		if !found {
 			t.Fatal("issued link missing")
 		}
-		h := &tracking.Handler{Origin: origin, Links: keys, Visitor: &tracking.Service{Repository: repo, Objects: protected}}
+		h := &tracking.Handler{Links: keys, Visitor: &tracking.Service{Repository: repo, Objects: protected}}
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest("GET", link, nil))
 		if w.Code != 302 || w.Header().Get("Location") != "https://example.net/forever?case=fixture" {

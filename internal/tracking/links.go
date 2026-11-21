@@ -22,8 +22,9 @@ const (
 	maxLinkKeysBytes   = 1 << 20
 	maxPreviousSeeds   = 4096
 	maxLinkPathBytes   = 4096
-	linkDomain         = "thinpost-tracking-v2"
+	linkDomain         = "thinpost-tracking-v3"
 	linkKDFInfo        = "thinpost-tracking-v2 aead"
+	hostKDFInfo        = "thinpost-tracking-v2 host check"
 	linkKeyIDDomain    = "thinpost-tracking-v2 key id\x00"
 	linkTokenBytes     = 16
 	linkPadBlock       = 64
@@ -40,8 +41,10 @@ const (
 // secret that must be kept for as long as its links must keep working. Keys
 // are immutable and shared by all control-plane replicas in an environment.
 type LinkKeys struct {
-	active string
-	aeads  map[string]cipher.AEAD
+	active   string
+	aeads    map[string]cipher.AEAD
+	hostKeys map[string][]byte // key id -> K_host, for the host self-check proof
+	sizing   bool              // public all-zero key: never issues proofs
 }
 
 func (LinkKeys) String() string   { return "<tracking keys redacted>" }
@@ -50,20 +53,24 @@ func (LinkKeys) MarshalJSON() ([]byte, error) {
 	return nil, errors.New("tracking keys cannot be serialized")
 }
 
-func deriveLinkKey(seed []byte) (string, cipher.AEAD, error) {
+func deriveLinkKey(seed []byte) (string, cipher.AEAD, []byte, error) {
 	if len(seed) != 32 {
-		return "", nil, errors.New("invalid tracking link keys")
+		return "", nil, nil, errors.New("invalid tracking link keys")
 	}
 	key, err := hkdf.Key(sha256.New, seed, nil, linkKDFInfo, chacha20poly1305.KeySize)
 	if err != nil {
-		return "", nil, errors.New("invalid tracking link keys")
+		return "", nil, nil, errors.New("invalid tracking link keys")
 	}
 	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {
-		return "", nil, errors.New("invalid tracking link keys")
+		return "", nil, nil, errors.New("invalid tracking link keys")
+	}
+	hostKey, err := hkdf.Key(sha256.New, seed, nil, hostKDFInfo, 32)
+	if err != nil {
+		return "", nil, nil, errors.New("invalid tracking link keys")
 	}
 	sum := sha256.Sum256(append([]byte(linkKeyIDDomain), key...))
-	return hex.EncodeToString(sum[:16]), aead, nil
+	return hex.EncodeToString(sum[:16]), aead, hostKey, nil
 }
 
 // NewLinkKeys accepts the active 32-byte seed and the seeds of earlier
@@ -88,6 +95,7 @@ func NewSizingLinkKeys() *LinkKeys {
 	if err != nil {
 		panic("tracking sizing keys")
 	}
+	keys.sizing = true
 	return keys
 }
 
@@ -104,17 +112,18 @@ func newLinkKeys(seed []byte, previous [][]byte) (*LinkKeys, error) {
 	if len(previous) > maxPreviousSeeds {
 		return nil, errors.New("invalid tracking link keys")
 	}
-	id, aead, err := deriveLinkKey(seed)
+	id, aead, hostKey, err := deriveLinkKey(seed)
 	if err != nil {
 		return nil, err
 	}
-	k := &LinkKeys{active: id, aeads: map[string]cipher.AEAD{id: aead}}
+	k := &LinkKeys{active: id, aeads: map[string]cipher.AEAD{id: aead}, hostKeys: map[string][]byte{id: hostKey}}
 	for _, old := range previous {
-		oldID, oldAEAD, err := deriveLinkKey(old)
+		oldID, oldAEAD, oldHost, err := deriveLinkKey(old)
 		if err != nil || k.aeads[oldID] != nil {
 			return nil, errors.New("invalid tracking link keys")
 		}
 		k.aeads[oldID] = oldAEAD
+		k.hostKeys[oldID] = oldHost
 	}
 	return k, nil
 }
@@ -202,13 +211,14 @@ func LoadLinkKeys(path string) (*LinkKeys, error) {
 	return keys, nil
 }
 
-// linkAAD binds a payload to the deployment origin, the link kind and the key
-// generation, so it cannot be replayed across any of them.
-func linkAAD(origin, letter, keyID string) []byte {
-	return []byte(linkDomain + "\n" + origin + "\n" + letter + "\n" + keyID)
+// linkAAD binds a payload to the link kind and the key generation, so it
+// cannot be replayed across either. It deliberately does not include the
+// origin: any hostname that routes to this deployment serves any link.
+func linkAAD(letter, keyID string) []byte {
+	return []byte(linkDomain + "\n" + letter + "\n" + keyID)
 }
 
-// seal builds origin + "/t/{letter}/v2/{key id}/{payload}". The payload is
+// seal builds origin (a URL prefix only, never authenticated) + "/t/{letter}/v3/{key id}/{payload}". The payload is
 // base64url(nonce || AEAD(plaintext)); the URL carries no message content or
 // recipient token in the clear. The plaintext is the 16-byte token, a 2-byte
 // big-endian destination length, the destination, then zero padding to a
@@ -237,8 +247,8 @@ func (k *LinkKeys) seal(origin, letter, token, destination string) (string, erro
 	if _, err = rand.Read(nonce); err != nil {
 		return "", errors.New("tracking link encryption unavailable")
 	}
-	sealed := aead.Seal(nonce, nonce, plaintext, linkAAD(origin, letter, k.active))
-	return origin + "/t/" + letter + "/v2/" + k.active + "/" + base64.RawURLEncoding.EncodeToString(sealed), nil
+	sealed := aead.Seal(nonce, nonce, plaintext, linkAAD(letter, k.active))
+	return origin + "/t/" + letter + "/v3/" + k.active + "/" + base64.RawURLEncoding.EncodeToString(sealed), nil
 }
 
 func paddedLinkLen(destination int) int {
@@ -268,21 +278,21 @@ func (k *LinkKeys) Link(origin, kind, token, destination string) (string, error)
 }
 
 // UnsubscribeLink builds the one-click unsubscribe URL of a delivery:
-// origin + "/t/u/v2/{key id}/{payload}". The delivery ID is opaque, not an
+// origin + "/t/u/v3/{key id}/{payload}". The delivery ID is opaque, not an
 // address; the kind letter is authenticated, so an open or click payload never
 // opens as an unsubscribe (and the reverse). No table row backs the link.
 func (k *LinkKeys) UnsubscribeLink(origin, deliveryID string) (string, error) {
 	return k.seal(origin, "u", deliveryID, "")
 }
 
-// open decrypts "/t/{letter}/v2/{key id}/{payload}" and returns the token and
+// open decrypts "/t/{letter}/v3/{key id}/{payload}" and returns the token and
 // destination. It touches no storage. Every failure is ErrNotFound.
-func (k *LinkKeys) open(origin, path, letter string) (string, string, error) {
+func (k *LinkKeys) open(path, letter string) (string, string, error) {
 	if k == nil || len(path) > maxLinkPathBytes {
 		return "", "", ErrNotFound
 	}
 	parts := strings.Split(path, "/")
-	if len(parts) != 6 || parts[0] != "" || parts[1] != "t" || parts[2] != letter || parts[3] != "v2" || len(parts[4]) != 32 {
+	if len(parts) != 6 || parts[0] != "" || parts[1] != "t" || parts[2] != letter || parts[3] != "v3" || len(parts[4]) != 32 {
 		return "", "", ErrNotFound
 	}
 	aead := k.aeads[parts[4]]
@@ -294,7 +304,7 @@ func (k *LinkKeys) open(origin, path, letter string) (string, string, error) {
 	if err != nil || base64.RawURLEncoding.EncodeToString(sealed) != encoded || len(sealed) < aead.NonceSize()+linkPadBlock+aead.Overhead() {
 		return "", "", ErrNotFound
 	}
-	plaintext, err := aead.Open(nil, sealed[:aead.NonceSize()], sealed[aead.NonceSize():], linkAAD(origin, letter, parts[4]))
+	plaintext, err := aead.Open(nil, sealed[:aead.NonceSize()], sealed[aead.NonceSize():], linkAAD(letter, parts[4]))
 	if err != nil || len(plaintext) < linkPadBlock || len(plaintext)%linkPadBlock != 0 {
 		return "", "", ErrNotFound
 	}
@@ -307,8 +317,8 @@ func (k *LinkKeys) open(origin, path, letter string) (string, string, error) {
 }
 
 // verifyUnsubscribe returns the delivery ID of a valid unsubscribe path.
-func (k *LinkKeys) verifyUnsubscribe(origin, path string) (string, error) {
-	id, destination, err := k.open(origin, path, "u")
+func (k *LinkKeys) verifyUnsubscribe(path string) (string, error) {
+	id, destination, err := k.open(path, "u")
 	if err != nil || destination != "" {
 		return "", ErrNotFound
 	}
@@ -317,13 +327,13 @@ func (k *LinkKeys) verifyUnsubscribe(origin, path string) (string, error) {
 
 // verify resolves an open or click path to the token hash, kind and (click
 // only) destination.
-func (k *LinkKeys) verify(origin, path string) ([32]byte, string, string, error) {
+func (k *LinkKeys) verify(path string) ([32]byte, string, string, error) {
 	var zero [32]byte
 	kind, letter := "open", "o"
 	if strings.HasPrefix(path, "/t/c/") {
 		kind, letter = "click", "c"
 	}
-	token, destination, err := k.open(origin, path, letter)
+	token, destination, err := k.open(path, letter)
 	if err != nil {
 		return zero, "", "", ErrNotFound
 	}

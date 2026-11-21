@@ -984,8 +984,8 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 	if len(trackedObjects) != 2 || trackedObjects[0].mapping == trackedObjects[1].mapping {
 		t.Fatal("tracking mappings were not committed independently")
 	}
-	pathPattern := regexp.MustCompile(`https://tracking\.example\.com/t/[oc]/v2/[0-9a-f]{32}/[A-Za-z0-9_-]+`)
-	handler := controlapp.RouterWithRuntime(http.NotFoundHandler(), nil, nil, nil, controlapp.MailRuntime{Tracking: &tracking.Handler{Origin: "https://tracking.example.com", Links: linkKeys, Visitor: &tracking.Service{Repository: repo, Objects: protected}}})
+	pathPattern := regexp.MustCompile(`https://tracking\.example\.com/t/[oc]/v3/[0-9a-f]{32}/[A-Za-z0-9_-]+`)
+	handler := controlapp.RouterWithRuntime(http.NotFoundHandler(), nil, nil, nil, controlapp.MailRuntime{Tracking: &tracking.Handler{Links: linkKeys, Visitor: &tracking.Service{Repository: repo, Objects: protected}}})
 	seenPaths := make(map[string]bool)
 	for _, item := range trackedObjects {
 		mime, readErr := objects.Get(ctx, item.final, 16<<20)

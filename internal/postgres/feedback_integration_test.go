@@ -251,7 +251,7 @@ func TestRecipientFeedbackPostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 		const origin = "https://track.example.com"
-		h := &tracking.Handler{Origin: origin, Links: keys, Unsubscribes: f.repo}
+		h := &tracking.Handler{Links: keys, Unsubscribes: f.repo}
 		_, deliveries, _ := f.message(app, false, "s")
 		link, err := keys.UnsubscribeLink(origin, deliveries[1])
 		if err != nil {
