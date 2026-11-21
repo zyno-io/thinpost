@@ -10,7 +10,7 @@ import (
 func TestIPNameNeverEmitsAddressesOrFreeText(t *testing.T) {
 	for name, want := range map[string]string{
 		"": "primary", "mx.example.net": "mx.example.net", "smtp-2.hosting.example.org": "smtp-2.hosting.example.org", "a": "a", "removed": "removed",
-		"45.0.1.22": "other", "045.0." + "1.22": "other", "45.0.1": "other", "45-0-1-22.example": "45-0-1-22.example", "1.2.3.4.5": "other", "45.0.1.22.example": "other", "mx.45.0.1.22.nip.io": "other", "1.2.3.example": "1.2.3.example", "smtp.2.3.4.example": "smtp.2.3.4.example",
+		"45.0.1.22": "other", "045.0." + "1.22": "other", "45.0.1": "other", "45-0-1-22.example": "45-0-1-22.example", "1.2.3.4.5": "other", "45.0.1.22.example": "other", "mx.45.0.1.22.example": "other", "1.2.3.example": "1.2.3.example", "smtp.2.3.4.example": "smtp.2.3.4.example",
 		"Mx.example.net": "other", "-x.example.net": "other", "x-.example.net": "other", "a..b": "other", ".a": "other", "a.": "other",
 		"two words": "other", "user@example.com": "other", "::1": "other", "x\r\ny": "other",
 		strings.Repeat("a", 64) + ".example.net": "other",
