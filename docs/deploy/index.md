@@ -65,7 +65,7 @@ The two releases can sit in different namespaces of one cluster or in different 
 | Multus, the `ipvlan` and `sbr` CNI plugins, and Whereabouts | Give the edge pod a direct public interface. See [Direct public networking](/deploy/direct-public-networking). |
 | An OIDC provider | Issues JWT access tokens to your operators. See [Operator authentication](/deploy/operator-auth). |
 | An HTTPS entry point | A Gateway, Ingress or load balancer that terminates TLS for your API and console host name and forwards to the `thinpost-operator` Service. The chart has none. |
-| DNS you control | For the console host name, the SMTP host names, bounce domains and, if you receive mail, the MX host. |
+| DNS you control | For the console host name, the SMTP host names (also the bounce domains) and, if you receive mail, the MX host. |
 
 Optional:
 
@@ -90,7 +90,7 @@ Optional:
 
 Do these in order. Each step links to the page that holds the detail.
 
-1. **Choose names.** Pick the console host name, the primary SMTP host name (the edge's HELO and PTR), a bounce domain, a worker ID and a SPIFFE trust domain. Generate a deployment generation (`openssl rand -hex 16`). The pages use `thinpost.example`, `smtp.example.com`, `bounce.example.com` and `203.0.113.10` as stand-ins.
+1. **Choose names.** Pick the console host name, the SMTP host name of each sending address (the edge's HELO, PTR and bounce domain), a worker ID and a SPIFFE trust domain. Generate a deployment generation (`openssl rand -hex 16`). The pages use `thinpost.example`, `smtp.example.com` and `203.0.113.10` as stand-ins.
 2. **Create the namespaces** for the control plane and the edge, with whatever pod security level you apply. The workloads run non-root with a read-only root file system and dropped capabilities.
 3. **Prepare PostgreSQL.** Create the owner and runtime roles and the database, then run `bootstrap-database`, `migrate` and `grant-runtime`, and open the admission gate once. See [Database](/deploy/database).
 4. **Prepare the bucket.** Create it, grant the control credential, apply the lifecycle rule for `inbound/` and generate the object keyring. See [Object storage](/deploy/object-storage).

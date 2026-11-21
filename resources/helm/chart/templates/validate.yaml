@@ -35,59 +35,72 @@
 {{- end }}
 {{- end }}
 {{- if eq .Values.workload "edge" }}
-{{- /* Additional addresses: unique IPv4 literals including the primary, at most 15 extra, one routing table per attachment. Each listens for SMTP under its own unique hostname with its own certificate Secret. */ -}}
+{{- /* The addresses list: 1-16 maps with unique IPv4 addresses and unique hostnames, one routing table per attachment. The first entry is the main IP. */ -}}
+{{- $legacy := list }}
+{{- range $key := list "sourceAddress" "smtpHostname" "bounceDomain" "additionalSources" "additionalBounceDomains" }}
+{{- if hasKey $.Values $key }}{{ $legacy = append $legacy $key }}{{ end }}
+{{- end }}
+{{- if and (empty .Values.addresses) $legacy }}
+{{- fail (printf "the values %s were replaced by a single addresses list. Move sourceAddress and smtpHostname into the first entry (address, hostname) and each additionalSources entry after it; bounceDomain and additionalBounceDomains are no longer used (bounces arrive at each entry's hostname). See the Helm: Edge page in the deployment docs." (join ", " $legacy)) }}
+{{- end }}
+{{- if empty .Values.addresses }}
+{{- fail "addresses is required for the Edge: list at least one entry with an address and a hostname (the first entry is the main IP)" }}
+{{- end }}
+{{- /* While both shapes are set (the old chart reads only the legacy keys, this one only addresses), they must describe the same attachments, or switching charts would silently change the Edge's addresses. */ -}}
+{{- if or (hasKey .Values "sourceAddress") (hasKey .Values "smtpHostname") (hasKey .Values "additionalSources") }}
+{{- $old := list (dict "address" .Values.sourceAddress "hostname" .Values.smtpHostname) }}
+{{- range (default list .Values.additionalSources) }}{{ $old = append $old . }}{{ end }}
+{{- if ne (len $old) (len .Values.addresses) }}
+{{- fail (printf "addresses has %d entries but the legacy sourceAddress and additionalSources describe %d; while both are set they must match entry for entry" (len .Values.addresses) (len $old)) }}
+{{- end }}
+{{- range $i, $new := .Values.addresses }}
+{{- $was := index $old $i }}
+{{- if not (kindIs "map" $new) }}{{ fail "each addresses entry must be a map with an address and a hostname" }}{{ end }}
+{{- range $key := list "address" "hostname" "range" "gateway" "master" "mtu" "certificateSecret" }}
+{{- $a := toString (default "" (get $was $key)) }}
+{{- $b := toString (default "" (get $new $key)) }}
+{{- if and (eq $i 0) (eq $key "certificateSecret") }}{{ $a = default "thinpost-smtp-public" $a }}{{ $b = default "thinpost-smtp-public" $b }}{{ end }}
+{{- if ne $a $b }}
+{{- fail (printf "addresses entry %d %s is %q but the legacy values say %q; while both are set they must match" $i $key $b $a) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- $ipv4 := "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$" }}
-{{- if gt (len .Values.additionalSources) 15 }}
-{{- fail "additionalSources supports at most 15 addresses" }}
+{{- if gt (len .Values.addresses) 16 }}
+{{- fail "addresses supports at most 16 entries" }}
 {{- end }}
-{{- if gt (len .Values.additionalBounceDomains) 7 }}
-{{- fail "additionalBounceDomains supports at most 7 domains" }}
-{{- end }}
-{{- if gt (add (int .Values.publicNetwork.table) (len .Values.additionalSources)) 252 }}
-{{- fail "publicNetwork.table plus the number of additionalSources must be at most 252" }}
-{{- end }}
-{{- if not (regexMatch $ipv4 (toString .Values.sourceAddress)) }}
-{{- fail "sourceAddress must be an IPv4 literal" }}
+{{- if gt (add (int .Values.publicNetwork.table) (sub (len .Values.addresses) 1)) 252 }}
+{{- fail "publicNetwork.table plus the number of addresses minus one must be at most 252" }}
 {{- end }}
 {{- $dnsName := "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" }}
 {{- $secretName := "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?)*$" }}
-{{- $seen := dict (toString .Values.sourceAddress) true }}
-{{- $names := dict (toString .Values.smtpHostname) true }}
-{{- range .Values.additionalSources }}
+{{- $seen := dict }}
+{{- $names := dict }}
+{{- range .Values.addresses }}
 {{- if not (kindIs "map" .) }}
-{{- fail "each additionalSources entry must be a map with an address" }}
+{{- fail "each addresses entry must be a map with an address and a hostname" }}
 {{- end }}
 {{- $address := toString (default "" .address) }}
 {{- if not (regexMatch $ipv4 $address) }}
-{{- fail "each additionalSources address must be an IPv4 literal" }}
+{{- fail "each addresses entry needs an address that is an IPv4 literal" }}
 {{- end }}
 {{- if hasKey $seen $address }}
-{{- fail "additionalSources addresses must be unique and different from sourceAddress" }}
+{{- fail "addresses must be unique" }}
 {{- end }}
 {{- $_ := set $seen $address true }}
 {{- $hostname := toString (default "" .hostname) }}
 {{- if or (not (regexMatch $dnsName $hostname)) (gt (len $hostname) 219) }}
-{{- fail "each additionalSources entry needs a hostname: a lowercase DNS name of at most 219 characters" }}
+{{- fail "each addresses entry needs a hostname: a lowercase DNS name of at most 219 characters" }}
 {{- end }}
 {{- if hasKey $names $hostname }}
-{{- fail "additionalSources hostnames must be unique and different from smtpHostname" }}
+{{- fail "addresses hostnames must be unique" }}
 {{- end }}
 {{- $_ := set $names $hostname true }}
 {{- $secret := toString (default "thinpost-smtp-public" .certificateSecret) }}
 {{- if or (not (regexMatch $secretName $secret)) (gt (len $secret) 253) }}
-{{- fail "additionalSources certificateSecret must be a Kubernetes Secret name" }}
+{{- fail "addresses certificateSecret must be a Kubernetes Secret name" }}
 {{- end }}
-{{- end }}
-{{- $domains := dict (toString .Values.bounceDomain) true }}
-{{- range .Values.additionalBounceDomains }}
-{{- $domain := toString . }}
-{{- if or (not (regexMatch "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" $domain)) (gt (len $domain) 219) }}
-{{- fail "additionalBounceDomains must be lowercase DNS names of at most 219 characters" }}
-{{- end }}
-{{- if or (hasKey $domains $domain) (hasKey $names $domain) }}
-{{- fail "additionalBounceDomains must be unique and different from bounceDomain and every additionalSources hostname" }}
-{{- end }}
-{{- $_ := set $domains $domain true }}
 {{- end }}
 {{- end }}
 {{- if and (eq .Values.workload "edge") .Values.smtpSubmission.internal.enabled }}

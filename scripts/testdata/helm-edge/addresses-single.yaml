@@ -1,0 +1,11 @@
+# The addresses equivalent of legacy-single.yaml.
+workload: edge
+replicas: 1
+controlClientCidrs: [10.0.0.5/32]
+addresses:
+  - address: 198.51.100.10
+    hostname: mx.example.net
+publicNetwork:
+  master: ens18
+  range: 198.51.100.0/24
+  gateway: 198.51.100.1

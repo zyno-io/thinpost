@@ -40,11 +40,11 @@ Each sending address is one attachment:
 | **Whereabouts** | Allocates the address. The chart sets `range_start` and `range_end` to the same address, so each pool holds exactly one address, and a second pod can never take it. |
 | **`sbr`** | Adds source-based routing: a rule that sends traffic from that address through a dedicated routing table. |
 
-The first address is attachment `thinpost-public` on `net1`, using routing table `publicNetwork.table` (default 100). Each entry of `additionalSources` is `thinpost-public-N` on `net{N+1}`, using table `publicNetwork.table + N`. Because each attachment has its own gateway and table, addresses in different networks leave through their own gateways, and the pod's default route stays on the cluster interface.
+The first entry of `addresses` is attachment `thinpost-public` on `net1`, using routing table `publicNetwork.table` (default 100). Each later entry of `addresses` is `thinpost-public-N` on `net{N+1}`, using table `publicNetwork.table + N`. Because each attachment has its own gateway and table, addresses in different networks leave through their own gateways, and the pod's default route stays on the cluster interface.
 
 ## What the chart renders
 
-For the primary address `203.0.113.10` and one additional address, the chart renders these attachments (trimmed to the essentials):
+For the first address `203.0.113.10` and a second address, the chart renders these attachments (trimmed to the essentials):
 
 ```json
 {
@@ -82,19 +82,20 @@ k8s.v1.cni.cncf.io/networks: [{"name":"thinpost-public","interface":"net1"},{"na
 The values that drive this:
 
 ```yaml
-sourceAddress: 203.0.113.10
+addresses:
+  - address: 203.0.113.10
+    hostname: smtp.example.com
+  - address: 198.51.100.20
+    hostname: smtp2.example.com
+    range: 198.51.100.0/24
+    gateway: 198.51.100.1
+    master: eth2
 publicNetwork:
   master: eth1
   range: 203.0.113.0/24
   gateway: 203.0.113.1
   mtu: 1500
   table: 100
-additionalSources:
-  - address: 198.51.100.20
-    hostname: smtp2.example.com
-    range: 198.51.100.0/24
-    gateway: 198.51.100.1
-    master: eth2
 ```
 
 ## Prerequisites
@@ -117,7 +118,7 @@ publicNetwork:
     sbr: sbr-custom
 ```
 
-The defaults are `ipvlan` and `sbr`. If a policy engine in your cluster needs a label on attachments, `attachmentLabels` adds labels to every `NetworkAttachmentDefinition`, the primary and each additional one:
+The defaults are `ipvlan` and `sbr`. If a policy engine in your cluster needs a label on attachments, `attachmentLabels` adds labels to every `NetworkAttachmentDefinition`, one per address:
 
 ```yaml
 publicNetwork:

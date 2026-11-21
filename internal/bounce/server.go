@@ -29,7 +29,8 @@ type Forwarder interface {
 
 type Config struct {
 	// Hostname is the SMTP greeting name. Domains are the bounce domains whose
-	// b+<token> recipients are accepted; each sending IP may use its own.
+	// b+<token> recipients are accepted: the Edge passes every listener's name,
+	// which is also the HELO name and Return-Path domain control uses for it.
 	Hostname       string
 	Domains        []string
 	TLS            *tls.Config
@@ -65,8 +66,8 @@ type session struct {
 	closed                bool
 }
 
-// MaxDomains bounds the bounce domains a receiver accepts: the global one, one
-// per listener name, and a few retired extras.
+// MaxDomains bounds the bounce domains a receiver accepts: one per listener
+// name, with headroom.
 const MaxDomains = 24
 
 // Listener is one SMTP listener's own identity: the name it greets with and the
@@ -152,6 +153,9 @@ func (l redactedLogger) Printf(format string, _ ...any) {
 }
 func (l redactedLogger) Println(...any) { l.logf("bounce SMTP connection error") }
 
+// acceptsDomain is the one place that decides whether a recipient domain takes
+// bounces. A later change to accept b+<token> at any domain (per-app bounce
+// domains) edits only this function.
 func (b *backend) acceptsDomain(domain string) bool {
 	for _, accepted := range b.config.Domains {
 		if strings.EqualFold(domain, accepted) {

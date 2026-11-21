@@ -69,7 +69,8 @@ chmod 700 /journal
 journal_id="$(su-exec 65532:65532 /usr/local/bin/thinpost-edge journal-id /journal/attempts.db)"
 printf 'THINPOST_CONTROL_JOURNAL_ID=%s\n' "$journal_id" >runtime.env
 
-# DNS zone: MX, SPF, DKIM and DMARC for the sender domain.
+# DNS zone: MX, SPF, DKIM and DMARC for the sender domain. The edge's name
+# (smtp) is also the bounce domain, so it has its own MX and SPF.
 dkim_p="$(openssl pkey -in dkim.pem -pubout -outform DER 2>/dev/null | openssl base64 -A)"
 dkim_txt="$(printf 'v=DKIM1; k=rsa; p=%s' "$dkim_p" | fold -w 200 | sed 's/.*/"&"/' | tr '\n' ' ')"
 mkdir -p "$ZONE"
@@ -82,7 +83,8 @@ ns IN A 10.99.50.53
 @ IN MX 10 mx
 mx IN A 11.42.51.25
 smtp IN A 11.42.51.10
-bounce IN MX 10 smtp
+smtp IN MX 10 smtp
+smtp IN TXT "v=spf1 a -all"
 @ IN TXT "v=spf1 ip4:11.42.51.10 -all"
 $SELECTOR._domainkey IN TXT ( $dkim_txt )
 _dmarc IN TXT "v=DMARC1; p=none"

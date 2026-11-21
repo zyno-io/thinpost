@@ -1,0 +1,204 @@
+---
+# Source: thinpost/templates/network-policy.yaml
+# This policy covers only the primary Cilium interface. Router policy must
+# protect the direct-public Multus interface independently. The private control
+# Service preserves the source; permit only the configured router gateway peers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: thinpost-edge-worker
+  namespace: thinpost-edge
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: thinpost-edge-worker
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: "10.0.0.5/32"
+      ports:
+        - port: 7443
+          protocol: TCP
+
+---
+# Source: thinpost/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thinpost-edge-worker
+  namespace: thinpost-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: thinpost-edge-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: thinpost-edge-worker
+      annotations:
+        # A change to any attachment (address, gateway, table) restarts the pod.
+        checksum/public-network: 30e01138b1bf9822ba13b2b84dca905886bff9938cb45f2c7de4d5e70c2701d9
+        k8s.v1.cni.cncf.io/networks: '[{"name":"thinpost-public","interface":"net1"}]'
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        # Preserve private journal modes after the volume root is provisioned.
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+        sysctls:
+          - name: net.ipv4.ip_unprivileged_port_start
+            value: '0'
+      containers:
+        - name: worker
+          image: "unconfigured"
+          ports:
+            - name: control
+              containerPort: 7443
+              protocol: TCP
+            - name: smtp
+              containerPort: 25
+              protocol: TCP
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: THINPOST_EDGE_CONTROL_LISTEN
+              value: $(POD_IP):7443
+            - name: THINPOST_EDGE_SMTP_LISTEN
+              value: "198.51.100.10:25"
+            - name: THINPOST_EDGE_WORKER_ID
+              value: "unconfigured"
+            - name: THINPOST_EDGE_SMTP_HOSTNAME
+              value: "mx.example.net"
+            # One gateway per source, primary first, as the routing config derives them.
+            - name: THINPOST_EDGE_SOURCE_GATEWAYS
+              value: "198.51.100.1"
+            - name: THINPOST_EDGE_CONTROLLER_IDENTITIES
+              value: "spiffe://thinpost.invalid/control"
+            - name: THINPOST_EDGE_CONTROL_CA
+              value: /run/thinpost/control/ca.crt
+            - name: THINPOST_EDGE_CONTROL_CERT
+              value: /run/thinpost/control/tls.crt
+            - name: THINPOST_EDGE_CONTROL_KEY
+              value: /run/thinpost/control/tls.key
+            - name: THINPOST_EDGE_SMTP_CERT
+              value: /run/thinpost/smtp/tls.crt
+            - name: THINPOST_EDGE_SMTP_KEY
+              value: /run/thinpost/smtp/tls.key
+            - name: THINPOST_EDGE_JOURNAL_PATH
+              value: /journal/attempts.db
+            - name: THINPOST_EDGE_JOURNAL_CAPACITY
+              value: "1000"
+            - name: THINPOST_EDGE_JOURNAL_RESERVE_BYTES
+              value: "67108864"
+            - name: THINPOST_EDGE_CLOCK_MARGIN
+              value: "5s"
+            - name: THINPOST_EDGE_SMTP_GLOBAL_INTERVAL
+              value: "100ms"
+            - name: THINPOST_EDGE_SMTP_GLOBAL_BURST
+              value: "100"
+            - name: THINPOST_EDGE_SMTP_SOURCE_INTERVAL
+              value: "1s"
+            - name: THINPOST_EDGE_SMTP_SOURCE_BURST
+              value: "12"
+          volumeMounts:
+            - name: control-tls
+              mountPath: /run/thinpost/control
+              readOnly: true
+            - name: smtp-tls
+              mountPath: /run/thinpost/smtp
+              readOnly: true
+            - name: journal
+              mountPath: /journal
+          startupProbe:
+            exec:
+              command: [/usr/local/bin/thinpost-edge, healthcheck, liveness]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: [/usr/local/bin/thinpost-edge, healthcheck]
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          # Liveness checks the journal only: unresolved source neighbours delay
+          # readiness but must never restart the worker.
+          livenessProbe:
+            exec:
+              command: [/usr/local/bin/thinpost-edge, healthcheck, liveness]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+              ephemeral-storage: 32Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              ephemeral-storage: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: control-tls
+          secret:
+            secretName: thinpost-edge-control
+            defaultMode: 0440
+        - name: smtp-tls
+          secret:
+            secretName: thinpost-smtp-public
+            defaultMode: 0440
+        - name: journal
+          persistentVolumeClaim:
+            claimName: thinpost-journal
+
+---
+# Source: thinpost/templates/network-attachment.yaml
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: thinpost-public
+  namespace: thinpost-edge
+spec:
+  config: |-
+    {
+      "cniVersion": "1.1.0",
+      "name": "thinpost-public",
+      "plugins": [
+        {
+          "type": "ipvlan",
+          "master": "ens18",
+          "mode": "l2",
+          "mtu": 1400,
+          "ipam": {
+            "type": "whereabouts",
+            "range": "198.51.100.0/24",
+            "range_start": "198.51.100.10",
+            "range_end": "198.51.100.10",
+            "gateway": "198.51.100.1",
+            "routes": [
+              {"dst": "198.51.100.1/32", "gw": "0.0.0.0", "table": 100, "scope": 253},
+              {"dst": "0.0.0.0/0", "gw": "198.51.100.1", "table": 100 }
+            ]
+          }
+        },
+        {"type": "sbr", "table": 100 }
+      ]
+    }

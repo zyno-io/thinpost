@@ -1,4 +1,11 @@
 {{- if eq .Values.workload "edge" }}
+{{- /* validate.yaml rejects an empty addresses list with a clear message; entry 0 is the main IP, the rest are additional. */ -}}
+{{- $first := dict }}
+{{- $rest := list }}
+{{- if .Values.addresses }}
+{{- $first = index .Values.addresses 0 }}
+{{- $rest = slice .Values.addresses 1 }}
+{{- end }}
 {{- if not (has (toString .Values.replicas) (list "0" "1")) }}
 {{- fail "Thinpost release 1 supports zero or one Edge worker" }}
 {{- end }}
@@ -24,7 +31,7 @@ spec:
       annotations:
         # A change to any attachment (address, gateway, table) restarts the pod.
         checksum/public-network: {{ include (print $.Template.BasePath "/network-attachment.yaml") . | sha256sum }}
-        k8s.v1.cni.cncf.io/networks: '[{"name":"thinpost-public","interface":"net1"}{{ range $i, $_ := .Values.additionalSources }},{"name":"thinpost-public-{{ add1 $i }}","interface":"net{{ add 2 $i }}"}{{ end }}]'
+        k8s.v1.cni.cncf.io/networks: '[{"name":"thinpost-public","interface":"net1"}{{ range $i, $_ := $rest }},{"name":"thinpost-public-{{ add1 $i }}","interface":"net{{ add 2 $i }}"}{{ end }}]'
     spec:
       automountServiceAccountToken: false
 {{- if and .Values.node (ne (toString .Values.node) "unconfigured") }}
@@ -78,27 +85,21 @@ spec:
             - name: THINPOST_EDGE_CONTROL_LISTEN
               value: $(POD_IP):7443
             - name: THINPOST_EDGE_SMTP_LISTEN
-              value: {{ printf "%s:25" .Values.sourceAddress | quote }}
+              value: {{ printf "%s:25" $first.address | quote }}
             - name: THINPOST_EDGE_WORKER_ID
               value: {{ .Values.workerId | quote }}
             - name: THINPOST_EDGE_SMTP_HOSTNAME
-              value: {{ .Values.smtpHostname | quote }}
-            - name: THINPOST_EDGE_BOUNCE_DOMAIN
-              value: {{ .Values.bounceDomain | quote }}
+              value: {{ $first.hostname | quote }}
             # One gateway per source, primary first, as the routing config derives them.
             - name: THINPOST_EDGE_SOURCE_GATEWAYS
-              value: {{ $gateways := list .Values.publicNetwork.gateway }}{{ range .Values.additionalSources }}{{ $gateways = append $gateways (default $.Values.publicNetwork.gateway .gateway) }}{{ end }}{{ join "," $gateways | quote }}
-{{- if .Values.additionalSources }}
+              value: {{ $gateways := list }}{{ range .Values.addresses }}{{ $gateways = append $gateways (default $.Values.publicNetwork.gateway .gateway) }}{{ end }}{{ join "," $gateways | quote }}
+{{- if $rest }}
             - name: THINPOST_EDGE_SMTP_ADDITIONAL_SOURCES
-              value: {{ $addresses := list }}{{ range .Values.additionalSources }}{{ $addresses = append $addresses .address }}{{ end }}{{ join "," $addresses | quote }}
+              value: {{ $addresses := list }}{{ range $rest }}{{ $addresses = append $addresses .address }}{{ end }}{{ join "," $addresses | quote }}
             - name: THINPOST_EDGE_SMTP_ADDITIONAL_HOSTNAMES
-              value: {{ $hostnames := list }}{{ range .Values.additionalSources }}{{ $hostnames = append $hostnames .hostname }}{{ end }}{{ join "," $hostnames | quote }}
+              value: {{ $hostnames := list }}{{ range $rest }}{{ $hostnames = append $hostnames .hostname }}{{ end }}{{ join "," $hostnames | quote }}
             - name: THINPOST_EDGE_SMTP_ADDITIONAL_CERT_ROOT
               value: /run/thinpost/smtp-sources
-{{- end }}
-{{- if .Values.additionalBounceDomains }}
-            - name: THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS
-              value: {{ join "," .Values.additionalBounceDomains | quote }}
 {{- end }}
 {{- if .Values.smtpSubmission.enabled }}
             - name: THINPOST_EDGE_SUBMISSION
@@ -151,7 +152,7 @@ spec:
             - name: smtp-tls
               mountPath: /run/thinpost/smtp
               readOnly: true
-{{- range $i, $_ := .Values.additionalSources }}
+{{- range $i, $_ := $rest }}
             # A whole-directory mount, so a renewed certificate reaches the Edge.
             - name: {{ printf "smtp-source-%d" $i }}
               mountPath: {{ printf "/run/thinpost/smtp-sources/%d" $i }}
@@ -206,9 +207,9 @@ spec:
             defaultMode: 0440
         - name: smtp-tls
           secret:
-            secretName: thinpost-smtp-public
+            secretName: {{ if $first.certificateSecret }}{{ $first.certificateSecret | quote }}{{ else }}thinpost-smtp-public{{ end }}
             defaultMode: 0440
-{{- range $i, $extra := .Values.additionalSources }}
+{{- range $i, $extra := $rest }}
         - name: {{ printf "smtp-source-%d" $i }}
           secret:
             secretName: {{ default "thinpost-smtp-public" $extra.certificateSecret | quote }}

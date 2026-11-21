@@ -17,22 +17,20 @@ import (
 )
 
 type Config struct {
-	WorkerID, Hostname, BounceDomain string
-	ControlListen, SMTPListen        string
-	Source                           netip.Addr
+	WorkerID, Hostname        string
+	ControlListen, SMTPListen string
+	Source                    netip.Addr
 	// AdditionalSources are further addresses the Edge binds. Each accepts SMTP
 	// and sends from its own address under its own name (AdditionalHostnames,
 	// same order) and certificate (<AdditionalCertRoot>/<N>/tls.crt and
-	// tls.key). Sources lists the primary first, then these. BounceDomains
-	// lists the global bounce domain first, then every listener name, then the
-	// explicit extras.
+	// tls.key). Sources lists the primary first, then these. Bounces are
+	// accepted at every listener name (see BounceDomains).
 	AdditionalSources []netip.Addr
 	// SourceGateways holds each source's gateway, in Sources() order. Empty
 	// means no neighbour announcement (and no readiness gate on it).
 	SourceGateways                         []netip.Addr
 	AdditionalHostnames                    []string
 	AdditionalCertRoot                     string
-	BounceDomains                          []string
 	ControllerIdentities                   []string
 	ControlCA, ControlCert, ControlKey     string
 	SMTPCert, SMTPKey, JournalPath         string
@@ -75,7 +73,6 @@ func Load(getenv func(string) string) (Config, error) {
 	var c Config
 	c.WorkerID = getenv("THINPOST_EDGE_WORKER_ID")
 	c.Hostname = getenv("THINPOST_EDGE_SMTP_HOSTNAME")
-	c.BounceDomain = getenv("THINPOST_EDGE_BOUNCE_DOMAIN")
 	c.ControlListen = getenv("THINPOST_EDGE_CONTROL_LISTEN")
 	c.SMTPListen = getenv("THINPOST_EDGE_SMTP_LISTEN")
 	c.ControlCA = getenv("THINPOST_EDGE_CONTROL_CA")
@@ -87,17 +84,11 @@ func Load(getenv func(string) string) (Config, error) {
 	if !validID(c.WorkerID) || c.ControlCA == "" || c.ControlCert == "" || c.ControlKey == "" || c.SMTPCert == "" || c.SMTPKey == "" || c.JournalPath == "" {
 		return Config{}, errors.New("missing edge configuration")
 	}
-	for _, value := range []string{c.Hostname, c.BounceDomain} {
-		normalized, ok := admin.NormalizeDomain(value)
-		if !ok || normalized != value {
-			return Config{}, errors.New("invalid edge DNS name")
-		}
+	if normalized, ok := admin.NormalizeDomain(c.Hostname); !ok || normalized != c.Hostname {
+		return Config{}, errors.New("invalid edge DNS name")
 	}
 	if len(c.Hostname) > 219 {
 		return Config{}, errors.New("SMTP hostname is too long")
-	}
-	if len(c.BounceDomain) > 219 {
-		return Config{}, errors.New("bounce domain is too long")
 	}
 	controlHost, controlPort, err := net.SplitHostPort(c.ControlListen)
 	if err != nil {
@@ -141,9 +132,10 @@ func Load(getenv func(string) string) (Config, error) {
 	if c.SourceGateways, err = parseSourceGateways(getenv("THINPOST_EDGE_SOURCE_GATEWAYS"), len(c.Sources())); err != nil {
 		return Config{}, err
 	}
-	if c.BounceDomains, err = parseBounceDomains(c.BounceDomain, append([]string{c.Hostname}, c.AdditionalHostnames...), getenv("THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS")); err != nil {
-		return Config{}, err
-	}
+	// Bounces are accepted at each listener's own name, so no bounce domain is
+	// configured. THINPOST_EDGE_BOUNCE_DOMAIN and
+	// THINPOST_EDGE_ADDITIONAL_BOUNCE_DOMAINS from an earlier release are never
+	// read, so an Edge that still has them set starts normally.
 	for _, value := range strings.Split(getenv("THINPOST_EDGE_CONTROLLER_IDENTITIES"), ",") {
 		value = strings.TrimSpace(value)
 		if value == "" {
@@ -268,12 +260,9 @@ func mustPort(value string) uint16 {
 	return uint16(port)
 }
 
-// MaxAdditionalSources and MaxBounceDomains bound the optional lists. The
-// primary plus these stay within the 16 addresses a worker may advertise.
-const (
-	MaxAdditionalSources = 15
-	MaxBounceDomains     = 24
-)
+// MaxAdditionalSources bounds the optional list. The primary plus these stay
+// within the 16 addresses a worker may advertise.
+const MaxAdditionalSources = 15
 
 // Listener is one SMTP listener: the address the Edge binds on port 25, the
 // name it greets with, and the certificate files for that name.
@@ -289,6 +278,18 @@ func (c Config) Listeners() []Listener {
 	for i, address := range c.AdditionalSources {
 		dir := filepath.Join(c.AdditionalCertRoot, strconv.Itoa(i))
 		out = append(out, Listener{Address: address, Hostname: c.AdditionalHostnames[i], Cert: filepath.Join(dir, "tls.crt"), Key: filepath.Join(dir, "tls.key")})
+	}
+	return out
+}
+
+// BounceDomains are the domains whose b+<token> recipients the Edge accepts:
+// exactly the listener names, the primary first. Control addresses each
+// delivery's Return-Path at the HELO name of its source, which is that name.
+func (c Config) BounceDomains() []string {
+	listeners := c.Listeners()
+	out := make([]string, 0, len(listeners))
+	for _, l := range listeners {
+		out = append(out, l.Hostname)
 	}
 	return out
 }
@@ -349,38 +350,6 @@ func parseAdditionalHostnames(value, primary string, sources int) ([]string, err
 	return out, nil
 }
 
-// parseBounceDomains returns the global bounce domain, then every listener
-// name not already present (each listener accepts its own name as a bounce
-// domain), then the optional comma-separated extras. Extras are for retired
-// domains and must not repeat anything already listed.
-func parseBounceDomains(global string, listenerNames []string, value string) ([]string, error) {
-	domains := []string{global}
-	seen := map[string]struct{}{global: {}}
-	for _, name := range listenerNames {
-		if _, ok := seen[name]; !ok {
-			seen[name] = struct{}{}
-			domains = append(domains, name)
-		}
-	}
-	if strings.TrimSpace(value) != "" {
-		for _, item := range strings.Split(value, ",") {
-			item = strings.TrimSpace(item)
-			normalized, ok := admin.NormalizeDomain(item)
-			if !ok || normalized != item || len(item) > 219 {
-				return nil, errors.New("invalid additional bounce domain")
-			}
-			if _, duplicate := seen[item]; duplicate {
-				return nil, errors.New("duplicate bounce domain")
-			}
-			seen[item] = struct{}{}
-			domains = append(domains, item)
-		}
-	}
-	if len(domains) > MaxBounceDomains {
-		return nil, errors.New("too many bounce domains")
-	}
-	return domains, nil
-}
 func validPort(value string) bool {
 	port, err := strconv.Atoi(value)
 	return err == nil && port > 0 && port <= 65535

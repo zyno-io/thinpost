@@ -9,12 +9,15 @@ import (
 	controlv1 "github.com/zyno-io/thinpost/api/control/v1"
 )
 
-var testSources = []netip.Addr{netip.MustParseAddr("45.0.1.22"), netip.MustParseAddr("45.0.0.10")}
+var (
+	testSources   = []netip.Addr{netip.MustParseAddr("45.0.1.22"), netip.MustParseAddr("45.0.0.10")}
+	testHostnames = []string{"smtp.sender.example", "smtp.hosting.example"}
+)
 
 func TestExecuteUsesPrimaryAndOwnHostnameWhenSourceFieldsAreEmpty(t *testing.T) {
 	j, fence, start, mime := setup(t)
 	dialer := &fakeDialer{}
-	worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: testSources}
+	worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: testSources, SourceHostnames: testHostnames}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result, err := worker.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)
@@ -33,7 +36,7 @@ func TestExecuteUsesRequestedSourceAndHelo(t *testing.T) {
 	j, fence, start, mime := setup(t)
 	start.SourceAddress, start.HeloName = "45.0.0.10", "smtp.hosting.example"
 	dialer := &fakeDialer{}
-	worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: testSources}
+	worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: testSources, SourceHostnames: testHostnames}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result, err := worker.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)
@@ -67,12 +70,16 @@ func TestExecuteRefusesUnrequestableSourceBeforePermit(t *testing.T) {
 		"trailing-dot HELO":        {"45.0.0.10", "smtp.hosting.example."},
 		"single-label HELO":        {"45.0.0.10", "smtp"},
 		"unreported primary alias": {"45.0.1.23", "smtp.hosting.example"},
+		// A valid name that is not the source's own configured hostname.
+		"another source's HELO":   {"45.0.0.10", "smtp.sender.example"},
+		"primary with other HELO": {"45.0.1.22", "smtp.hosting.example"},
+		"unconfigured valid HELO": {"45.0.0.10", "smtp.elsewhere.example"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			j, fence, start, mime := setup(t)
 			start.SourceAddress, start.HeloName = fields[0], fields[1]
 			dialer := &fakeDialer{}
-			worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: testSources}
+			worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: testSources, SourceHostnames: testHostnames}
 			permits := 0
 			result, err := worker.Execute(context.Background(), fence, start, mime, func() bool { return true }, func(context.Context, *controlv1.DeliveryStart) error { permits++; return nil })
 			if err != nil || result.Outcome != controlv1.DeliveryOutcome_DELIVERY_OUTCOME_REJECTED || result.SmtpCode != 0 || permits != 0 || dialer.dials != 0 {
@@ -91,5 +98,19 @@ func TestExecuteRefusesExplicitSourceFromAWorkerWithNoSources(t *testing.T) {
 	result, err := worker.Execute(context.Background(), fence, start, mime, func() bool { return true }, func(context.Context, *controlv1.DeliveryStart) error { permits++; return nil })
 	if err != nil || result.Outcome != controlv1.DeliveryOutcome_DELIVERY_OUTCOME_REJECTED || permits != 0 || dialer.dials != 0 {
 		t.Fatal("a worker that reported no sources accepted an explicit one", err)
+	}
+}
+
+// A source whose configured hostname is unknown cannot be checked, so it is
+// refused rather than trusted.
+func TestExecuteRefusesSourceWithoutConfiguredHostname(t *testing.T) {
+	j, fence, start, mime := setup(t)
+	start.SourceAddress, start.HeloName = "45.0.0.10", "smtp.hosting.example"
+	dialer := &fakeDialer{}
+	worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: testSources, SourceHostnames: testHostnames[:1]}
+	permits := 0
+	result, err := worker.Execute(context.Background(), fence, start, mime, func() bool { return true }, func(context.Context, *controlv1.DeliveryStart) error { permits++; return nil })
+	if err != nil || result.Outcome != controlv1.DeliveryOutcome_DELIVERY_OUTCOME_REJECTED || permits != 0 || dialer.dials != 0 {
+		t.Fatalf("outcome %v permits %d dials %d err %v", result.GetOutcome(), permits, dialer.dials, err)
 	}
 }

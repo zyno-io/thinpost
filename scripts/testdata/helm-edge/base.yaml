@@ -1,0 +1,4 @@
+# Minimal edge values used by scripts/test-helm-chart.sh: one address.
+addresses:
+  - address: 192.0.2.1
+    hostname: smtp.example.invalid

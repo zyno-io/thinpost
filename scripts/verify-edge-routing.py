@@ -30,7 +30,7 @@ ip -n thinpost-test route add default via 10.254.0.1 dev eth0
 cat > /tmp/ipvlan.json <<'JSON'
 {"cniVersion":"1.1.0","name":"thinpost-test","type":"@IPVLAN@","master":"thinpost-parent","mode":"l2","ipam":{"type":"static","addresses":[{"address":"198.51.100.42/24","gateway":"192.0.2.1"}],"routes":[{"dst":"192.0.2.1/32","gw":"0.0.0.0","table":100,"scope":253},{"dst":"0.0.0.0/0","gw":"192.0.2.1","table":100}]}}
 JSON
-# A second outbound address (an additionalSources entry) is a second attachment:
+# A second outbound address (a second addresses entry) is a second attachment:
 # its own interface, gateway and routing table.
 cat > /tmp/ipvlan2.json <<'JSON'
 {"cniVersion":"1.1.0","name":"thinpost-test-2","type":"@IPVLAN@","master":"thinpost-parent","mode":"l2","ipam":{"type":"static","addresses":[{"address":"192.0.2.43/24","gateway":"198.51.100.1"}],"routes":[{"dst":"198.51.100.1/32","gw":"0.0.0.0","table":101,"scope":253},{"dst":"0.0.0.0/0","gw":"198.51.100.1","table":101}]}}
