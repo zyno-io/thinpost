@@ -20,6 +20,10 @@
                             Verifying doesn't set up or check SPF, DMARC or reverse DNS, so it doesn't promise mail will reach inboxes. To change a
                             domain's key, choose Rotate key: add the new record first, then switch, so there's no gap. Domains can't be removed here.
                         </p>
+                        <p>
+                            Each verified domain can also have its own <strong>bounce domain</strong>, so bounces come back to a name of yours and SPF passes for your domain too.
+                            It's optional; without it, Thinpost's standard bounce address is used.
+                        </p>
                     </HelpButton>
                 </div>
                 <button type="button" class="btn primary" :disabled="!canRequest" :aria-describedby="app.active ? undefined : 'request-hint'" @click="openRequest">
@@ -150,6 +154,10 @@
                     </tbody>
                 </table>
             </div>
+
+            <div v-if="verifiedDomains.length && !domainsError" class="card-body bounce-panels" role="group" aria-label="Bounce domains">
+                <BounceDomainPanel v-for="domain in verifiedDomains" :key="domain.name" :app-id="app.id" :app-active="app.active" :can-act="canAct" :domain="domain" @changed="reloadDomains" />
+            </div>
         </section>
 
         <TestMessageModal
@@ -178,6 +186,7 @@ import { parseDkimKey, type DkimKeyView } from '@/dkim';
 import { formatDateTime } from '@/format';
 import { DefaultApi, type Domain } from '@/openapi-client-generated';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
+import BounceDomainPanel from '@/shared/components/bounce-domain-panel.vue';
 import DkimRecord from '@/shared/components/dkim-record.vue';
 import HelpButton from '@/shared/components/help-button.vue';
 import DomainModal from '@/shared/components/domain-modal.vue';
@@ -209,6 +218,9 @@ const shown = ref<Set<string>>(new Set());
 const isSignedIn = computed(() => authState.status === 'signed-in');
 const canRequest = computed(() => app.value.active && isSignedIn.value && !isRequesting.value && !busy.value);
 const canAct = computed(() => isSignedIn.value && !busy.value && !isRequesting.value);
+
+/** Verified domains each get a bounce-domain panel. */
+const verifiedDomains = computed(() => (domains.value ?? []).filter(d => d.active));
 
 /** Domains with a record card: a pending key always, an active key when asked for. */
 const recordDomains = computed(() => (domains.value ?? []).filter(d => shownKey(d) !== null));
@@ -492,6 +504,13 @@ async function cancelKey(domain: Domain) {
 </script>
 
 <style lang="scss" scoped>
+.bounce-panels {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    border-top: 1px solid var(--border);
+}
+
 .domains-body {
     display: flex;
     flex-direction: column;

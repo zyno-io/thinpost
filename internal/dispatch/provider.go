@@ -100,7 +100,7 @@ func (p *Provider) prepare(ctx context.Context, claim delivery.Claim, caps deliv
 	// source or bounce domain does not match what it reported. The attempt is
 	// committed as a local rejection (retried later), and nothing is sent. The
 	// bounce domain is the reported name of the address the delivery leaves
-	// from; this is the one check to relax if apps get domains of their own.
+	// from, or an app's custom domain verified to point at it (below).
 	if claim.ResolvedAddress != "" && (!caps.Has(claim.ResolvedAddress) || claim.SourceAddress != claim.ResolvedAddress) {
 		return nil, nil, errors.New("delivery source is not available on this worker")
 	}
@@ -113,7 +113,15 @@ func (p *Provider) prepare(ctx context.Context, claim delivery.Claim, caps deliv
 	if !ok || claim.HeloName != sent.Hostname {
 		return nil, nil, errors.New("delivery source is not available on this worker")
 	}
-	if claim.BounceDomain == "" || claim.BounceDomain != sent.Hostname {
+	// The bounce domain is the source's reported name, or an app's custom
+	// domain that the claim verified points at that name. A custom domain is
+	// accepted only from a worker that takes bounces at any domain, only for
+	// the name it was verified against, and never when it is one of the
+	// worker's own names.
+	if claim.BounceDomain == "" {
+		return nil, nil, errors.New("delivery bounce domain is not available on this worker")
+	}
+	if claim.BounceDomain != sent.Hostname && (!caps.AnyBounceDomain || claim.BounceTarget != sent.Hostname || caps.HasHostname(claim.BounceDomain)) {
 		return nil, nil, errors.New("delivery bounce domain is not available on this worker")
 	}
 	source, err := p.Objects.Get(ctx, claim.SourceKey, 16<<20)

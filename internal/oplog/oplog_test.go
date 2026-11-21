@@ -90,3 +90,18 @@ func TestSubmissionFormat(t *testing.T) {
 		t.Fatalf("got %q", *lines)
 	}
 }
+
+// A domain check line carries the app, the kind, the state and a fixed result
+// code: never the domain, what DNS answered, or anything free-form.
+func TestDomainCheckLine(t *testing.T) {
+	lines := capture(t)
+	DomainCheck(app, "bounce", "failing", "wrong_target")
+	DomainCheck("bounces.customer.example", "customer.example", "bounces.customer.example", "cdn.other.example")
+	want := []string{
+		"domain_check app=" + app + " kind=bounce state=failing result=wrong_target",
+		"domain_check app=invalid kind=other state=other result=other",
+	}
+	if strings.Join(*lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got\n%s", strings.Join(*lines, "\n"))
+	}
+}
