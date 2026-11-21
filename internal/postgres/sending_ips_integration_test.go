@@ -73,9 +73,9 @@ func TestSendingIPsPostgres(t *testing.T) {
 
 	t.Run("runtime grants", func(t *testing.T) {
 		for _, statement := range []string{
-			`INSERT INTO sending_ips(id,name,address,helo_name,bounce_domain) VALUES ('` + strings.Repeat("a", 32) + `','grant-test','198.51.100.7','smtp.grant.example','b.grant.example')`,
-			`UPDATE sending_ips SET name='grant-test2' WHERE false`,
-			`DELETE FROM sending_ips WHERE name='grant-test'`,
+			`INSERT INTO sending_ips(id,address,helo_name) VALUES ('` + strings.Repeat("a", 32) + `','198.51.100.7','smtp.grant.example')`,
+			`UPDATE sending_ips SET helo_name='smtp.grant2.example' WHERE false`,
+			`DELETE FROM sending_ips WHERE helo_name='smtp.grant.example'`,
 			`INSERT INTO edge_source_reports(worker_id,epoch,reported_at) VALUES ('grant-worker',1,now())`,
 			`UPDATE edge_source_reports SET epoch=2 WHERE worker_id='grant-worker'`,
 			`UPDATE apps SET sending_ip_id=NULL WHERE false`,
@@ -92,108 +92,112 @@ func TestSendingIPsPostgres(t *testing.T) {
 		exec(`DELETE FROM edge_source_reports`)
 	})
 
-	// Addresses are TEST-NET-free public examples: the store applies the same
-	// public-address rule as the Edge.
+	t.Run("the name, bounce domain and report-name columns are gone", func(t *testing.T) {
+		var columns int
+		if err := owner.QueryRowContext(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema=$1 AND
+			((table_name='sending_ips' AND column_name IN ('name','bounce_domain')) OR (table_name='edge_source_reports' AND column_name='bounce_domains'))`, schema).Scan(&columns); err != nil || columns != 0 {
+			t.Fatal("removed columns still exist", columns, err)
+		}
+	})
+
 	const primaryAddr, hostingAddr, thirdAddr = "45.0.1.22", "45.0.0.10", "45.0.0.11"
-	var primaryRow, hostingRow admin.SendingIP
-
-	t.Run("create validates and deduplicates", func(t *testing.T) {
-		for _, bad := range []admin.SendingIPInput{
-			{Name: "primary", Address: hostingAddr, HeloName: "smtp.example.org", BounceDomain: "example.org"},
-			{Name: "removed", Address: hostingAddr, HeloName: "smtp.example.org", BounceDomain: "example.org"},
-			{Name: "Bad", Address: hostingAddr, HeloName: "smtp.example.org", BounceDomain: "example.org"},
-			{Name: "ok", Address: "10.0.0.1", HeloName: "smtp.example.org", BounceDomain: "example.org"},
-			{Name: "ok", Address: "2607:f8b0:4000::1", HeloName: "smtp.example.org", BounceDomain: "example.org"},
-			{Name: "ok", Address: "203.0.113.4", HeloName: "smtp.example.org", BounceDomain: "example.org"},
-			{Name: "ok", Address: hostingAddr, HeloName: "SMTP.example.org", BounceDomain: "example.org"},
-			{Name: "ok", Address: hostingAddr, HeloName: "smtp.example.org", BounceDomain: ""},
-		} {
-			if _, err := repo.CreateSendingIP(ctx, "operator", bad); !errors.Is(err, admin.ErrInvalidInput) {
-				t.Fatalf("accepted %+v: %v", bad, err)
-			}
-		}
-		// The migration's CHECK refuses the reserved words even past the store.
-		if _, err := owner.ExecContext(ctx, `INSERT INTO sending_ips(id,name,address,helo_name,bounce_domain) VALUES ('`+strings.Repeat("b", 32)+`','other','45.0.0.99','smtp.example.org','b.example.org')`); err == nil {
-			t.Fatal("the database accepted a reserved name")
-		}
-		var err error
-		primaryRow, err = repo.CreateSendingIP(ctx, "operator", admin.SendingIPInput{Name: "app-mail", Address: primaryAddr, HeloName: "smtp.mx.example.net", BounceDomain: "mx.example.net"})
-		if err != nil || primaryRow.Address != primaryAddr {
+	const primaryName, hostingName, thirdName = "mx.example.net", "smtp.hosting.example.org", "smtp.third.example.net"
+	prim, host, third := netip.MustParseAddr(primaryAddr), netip.MustParseAddr(hostingAddr), netip.MustParseAddr(thirdAddr)
+	primarySource, hostingSource, thirdSource := delivery.Source{Address: prim, Hostname: primaryName}, delivery.Source{Address: host, Hostname: hostingName}, delivery.Source{Address: third, Hostname: thirdName}
+	// reported is what a worker reports in Ready: each address with its name.
+	reported := func(sources ...delivery.Source) delivery.EdgeCapabilities {
+		return delivery.EdgeCapabilities{Sources: sources}
+	}
+	lease, err := repo.AcquireControllerLease(ctx, "worker", "controller", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := func(sources ...delivery.Source) {
+		t.Helper()
+		if err := repo.RecordEdgeSources(ctx, lease, reported(sources...)); err != nil {
 			t.Fatal(err)
 		}
-		hostingRow, err = repo.CreateSendingIP(ctx, "operator", admin.SendingIPInput{Name: "hosting", Address: hostingAddr, HeloName: "smtp.hosting.example.org", BounceDomain: "hosting.example.org"})
-		if err != nil {
+	}
+	// rowID is the id of the row for an address ("" when there is none).
+	rowID := func(address string) string {
+		var rid string
+		if err := owner.QueryRowContext(ctx, `SELECT COALESCE((SELECT id FROM sending_ips WHERE address=$1::text::inet),'')`, address).Scan(&rid); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = repo.CreateSendingIP(ctx, "operator", admin.SendingIPInput{Name: "hosting", Address: thirdAddr, HeloName: "smtp.example.org", BounceDomain: "example.org"}); !errors.Is(err, admin.ErrConflict) {
-			t.Fatal("duplicate name", err)
-		}
-		if _, err = repo.CreateSendingIP(ctx, "operator", admin.SendingIPInput{Name: "other-ip", Address: hostingAddr, HeloName: "smtp.example.org", BounceDomain: "example.org"}); !errors.Is(err, admin.ErrConflict) {
-			t.Fatal("duplicate address", err)
-		}
-		// The failed duplicates left no row or audit behind.
-		var rows, audits int
-		if err = owner.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sending_ips),(SELECT count(*) FROM audit_events WHERE action='sending_ip.created' AND app_id IS NULL)`).Scan(&rows, &audits); err != nil || rows != 2 || audits != 2 {
-			t.Fatal("rows/audits", rows, audits, err)
-		}
-	})
-
-	t.Run("audit rows never hold an address", func(t *testing.T) {
-		var leaked bool
-		if err := owner.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM audit_events WHERE details::text LIKE '%45.0.1.%' OR details::text LIKE '%45.0.0.%' OR resource_id LIKE '%.%')`).Scan(&leaked); err != nil || leaked {
-			t.Fatal("an address reached the audit log", err)
-		}
-	})
-
-	t.Run("update", func(t *testing.T) {
-		patch := admin.SendingIPPatch{HeloName: ptr("smtp.hosting.example.org")}
-		if _, err := repo.UpdateSendingIP(ctx, "operator", hostingRow.ID, patch); err != nil {
+		return rid
+	}
+	rowCount := func() (n int) {
+		if err := owner.QueryRowContext(ctx, `SELECT count(*) FROM sending_ips`).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
-		var audits int
-		owner.QueryRowContext(ctx, `SELECT count(*) FROM audit_events WHERE action='sending_ip.updated'`).Scan(&audits)
-		if audits != 0 {
-			t.Fatal("an identical edit was audited")
-		}
-		updated, err := repo.UpdateSendingIP(ctx, "operator", hostingRow.ID, admin.SendingIPPatch{Name: ptr("hosting-2"), BounceDomain: ptr("example.org")})
-		if err == nil {
-			_, err = repo.UpdateSendingIP(ctx, "operator", hostingRow.ID, admin.SendingIPPatch{BounceDomain: ptr("elsewhere.example.net")})
-			if !errors.Is(err, admin.ErrInvalidInput) {
-				t.Fatal("a bounce domain the HELO name is not under was accepted", err)
-			}
-			err = nil
-		}
-		if err != nil || updated.Name != "hosting-2" || updated.Address != hostingAddr {
-			t.Fatal("edit", updated, err)
-		}
-		if _, err = repo.UpdateSendingIP(ctx, "operator", hostingRow.ID, admin.SendingIPPatch{Name: ptr("app-mail")}); !errors.Is(err, admin.ErrConflict) {
-			t.Fatal("name collision", err)
-		}
-		if _, err = repo.UpdateSendingIP(ctx, "operator", id(), admin.SendingIPPatch{Name: ptr("x")}); !errors.Is(err, admin.ErrNotFound) {
-			t.Fatal("unknown row", err)
-		}
-		// Put it back for the claim scenarios.
-		if _, err = repo.UpdateSendingIP(ctx, "operator", hostingRow.ID, admin.SendingIPPatch{Name: ptr("hosting"), BounceDomain: ptr("hosting.example.org")}); err != nil {
-			t.Fatal(err)
-		}
-	})
-
+		return n
+	}
 	app := func(name string) string {
 		a := id()
 		exec(`INSERT INTO apps(id,name) VALUES ($1,$2)`, a, name)
 		return a
 	}
 	appNull, appHosting, appPrimary := app("Null"), app("Hosting"), app("Primary")
-	t.Run("assign", func(t *testing.T) {
+
+	t.Run("before any report there are no rows and nothing to pin", func(t *testing.T) {
+		list, err := repo.ListSendingIPs(ctx)
+		if err != nil || list.EdgeReportedAt != nil || list.EdgeReportsIdentity || len(list.IPs) != 0 || list.UnpinnedAppCount != 3 {
+			t.Fatal("before any report", list, err)
+		}
+		unknown := id()
+		if _, err = repo.SetAppSendingIP(ctx, "operator", appNull, &unknown); !errors.Is(err, admin.ErrNotFound) {
+			t.Fatal("unknown sending ip", err)
+		}
+	})
+
+	t.Run("a report writes a row per address, the main IP first", func(t *testing.T) {
+		if err := repo.RecordEdgeSources(ctx, ControllerLease{WorkerID: "worker", ControllerID: "controller", Epoch: lease.Epoch + 1}, reported(primarySource)); !errors.Is(err, delivery.ErrLeaseInvalid) {
+			t.Fatal("a non-live lease wrote a report", err)
+		}
+		if rowCount() != 0 {
+			t.Fatal("a refused report wrote rows")
+		}
+		record(hostingSource, primarySource)
+		list, err := repo.ListSendingIPs(ctx)
+		if err != nil || list.EdgeReportedAt == nil || !list.EdgeReportsIdentity || len(list.IPs) != 2 || list.EdgePrimaryAddress == nil || *list.EdgePrimaryAddress != hostingAddr {
+			t.Fatal("after report", list, err)
+		}
+		if first, second := list.IPs[0], list.IPs[1]; first.Address != hostingAddr || first.HeloName != hostingName || !first.IsPrimary || first.OnEdge == nil || !*first.OnEdge ||
+			second.Address != primaryAddr || second.HeloName != primaryName || second.IsPrimary || second.OnEdge == nil || !*second.OnEdge {
+			t.Fatalf("rows %+v", list.IPs)
+		}
+		// Reporting the same set again changes nothing.
+		before := rowID(hostingAddr)
+		record(hostingSource, primarySource)
+		if rowCount() != 2 || rowID(hostingAddr) != before {
+			t.Fatal("a repeated report changed the rows")
+		}
+	})
+
+	t.Run("a stale epoch writes neither the report nor rows", func(t *testing.T) {
+		exec(`UPDATE edge_source_reports SET epoch=$1 WHERE worker_id='worker'`, lease.Epoch+10)
+		record(primarySource, thirdSource)
+		if rowID(thirdAddr) != "" {
+			t.Fatal("a stale report wrote a row")
+		}
+		var epoch uint64
+		if err := owner.QueryRowContext(ctx, `SELECT epoch FROM edge_source_reports WHERE worker_id='worker'`).Scan(&epoch); err != nil || epoch != lease.Epoch+10 {
+			t.Fatal("a stale report overwrote a newer one", epoch, err)
+		}
+		exec(`UPDATE edge_source_reports SET epoch=$1 WHERE worker_id='worker'`, lease.Epoch)
+	})
+
+	t.Run("assigning checks the Edge is reporting the IP", func(t *testing.T) {
+		hostingRow, primaryRow := rowID(hostingAddr), rowID(primaryAddr)
 		got, err := repo.GetAppSendingIP(ctx, appNull)
-		if err != nil || got.SendingIPID != nil {
+		if err != nil || got.SendingIPID != nil || got.Address != nil || got.HeloName != nil {
 			t.Fatal("default assignment", got, err)
 		}
-		set, err := repo.SetAppSendingIP(ctx, "operator", appHosting, &hostingRow.ID)
-		if err != nil || set.SendingIPID == nil || *set.Name != "hosting" {
+		set, err := repo.SetAppSendingIP(ctx, "operator", appHosting, &hostingRow)
+		if err != nil || set.SendingIPID == nil || *set.Address != hostingAddr || *set.HeloName != hostingName {
 			t.Fatal("assign", set, err)
 		}
-		if _, err = repo.SetAppSendingIP(ctx, "operator", appHosting, &hostingRow.ID); err != nil {
+		if _, err = repo.SetAppSendingIP(ctx, "operator", appHosting, &hostingRow); err != nil {
 			t.Fatal(err)
 		}
 		var audits int
@@ -201,26 +205,15 @@ func TestSendingIPsPostgres(t *testing.T) {
 		if audits != 1 {
 			t.Fatal("identical assignment was audited", audits)
 		}
-		if _, err = repo.SetAppSendingIP(ctx, "operator", appPrimary, &primaryRow.ID); err != nil {
+		if _, err = repo.SetAppSendingIP(ctx, "operator", appPrimary, &primaryRow); err != nil {
 			t.Fatal(err)
 		}
-		unknown := id()
-		if _, err = repo.SetAppSendingIP(ctx, "operator", appNull, &unknown); !errors.Is(err, admin.ErrNotFound) {
-			t.Fatal("unknown sending ip", err)
-		}
-		if _, err = repo.SetAppSendingIP(ctx, "operator", id(), &hostingRow.ID); !errors.Is(err, admin.ErrNotFound) {
+		if _, err = repo.SetAppSendingIP(ctx, "operator", id(), &hostingRow); !errors.Is(err, admin.ErrNotFound) {
 			t.Fatal("unknown app", err)
 		}
-		// Deleting an IP in use is refused, and the row stays.
-		if err = repo.DeleteSendingIP(ctx, "operator", hostingRow.ID); !errors.Is(err, admin.ErrConflict) {
-			t.Fatal("deleted an IP that an app uses", err)
-		}
-		created, err := repo.CreateAppWithSendingIP(ctx, "operator", "Created", &hostingRow.ID)
-		if err != nil || created.SendingIPID == nil || *created.SendingIPID != hostingRow.ID {
+		created, err := repo.CreateAppWithSendingIP(ctx, "operator", "Created", &hostingRow)
+		if err != nil || created.SendingIPID == nil || *created.SendingIPID != hostingRow {
 			t.Fatal("create with IP", created, err)
-		}
-		if _, err = repo.CreateAppWithSendingIP(ctx, "operator", "Nope", &unknown); !errors.Is(err, admin.ErrNotFound) {
-			t.Fatal("create with unknown IP", err)
 		}
 		apps, err := repo.ListApps(ctx)
 		if err != nil {
@@ -228,38 +221,186 @@ func TestSendingIPsPostgres(t *testing.T) {
 		}
 		listed := 0
 		for _, a := range apps {
-			if a.ID == appHosting && a.SendingIPID != nil && *a.SendingIPID == hostingRow.ID || a.ID == appNull && a.SendingIPID == nil {
+			if a.ID == appHosting && a.SendingIPID != nil && *a.SendingIPID == hostingRow || a.ID == appNull && a.SendingIPID == nil {
 				listed++
 			}
 		}
 		if listed != 2 {
 			t.Fatal("ListApps does not report the assignment")
 		}
-		// Back to the primary, then to the hosting IP again.
+		// A row the Edge stopped reporting (kept because an app is pinned to it)
+		// cannot be chosen again, for an existing app or a new one.
+		record(primarySource)
+		if rowID(hostingAddr) != hostingRow {
+			t.Fatal("a pinned row was pruned")
+		}
+		if _, err = repo.SetAppSendingIP(ctx, "operator", appNull, &hostingRow); !errors.Is(err, admin.ErrConflict) {
+			t.Fatal("pinned to an IP the Edge does not report", err)
+		}
+		if _, err = repo.CreateAppWithSendingIP(ctx, "operator", "Nope", &hostingRow); !errors.Is(err, admin.ErrConflict) {
+			t.Fatal("created on an IP the Edge does not report", err)
+		}
+		// The identical choice is still accepted, and unpinning is always allowed.
+		if _, err = repo.SetAppSendingIP(ctx, "operator", appHosting, &hostingRow); err != nil {
+			t.Fatal("identical choice refused", err)
+		}
 		back, err := repo.SetAppSendingIP(ctx, "operator", created.ID, nil)
 		if err != nil || back.SendingIPID != nil {
 			t.Fatal("unassign", back, err)
 		}
 		exec(`DELETE FROM audit_events WHERE app_id=$1`, created.ID)
 		exec(`DELETE FROM apps WHERE id=$1`, created.ID)
+		list, err := repo.ListSendingIPs(ctx)
+		if err != nil || len(list.IPs) != 2 {
+			t.Fatal("list", list, err)
+		}
+		if first, second := list.IPs[0], list.IPs[1]; !first.IsPrimary || first.Address != primaryAddr || first.OnEdge == nil || !*first.OnEdge || first.AppCount != 1 ||
+			second.Address != hostingAddr || second.OnEdge == nil || *second.OnEdge || second.IsPrimary || second.AppCount != 1 {
+			t.Fatalf("rows after the Edge dropped an IP: %+v", list.IPs)
+		}
+		record(primarySource, hostingSource)
 	})
 
-	lease, err := repo.AcquireControllerLease(ctx, "worker", "controller", time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// restorePrimary puts the primary's record back after a test removed it.
-	restorePrimary := func() {
-		exec(`INSERT INTO sending_ips(id,name,address,helo_name,bounce_domain) VALUES ($1,$2,$3::text::inet,$4,$5) ON CONFLICT DO NOTHING`, primaryRow.ID, primaryRow.Name, primaryRow.Address, primaryRow.HeloName, primaryRow.BounceDomain)
-		exec(`UPDATE apps SET sending_ip_id=$2 WHERE id=$1`, appPrimary, primaryRow.ID)
-	}
-	prim, host := netip.MustParseAddr(primaryAddr), netip.MustParseAddr(hostingAddr)
-	// reported is what a worker reports in Ready: each address with its name.
-	const primaryName, hostingName = "mx.example.net", "smtp.hosting.example.org"
-	reported := func(sources ...delivery.Source) delivery.EdgeCapabilities {
-		return delivery.EdgeCapabilities{Sources: sources}
-	}
-	primarySource, hostingSource := delivery.Source{Address: prim, Hostname: primaryName}, delivery.Source{Address: host, Hostname: hostingName}
+	t.Run("reports refresh names and prune only unpinned unreported rows", func(t *testing.T) {
+		hostingRow, primaryRow := rowID(hostingAddr), rowID(primaryAddr)
+		record(primarySource, thirdSource)
+		if rowID(thirdAddr) == "" {
+			t.Fatal("a new address was not recorded")
+		}
+		// Renaming and reordering in the report never move an app or change an address.
+		record(delivery.Source{Address: host, Hostname: "smtp.renamed.example.org"}, thirdSource, primarySource)
+		var name string
+		if err := owner.QueryRowContext(ctx, `SELECT helo_name FROM sending_ips WHERE id=$1`, hostingRow).Scan(&name); err != nil || name != "smtp.renamed.example.org" {
+			t.Fatal("name not refreshed", name, err)
+		}
+		if rowID(hostingAddr) != hostingRow || rowID(primaryAddr) != primaryRow {
+			t.Fatal("a row changed id")
+		}
+		pins := func() map[string]string {
+			out := map[string]string{}
+			rows, err := owner.QueryContext(ctx, `SELECT id,COALESCE(sending_ip_id,'') FROM apps WHERE id=ANY($1)`, "{"+appNull+","+appHosting+","+appPrimary+"}")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var a, p string
+				if err = rows.Scan(&a, &p); err != nil {
+					t.Fatal(err)
+				}
+				out[a] = p
+			}
+			return out
+		}
+		if p := pins(); p[appHosting] != hostingRow || p[appPrimary] != primaryRow || p[appNull] != "" {
+			t.Fatal("a report moved an app", p)
+		}
+		// The unpinned third row goes when it is no longer reported; the pinned
+		// hosting row stays; the apps are untouched.
+		record(primarySource)
+		if rowID(thirdAddr) != "" || rowID(hostingAddr) != hostingRow || rowCount() != 2 {
+			t.Fatal("prune", rowCount())
+		}
+		if p := pins(); p[appHosting] != hostingRow || p[appPrimary] != primaryRow || p[appNull] != "" {
+			t.Fatal("a prune moved an app", p)
+		}
+		// A report with nothing in it prunes every unpinned row and keeps the pinned ones.
+		record(primarySource, thirdSource)
+		record()
+		if rowID(thirdAddr) != "" || rowCount() != 2 {
+			t.Fatal("an empty report", rowCount())
+		}
+		list, err := repo.ListSendingIPs(ctx)
+		if err != nil || list.EdgeReportsIdentity || len(list.IPs) != 2 || list.IPs[0].OnEdge != nil || list.EdgeReportedAt == nil {
+			t.Fatal("empty report list", list, err)
+		}
+		record(primarySource, hostingSource)
+		var rename string
+		owner.QueryRowContext(ctx, `SELECT helo_name FROM sending_ips WHERE id=$1`, hostingRow).Scan(&rename)
+		if rename != hostingName {
+			t.Fatal("name not refreshed back", rename)
+		}
+	})
+
+	t.Run("a pin that wins the race with a prune keeps its row and the report still commits", func(t *testing.T) {
+		record(primarySource, thirdSource)
+		thirdRow := rowID(thirdAddr)
+		racer := app("Racer")
+		// The pin is open (uncommitted) when the report's prune reaches the row.
+		pin, err := owner.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pin.ExecContext(ctx, `UPDATE apps SET sending_ip_id=$2 WHERE id=$1`, racer, thirdRow); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- repo.RecordEdgeSources(ctx, lease, reported(primarySource)) }()
+		select {
+		case err = <-done:
+			t.Fatal("the report did not wait for the open pin", err)
+		case <-time.After(500 * time.Millisecond):
+		}
+		if err = pin.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		if err = <-done; err != nil {
+			t.Fatal("the report failed when a pin won the race", err)
+		}
+		var pinned string
+		if err = owner.QueryRowContext(ctx, `SELECT sending_ip_id FROM apps WHERE id=$1`, racer).Scan(&pinned); err != nil || pinned != thirdRow || rowID(thirdAddr) != thirdRow {
+			t.Fatal("the pin or its row was lost", pinned, err)
+		}
+		var reportedAddresses int
+		if err = owner.QueryRowContext(ctx, `SELECT cardinality(addresses) FROM edge_source_reports WHERE worker_id='worker'`).Scan(&reportedAddresses); err != nil || reportedAddresses != 1 {
+			t.Fatal("the report was not stored", reportedAddresses, err)
+		}
+		// Unpinned again, the next report prunes it.
+		exec(`UPDATE apps SET sending_ip_id=NULL WHERE id=$1`, racer)
+		record(primarySource)
+		if rowID(thirdAddr) != "" {
+			t.Fatal("the next report did not prune the row")
+		}
+		record(primarySource, hostingSource)
+	})
+
+	t.Run("an assignment racing a prune is never dangling", func(t *testing.T) {
+		record(primarySource, thirdSource)
+		row := rowID(thirdAddr)
+		racer := app("Racer2")
+		pinResult, reportResult := make(chan error, 1), make(chan error, 1)
+		go func() { _, err := repo.SetAppSendingIP(ctx, "operator", racer, &row); pinResult <- err }()
+		go func() { reportResult <- repo.RecordEdgeSources(ctx, lease, reported(primarySource)) }()
+		pinErr, reportErr := <-pinResult, <-reportResult
+		var pinned bool
+		owner.QueryRowContext(ctx, `SELECT sending_ip_id IS NOT NULL FROM apps WHERE id=$1`, racer).Scan(&pinned)
+		exists := rowID(thirdAddr) != ""
+		// Either the pin won (row kept, report committed) or the prune won (the
+		// pin is refused as unknown or unavailable); never a dangling reference,
+		// and the report always commits.
+		pinRefused := errors.Is(pinErr, admin.ErrNotFound) || errors.Is(pinErr, admin.ErrConflict)
+		if reportErr != nil || pinErr == nil && (!pinned || !exists) || pinErr != nil && (!pinRefused || pinned) {
+			t.Fatal("inconsistent race outcome", pinned, exists, pinErr, reportErr)
+		}
+		exec(`UPDATE apps SET sending_ip_id=NULL WHERE id=$1`, racer)
+		record(primarySource, hostingSource)
+	})
+
+	t.Run("a report holds at most the sixteen addresses an Edge may advertise", func(t *testing.T) {
+		sources := make([]delivery.Source, 0, 16)
+		for i := 0; i < 16; i++ {
+			sources = append(sources, delivery.Source{Address: netip.MustParseAddr(fmt.Sprintf("45.0.2.%d", i+1)), Hostname: fmt.Sprintf("smtp-%d.example.net", i)})
+		}
+		record(sources...)
+		list, err := repo.ListSendingIPs(ctx)
+		// The sixteen reported rows, plus the primary and hosting rows, which are
+		// no longer reported but stay because apps are pinned to them.
+		if err != nil || len(list.IPs) != 18 {
+			t.Fatal("rows", len(list.IPs), err)
+		}
+		record(primarySource, hostingSource)
+	})
+
 	// queue adds one queued delivery for appID and returns its ID.
 	queue := func(appID string) string {
 		m, d := id(), id()
@@ -282,7 +423,7 @@ func TestSendingIPsPostgres(t *testing.T) {
 	t.Run("a pinned IP the worker did not report is never claimed", func(t *testing.T) {
 		reset()
 		pinned, free := queue(appHosting), queue(appNull)
-		// The worker reports only its primary: the hosting app's delivery must
+		// The worker reports only its main IP: the hosting app's delivery must
 		// stay queued, while another app's delivery is claimed.
 		claim, err := repo.ClaimDelivery(ctx, lease, id(), reported(primarySource))
 		if err != nil || claim.DeliveryID != free {
@@ -298,7 +439,7 @@ func TestSendingIPsPostgres(t *testing.T) {
 		// Once the address is reported it is claimed, from that address, with
 		// the name reported for it as both HELO and bounce domain.
 		claim, err = repo.ClaimDelivery(ctx, lease, id(), reported(primarySource, hostingSource))
-		if err != nil || claim.DeliveryID != pinned || claim.SourceAddress != hostingAddr || claim.HeloName != hostingName || claim.BounceDomain != hostingName || claim.ResolvedAddress != hostingAddr || claim.SourceName != "hosting" {
+		if err != nil || claim.DeliveryID != pinned || claim.SourceAddress != hostingAddr || claim.HeloName != hostingName || claim.BounceDomain != hostingName || claim.ResolvedAddress != hostingAddr || claim.SourceName != hostingName {
 			t.Fatalf("pinned claim %+v %v", claim, err)
 		}
 		if source, ok := attemptSource(pinned); !ok || source.String != hostingAddr {
@@ -306,50 +447,42 @@ func TestSendingIPsPostgres(t *testing.T) {
 		}
 	})
 
-	t.Run("the HELO and bounce domain are the reported name, not the stored record", func(t *testing.T) {
+	t.Run("the HELO and bounce domain are the reported name, not the stored row", func(t *testing.T) {
 		reset()
-		// The stored record names smtp.hosting.example.org and hosting.example.org;
-		// what the worker reports for the address wins.
+		// The row stores the name from the last report; the live session's own
+		// report wins.
 		d := queue(appHosting)
 		claim, err := repo.ClaimDelivery(ctx, lease, id(), reported(primarySource, delivery.Source{Address: host, Hostname: "smtp.reported.example.org"}))
-		if err != nil || claim.DeliveryID != d || claim.SourceAddress != hostingAddr || claim.HeloName != "smtp.reported.example.org" || claim.BounceDomain != "smtp.reported.example.org" {
+		if err != nil || claim.DeliveryID != d || claim.SourceAddress != hostingAddr || claim.HeloName != "smtp.reported.example.org" || claim.BounceDomain != "smtp.reported.example.org" || claim.SourceName != "smtp.reported.example.org" {
 			t.Fatalf("reported name %+v %v", claim, err)
 		}
 	})
 
-	t.Run("unassigned apps use the primary's reported name and keep the empty source fields", func(t *testing.T) {
+	t.Run("an unpinned app is addressed explicitly from the main IP", func(t *testing.T) {
 		reset()
-		// The primary has a record (primaryRow) with its own bounce domain and a
-		// different name; neither is used. The worker sends from its primary and
-		// its own name, the return path is the primary's reported name, and the
-		// attempt records no source.
-		exec(`UPDATE sending_ips SET bounce_domain='bounce.other.example.net' WHERE id=$1`, primaryRow.ID)
 		d := queue(appNull)
 		claim, err := repo.ClaimDelivery(ctx, lease, id(), reported(primarySource, hostingSource))
-		if err != nil || claim.DeliveryID != d || claim.SourceAddress != "" || claim.HeloName != "" || claim.BounceDomain != primaryName || claim.SourceName != "" || claim.ResolvedAddress != "" {
+		if err != nil || claim.DeliveryID != d || claim.SourceAddress != primaryAddr || claim.HeloName != primaryName || claim.BounceDomain != primaryName || claim.SourceName != primaryName || claim.ResolvedAddress != "" {
 			t.Fatalf("unassigned claim %+v %v", claim, err)
 		}
-		if source, _ := attemptSource(d); source.Valid {
-			t.Fatal("an unassigned app's attempt recorded a source")
+		if source, _ := attemptSource(d); source.String != primaryAddr {
+			t.Fatal("an unassigned app's attempt did not record the main IP", source)
 		}
-		exec(`UPDATE sending_ips SET bounce_domain=$2 WHERE id=$1`, primaryRow.ID, primaryRow.BounceDomain)
-		// With no record for the primary at all it behaves the same.
-		exec(`UPDATE apps SET sending_ip_id=NULL WHERE id=$1`, appPrimary)
-		exec(`DELETE FROM sending_ips WHERE id=$1`, primaryRow.ID)
+		// Reordering the report changes which IP is the main one, and so where
+		// unpinned apps send from; pinned apps do not move.
 		reset()
 		d = queue(appNull)
-		claim, err = repo.ClaimDelivery(ctx, lease, id(), reported(primarySource))
-		if err != nil || claim.DeliveryID != d || claim.SourceAddress != "" || claim.HeloName != "" || claim.BounceDomain != primaryName {
-			t.Fatalf("unrecorded primary %+v %v", claim, err)
+		claim, err = repo.ClaimDelivery(ctx, lease, id(), reported(hostingSource, primarySource))
+		if err != nil || claim.DeliveryID != d || claim.SourceAddress != hostingAddr || claim.HeloName != hostingName {
+			t.Fatalf("reordered claim %+v %v", claim, err)
 		}
-		restorePrimary()
 	})
 
-	t.Run("an app pinned to the primary is sent from it, by name", func(t *testing.T) {
+	t.Run("an app pinned to the main IP is sent from it, by name", func(t *testing.T) {
 		reset()
 		d := queue(appPrimary)
 		claim, err := repo.ClaimDelivery(ctx, lease, id(), reported(primarySource, hostingSource))
-		if err != nil || claim.DeliveryID != d || claim.SourceAddress != primaryAddr || claim.HeloName != primaryName || claim.BounceDomain != primaryName || claim.SourceName != "app-mail" {
+		if err != nil || claim.DeliveryID != d || claim.SourceAddress != primaryAddr || claim.HeloName != primaryName || claim.BounceDomain != primaryName || claim.SourceName != primaryName {
 			t.Fatalf("primary-pinned claim %+v %v", claim, err)
 		}
 		if source, _ := attemptSource(d); source.String != primaryAddr {
@@ -384,7 +517,7 @@ func TestSendingIPsPostgres(t *testing.T) {
 		}
 	})
 
-	t.Run("the commit reports the IP name, never the address", func(t *testing.T) {
+	t.Run("the commit reports the HELO name, never the address", func(t *testing.T) {
 		reset()
 		queue(appHosting)
 		attempt := id()
@@ -393,134 +526,38 @@ func TestSendingIPsPostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 		committed, err := repo.CommitDeliveryResultIdentified(ctx, delivery.Result{AttemptID: attempt, DeliveryID: claim.DeliveryID, WorkerID: lease.WorkerID, Epoch: lease.Epoch, Outcome: "rejected"})
-		if err != nil || committed.SourceName != "hosting" {
+		if err != nil || committed.SourceName != hostingName {
 			t.Fatal("committed", committed, err)
 		}
-		// A deleted IP is reported as removed.
+		// An address whose row is gone is reported as removed.
 		reset()
-		queue(appPrimary)
+		queue(appNull)
 		attempt = id()
 		claim, err = repo.ClaimDelivery(ctx, lease, attempt, reported(primarySource))
 		if err != nil || claim.SourceAddress != primaryAddr {
 			t.Fatal(claim, err)
 		}
 		exec(`UPDATE apps SET sending_ip_id=NULL WHERE id=$1`, appPrimary)
-		exec(`DELETE FROM sending_ips WHERE id=$1`, primaryRow.ID)
+		exec(`DELETE FROM sending_ips WHERE address=$1::text::inet`, primaryAddr)
 		committed, err = repo.CommitDeliveryResultIdentified(ctx, delivery.Result{AttemptID: attempt, DeliveryID: claim.DeliveryID, WorkerID: lease.WorkerID, Epoch: lease.Epoch, Outcome: "rejected"})
 		if err != nil || committed.SourceName != "removed" {
 			t.Fatal("removed", committed, err)
 		}
-		restorePrimary()
-		// A delivery sent from the primary with no named source logs "primary".
+		record(primarySource, hostingSource)
+		// An attempt from before schema 45, with no recorded source, logs "primary".
 		reset()
 		queue(appNull)
 		attempt = id()
-		claim, err = repo.ClaimDelivery(ctx, lease, attempt, reported(primarySource))
-		if err != nil {
+		if _, err = repo.ClaimDelivery(ctx, lease, attempt, reported(primarySource)); err != nil {
 			t.Fatal(err)
 		}
-		committed, err = repo.CommitDeliveryResultIdentified(ctx, delivery.Result{AttemptID: attempt, DeliveryID: claim.DeliveryID, WorkerID: lease.WorkerID, Epoch: lease.Epoch, Outcome: "rejected"})
+		exec(`UPDATE delivery_attempts SET source_address=NULL WHERE id=$1`, attempt)
+		var deliveryID string
+		owner.QueryRowContext(ctx, `SELECT delivery_id FROM delivery_attempts WHERE id=$1`, attempt).Scan(&deliveryID)
+		committed, err = repo.CommitDeliveryResultIdentified(ctx, delivery.Result{AttemptID: attempt, DeliveryID: deliveryID, WorkerID: lease.WorkerID, Epoch: lease.Epoch, Outcome: "rejected"})
 		if err != nil || committed.SourceName != "primary" {
 			t.Fatal("primary", committed, err)
 		}
 	})
 	reset()
-
-	t.Run("edge reports are written only under the live lease", func(t *testing.T) {
-		list, err := repo.ListSendingIPs(ctx)
-		if err != nil || list.EdgeReportedAt != nil || list.EdgeReportsSources || len(list.IPs) != 2 || list.IPs[0].OnEdge != nil {
-			t.Fatal("before any report", list, err)
-		}
-		if list.UnpinnedAppCount != 1 {
-			t.Fatal("unpinned apps", list.UnpinnedAppCount)
-		}
-		caps := reported(primarySource, delivery.Source{Address: netip.MustParseAddr(thirdAddr), Hostname: "smtp.third.example.net"})
-		if err = repo.RecordEdgeSources(ctx, ControllerLease{WorkerID: "worker", ControllerID: "controller", Epoch: lease.Epoch + 1}, caps); !errors.Is(err, delivery.ErrLeaseInvalid) {
-			t.Fatal("a stale lease wrote a report", err)
-		}
-		if err = repo.RecordEdgeSources(ctx, lease, caps); err != nil {
-			t.Fatal(err)
-		}
-		list, err = repo.ListSendingIPs(ctx)
-		if err != nil || list.EdgeReportedAt == nil || !list.EdgeReportsSources {
-			t.Fatal("after report", list, err)
-		}
-		byName := map[string]admin.SendingIP{}
-		for _, ip := range list.IPs {
-			byName[ip.Name] = ip
-		}
-		if ip := byName["app-mail"]; ip.OnEdge == nil || !*ip.OnEdge || !ip.IsPrimary || ip.BounceOnEdge == nil || !*ip.BounceOnEdge {
-			t.Fatalf("primary %+v", ip)
-		}
-		if ip := byName["hosting"]; ip.OnEdge == nil || *ip.OnEdge || ip.IsPrimary || *ip.BounceOnEdge || ip.AppCount != 1 {
-			t.Fatalf("hosting %+v", ip)
-		}
-		if len(list.UnnamedEdgeAddresses) != 1 || list.UnnamedEdgeAddresses[0] != thirdAddr {
-			t.Fatal("unnamed addresses", list.UnnamedEdgeAddresses)
-		}
-		// An older worker (no sources) makes everything unknown again.
-		if err = repo.RecordEdgeSources(ctx, lease, delivery.EdgeCapabilities{}); err != nil {
-			t.Fatal(err)
-		}
-		list, err = repo.ListSendingIPs(ctx)
-		if err != nil || list.EdgeReportsSources || list.IPs[0].OnEdge != nil || list.EdgeReportedAt == nil {
-			t.Fatal("legacy report", list, err)
-		}
-		// A stale epoch cannot overwrite a newer report.
-		newer, err := repo.AcquireControllerLease(ctx, "worker", "controller", time.Minute)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err = repo.RecordEdgeSources(ctx, newer, caps); err != nil {
-			t.Fatal(err)
-		}
-		lease = newer
-		var epoch uint64
-		if err = owner.QueryRowContext(ctx, `SELECT epoch FROM edge_source_reports WHERE worker_id='worker'`).Scan(&epoch); err != nil || epoch != newer.Epoch {
-			t.Fatal("epoch", epoch, err)
-		}
-	})
-
-	t.Run("delete", func(t *testing.T) {
-		if err := repo.DeleteSendingIP(ctx, "operator", id()); !errors.Is(err, admin.ErrNotFound) {
-			t.Fatal("unknown", err)
-		}
-		exec(`UPDATE apps SET sending_ip_id=NULL`)
-		if err := repo.DeleteSendingIP(ctx, "operator", hostingRow.ID); err != nil {
-			t.Fatal("unused IP", err)
-		}
-		var rows int
-		owner.QueryRowContext(ctx, `SELECT count(*) FROM sending_ips`).Scan(&rows)
-		if rows != 1 {
-			t.Fatal("row not deleted")
-		}
-		var audits int
-		owner.QueryRowContext(ctx, `SELECT count(*) FROM audit_events WHERE action='sending_ip.deleted' AND app_id IS NULL`).Scan(&audits)
-		if audits != 1 {
-			t.Fatal("delete not audited")
-		}
-	})
-
-	t.Run("an assignment racing a delete is refused", func(t *testing.T) {
-		row, err := repo.CreateSendingIP(ctx, "operator", admin.SendingIPInput{Name: "race", Address: "45.0.0.20", HeloName: "smtp.race.example.org", BounceDomain: "race.example.org"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		racer := app("Racer")
-		results := make(chan error, 2)
-		go func() { _, err := repo.SetAppSendingIP(ctx, "operator", racer, &row.ID); results <- err }()
-		go func() { results <- repo.DeleteSendingIP(ctx, "operator", row.ID) }()
-		first, second := <-results, <-results
-		var pinned bool
-		owner.QueryRowContext(ctx, `SELECT sending_ip_id IS NOT NULL FROM apps WHERE id=$1`, racer).Scan(&pinned)
-		var exists bool
-		owner.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sending_ips WHERE id=$1)`, row.ID).Scan(&exists)
-		// Either the assignment won (delete refused, row kept) or the delete won
-		// (assignment refused as unknown); never a dangling reference.
-		if pinned && !exists || pinned && !(errors.Is(first, admin.ErrConflict) || errors.Is(second, admin.ErrConflict)) || !pinned && exists && first != nil && second != nil {
-			t.Fatal("inconsistent race outcome", pinned, exists, first, second)
-		}
-	})
 }
-
-func ptr(value string) *string { return &value }

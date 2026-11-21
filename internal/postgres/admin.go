@@ -38,8 +38,9 @@ func (r *Repository) CreateApp(ctx context.Context, actor, name string) (admin.A
 }
 
 // CreateAppWithSendingIP creates an app, optionally pinned to a sending IP
-// (nil: the Edge's primary address). The IP row is key-share locked so it
-// cannot be deleted while the app is inserted; an unknown IP is admin.ErrNotFound.
+// (nil: the Edge's main IP). The IP row is key-share locked so it cannot be
+// pruned while the app is inserted; an unknown IP is admin.ErrNotFound and one
+// the Edge is not reporting right now is admin.ErrConflict.
 func (r *Repository) CreateAppWithSendingIP(ctx context.Context, actor, name string, sendingIPID *string) (admin.App, error) {
 	var app admin.App
 	if !adminText(actor, 256) || !adminText(name, 128) || sendingIPID != nil && !opaqueID(*sendingIPID) {
@@ -56,13 +57,12 @@ func (r *Repository) CreateAppWithSendingIP(ctx context.Context, actor, name str
 	defer tx.Rollback()
 	var target any
 	if sendingIPID != nil {
-		var exists bool
-		err = tx.QueryRowContext(ctx, `SELECT true FROM sending_ips WHERE id=$1 FOR KEY SHARE`, *sendingIPID).Scan(&exists)
-		if errors.Is(err, sql.ErrNoRows) {
-			return admin.App{}, admin.ErrNotFound
+		_, _, onEdge, lockErr := lockSendingIPForPin(ctx, tx, *sendingIPID)
+		if lockErr != nil {
+			return admin.App{}, lockErr
 		}
-		if err != nil {
-			return admin.App{}, err
+		if !onEdge {
+			return admin.App{}, admin.ErrConflict
 		}
 		target = *sendingIPID
 	}

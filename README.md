@@ -8,7 +8,7 @@ It is two Go processes: a **control plane** that owns apps, keys, queues, DKIM s
 
 - Provider-compatible submission APIs and webhook formats (Postmark, Resend, Mailgun; SendGrid submission)
 - Apps as security principals, each with its own API keys, sender domains, quotas and webhooks
-- DKIM signing, named sending IPs with per-app assignment, and Enhanced Protection (required TLS and audited content reads)
+- DKIM signing, sending IPs (set on the edge) with per-app choice, and Enhanced Protection (required TLS and audited content reads)
 - Signed, retried and replayable webhooks
 - Opt-in open and click tracking and one-click unsubscribe
 - Suppression lists, spam-complaint feedback loops and automatic hard-bounce handling

@@ -13,13 +13,9 @@ import (
 type sendingIPTestStore struct {
 	*fakeStore
 	list        SendingIPList
-	created     []SendingIPInput
-	patched     []SendingIPPatch
-	deleted     []string
 	assigned    []*string
 	createdApps []*string
-	deleteErr   error
-	createErr   error
+	assignErr   error
 	row         SendingIP
 }
 
@@ -32,32 +28,14 @@ func (s *sendingIPTestStore) GetSendingIP(_ context.Context, id string) (Sending
 	}
 	return s.row, nil
 }
-func (s *sendingIPTestStore) CreateSendingIP(_ context.Context, actor string, in SendingIPInput) (SendingIP, error) {
-	s.actor = actor
-	if s.createErr != nil {
-		return SendingIP{}, s.createErr
-	}
-	s.created = append(s.created, in)
-	return SendingIP{ID: strings.Repeat("c", 32), Name: in.Name, Address: in.Address, HeloName: in.HeloName, BounceDomain: in.BounceDomain}, nil
-}
-func (s *sendingIPTestStore) UpdateSendingIP(_ context.Context, actor, id string, patch SendingIPPatch) (SendingIP, error) {
-	s.actor = actor
-	s.patched = append(s.patched, patch)
-	return SendingIP{ID: id, Name: "x"}, nil
-}
-func (s *sendingIPTestStore) DeleteSendingIP(_ context.Context, actor, id string) error {
-	s.actor = actor
-	if s.deleteErr != nil {
-		return s.deleteErr
-	}
-	s.deleted = append(s.deleted, id)
-	return nil
-}
 func (s *sendingIPTestStore) GetAppSendingIP(context.Context, string) (AppSendingIP, error) {
 	return AppSendingIP{}, nil
 }
 func (s *sendingIPTestStore) SetAppSendingIP(_ context.Context, actor, _ string, id *string) (AppSendingIP, error) {
 	s.actor = actor
+	if s.assignErr != nil {
+		return AppSendingIP{}, s.assignErr
+	}
 	s.assigned = append(s.assigned, id)
 	return AppSendingIP{SendingIPID: id}, nil
 }
@@ -67,85 +45,49 @@ func (s *sendingIPTestStore) CreateAppWithSendingIP(_ context.Context, actor, na
 	return App{ID: strings.Repeat("a", 32), Name: name, Active: true, CreatedAt: time.Now(), SendingIPID: id}, nil
 }
 
-const validCreate = `{"name":"hosting","address":"45.0.0.10","helo_name":"smtp.hosting.example.org","bounce_domain":"hosting.example.org"}`
-
+// The pool is read-only: only listing and the DNS check exist, and every
+// other method on it is refused before it reaches the store.
 func TestSendingIPPoolRoutes(t *testing.T) {
 	store := &sendingIPTestStore{fakeStore: &fakeStore{}}
-	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store, BounceDomain: "bounce.example.net"}
-	h.Authenticator = fakeAuth{admin: false}
-	if w := send(h, "POST", "/api/v1/sending-ips", validCreate, "valid"); w.Code != 403 || len(store.created) != 0 {
-		t.Fatal("non-admin created an IP", w.Code)
+	h := &Handler{Authenticator: fakeAuth{admin: false}, Store: store}
+	if w := send(h, "GET", "/api/v1/sending-ips", "", "valid"); w.Code != 403 {
+		t.Fatal("non-admin listed", w.Code)
 	}
 	h.Authenticator = fakeAuth{admin: true}
-	if w := send(h, "GET", "/api/v1/sending-ips", "", "valid"); w.Code != 200 || !strings.Contains(w.Body.String(), `"ips":[]`) || !strings.Contains(w.Body.String(), `"unnamed_edge_addresses":[]`) || strings.Contains(w.Body.String(), `global_bounce_domain`) {
+	w := send(h, "GET", "/api/v1/sending-ips", "", "valid")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"ips":[]`) || !strings.Contains(w.Body.String(), `"edge_reports_identity":false`) ||
+		strings.Contains(w.Body.String(), `unnamed_edge_addresses`) || strings.Contains(w.Body.String(), `global_bounce_domain`) {
 		t.Fatal("empty list", w.Code, w.Body.String())
+	}
+	store.list.IPs = []SendingIP{{ID: strings.Repeat("c", 32), Address: "45.0.0.10", HeloName: "smtp.example.org"}}
+	w = send(h, "GET", "/api/v1/sending-ips", "", "valid")
+	for _, field := range []string{`"helo_name":"smtp.example.org"`, `"address":"45.0.0.10"`, `"is_primary":false`, `"on_edge":null`} {
+		if !strings.Contains(w.Body.String(), field) {
+			t.Fatal("missing", field, w.Body.String())
+		}
+	}
+	for _, removed := range []string{`"name"`, `bounce_domain`, `bounce_on_edge`} {
+		if strings.Contains(w.Body.String(), removed) {
+			t.Fatal("removed field returned", removed)
+		}
 	}
 	if w := send(h, "GET", "/api/v1/sending-ips?x=1", "", "valid"); w.Code != 503 {
 		t.Fatal("query accepted", w.Code)
 	}
-	for _, body := range []string{
-		``, `{}`, `[]`,
-		`{"name":"primary","address":"45.0.0.10","helo_name":"smtp.example.org","bounce_domain":"b.example.org"}`,
-		`{"name":"other","address":"45.0.0.10","helo_name":"smtp.example.org","bounce_domain":"b.example.org"}`,
-		`{"name":"removed","address":"45.0.0.10","helo_name":"smtp.example.org","bounce_domain":"b.example.org"}`,
-		`{"name":"Hosting","address":"45.0.0.10","helo_name":"smtp.example.org","bounce_domain":"b.example.org"}`,
-		`{"name":"-x","address":"45.0.0.10","helo_name":"smtp.example.org","bounce_domain":"b.example.org"}`,
-		`{"name":"` + strings.Repeat("a", 33) + `","address":"45.0.0.10","helo_name":"smtp.example.org","bounce_domain":"b.example.org"}`,
-		`{"name":"x","address":"10.0.0.1","helo_name":"smtp.example.org","bounce_domain":"b.example.org"}`,
-		`{"name":"x","address":"127.0.0.1","helo_name":"smtp.example.org","bounce_domain":"b.example.org"}`,
-		`{"name":"x","address":"2607:f8b0:4000::1","helo_name":"smtp.example.org","bounce_domain":"b.example.org"}`,
-		`{"name":"x","address":"45.0.0.10/32","helo_name":"smtp.example.org","bounce_domain":"b.example.org"}`,
-		`{"name":"x","address":"045.0.0.10","helo_name":"smtp.example.org","bounce_domain":"b.example.org"}`,
-		`{"name":"x","address":"45.0.0.10","helo_name":"SMTP.example.org","bounce_domain":"b.example.org"}`,
-		`{"name":"x","address":"45.0.0.10","helo_name":"localhost","bounce_domain":"b.example.org"}`,
-		`{"name":"x","address":"45.0.0.10","helo_name":"smtp.example.org","bounce_domain":""}`,
-		`{"name":"x","address":"45.0.0.10","helo_name":"smtp.example.org","bounce_domain":"45.0.0.10"}`,
-		`{"name":"x","address":"45.0.0.10","helo_name":"smtp.example.org"}`,
-		`{"name":"x","address":"45.0.0.10","helo_name":"smtp.example.org","bounce_domain":"b.example.org","is_default":true}`,
-		// The HELO name must be the bounce domain or sit under it.
-		`{"name":"x","address":"45.0.0.10","helo_name":"smtp.example.org","bounce_domain":"other.example.org"}`,
-		`{"name":"x","address":"45.0.0.10","helo_name":"smtp.example.org","bounce_domain":"mtp.example.org"}`,
-	} {
-		if w := send(h, "POST", "/api/v1/sending-ips", body, "valid"); w.Code != 400 || len(store.created) != 0 {
-			t.Fatal("invalid create accepted", body, w.Code)
-		}
-	}
-	if w := send(h, "POST", "/api/v1/sending-ips", validCreate, "valid"); w.Code != 201 || len(store.created) != 1 || store.actor != "operator-1" {
-		t.Fatal("create", w.Code, w.Body.String())
-	}
-	store.createErr = ErrConflict
-	if w := send(h, "POST", "/api/v1/sending-ips", validCreate, "valid"); w.Code != 409 {
-		t.Fatal("duplicate", w.Code)
-	}
-	if w := send(h, "PUT", "/api/v1/sending-ips", validCreate, "valid"); w.Code != 405 {
-		t.Fatal("wrong method", w.Code)
-	}
 	id := strings.Repeat("c", 32)
-	// The address cannot be edited; at least one editable field is required.
-	for _, body := range []string{``, `{}`, `{"address":"45.0.0.11"}`, `{"name":"Bad"}`, `{"name":"primary"}`, `{"helo_name":"x"}`, `{"bounce_domain":"UPPER.example.org"}`, `{"name":"ok","extra":1}`} {
-		if w := send(h, "PATCH", "/api/v1/sending-ips/"+id, body, "valid"); w.Code != 400 || len(store.patched) != 0 {
-			t.Fatal("invalid patch accepted", body, w.Code)
+	for _, c := range [][3]string{
+		{"POST", "/api/v1/sending-ips", `{"address":"45.0.0.10","helo_name":"smtp.example.org"}`},
+		{"PUT", "/api/v1/sending-ips", ``},
+		{"PATCH", "/api/v1/sending-ips/" + id, `{"helo_name":"smtp.example.org"}`},
+		{"DELETE", "/api/v1/sending-ips/" + id, ``},
+		{"GET", "/api/v1/sending-ips/" + id, ``},
+	} {
+		if w := send(h, c[0], c[1], c[2], "valid"); w.Code != 405 {
+			t.Fatal("pool write not refused", c[0], c[1], w.Code)
 		}
 	}
-	if w := send(h, "PATCH", "/api/v1/sending-ips/"+id, `{"name":"renamed","bounce_domain":"b2.example.org"}`, "valid"); w.Code != 200 || len(store.patched) != 1 || *store.patched[0].Name != "renamed" || store.patched[0].HeloName != nil {
-		t.Fatal("patch", w.Code, w.Body.String())
-	}
-	if w := send(h, "PATCH", "/api/v1/sending-ips/not-an-id", `{"name":"x"}`, "valid"); w.Code != 404 {
+	if w := send(h, "PATCH", "/api/v1/sending-ips/not-an-id", `{}`, "valid"); w.Code != 404 {
 		t.Fatal("bad id", w.Code)
-	}
-	store.deleteErr = ErrConflict
-	if w := send(h, "DELETE", "/api/v1/sending-ips/"+id, "", "valid"); w.Code != 409 || len(store.deleted) != 0 {
-		t.Fatal("delete of an IP in use", w.Code)
-	}
-	store.deleteErr = nil
-	if w := send(h, "DELETE", "/api/v1/sending-ips/"+id, `{"x":1}`, "valid"); w.Code != 400 {
-		t.Fatal("delete with a body", w.Code)
-	}
-	if w := send(h, "DELETE", "/api/v1/sending-ips/"+id, "", "valid"); w.Code != 204 || len(store.deleted) != 1 {
-		t.Fatal("delete", w.Code)
-	}
-	if w := send(h, "GET", "/api/v1/sending-ips/"+id, "", "valid"); w.Code != 405 {
-		t.Fatal("wrong method on a row", w.Code)
 	}
 	if w := send(h, "GET", "/api/v1/sending-ipsx", "", "valid"); w.Code == 200 {
 		t.Fatal("prefix match leaked into another route")
@@ -171,6 +113,12 @@ func TestAppSendingIPRoutes(t *testing.T) {
 	if w := send(h, "PUT", "/api/v1/apps/"+app+"/sending-ip", `{"sending_ip_id":null}`, "valid"); w.Code != 200 || len(store.assigned) != 2 || store.assigned[1] != nil {
 		t.Fatal("assign to the primary", w.Code)
 	}
+	// An IP the Edge is not reporting cannot be chosen, for an existing app or a new one.
+	store.assignErr = ErrConflict
+	if w := send(h, "PUT", "/api/v1/apps/"+app+"/sending-ip", `{"sending_ip_id":"`+ip+`"}`, "valid"); w.Code != 409 {
+		t.Fatal("unavailable IP accepted", w.Code)
+	}
+	store.assignErr = nil
 	if w := send(h, "DELETE", "/api/v1/apps/"+app+"/sending-ip", "", "valid"); w.Code != 405 {
 		t.Fatal("wrong method", w.Code)
 	}
@@ -202,6 +150,8 @@ type fakeReverse struct {
 	hostErr   error
 	txt       map[string][]string
 	txtErr    map[string]error
+	mx        map[string][]*net.MX
+	mxErr     error
 	lookedUp  []string
 	deadlined bool
 }
@@ -215,27 +165,41 @@ func (f *fakeReverse) LookupHost(_ context.Context, host string) ([]string, erro
 	f.lookedUp = append(f.lookedUp, host)
 	return f.hosts, f.hostErr
 }
+func (f *fakeReverse) LookupMX(_ context.Context, name string) ([]*net.MX, error) {
+	f.lookedUp = append(f.lookedUp, "mx:"+name)
+	return f.mx[name], f.mxErr
+}
 func (f *fakeReverse) LookupTXT(_ context.Context, name string) ([]string, error) {
 	return f.txt[name], f.txtErr[name]
 }
 
 func TestSendingIPDNSCheck(t *testing.T) {
-	ip := SendingIP{ID: strings.Repeat("c", 32), Name: "hosting", Address: "45.0.0.10", HeloName: "smtp.hosting.example.org", BounceDomain: "bounce.hosting.example.org"}
+	ip := SendingIP{ID: strings.Repeat("c", 32), Address: "45.0.0.10", HeloName: "smtp.hosting.example.org"}
 	notFound := &net.DNSError{IsNotFound: true}
-	for name, tc := range map[string]struct {
-		dns                                  *fakeReverse
-		reverse, forward, heloSPF, bounceSPF string
-		reverseNames                         int
+	name := "smtp.hosting.example.org"
+	mxSelf := map[string][]*net.MX{name: {{Host: name + ".", Pref: 10}}}
+	for label, tc := range map[string]struct {
+		dns                       *fakeReverse
+		reverse, forward, mx, spf string
+		reverseNames              int
 	}{
-		"all good":    {&fakeReverse{names: []string{"SMTP.hosting.example.org."}, hosts: []string{"45.0.0.10"}, txt: map[string][]string{"smtp.hosting.example.org": {"v=spf1 a -all"}, "bounce.hosting.example.org": {"v=spf1 ip4:45.0.0.0/24 -all"}}}, DNSOK, DNSOK, DNSOK, DNSOK, 1},
-		"a mechanism": {&fakeReverse{names: []string{"smtp.hosting.example.org."}, hosts: []string{"45.0.0.10"}, txt: map[string][]string{"smtp.hosting.example.org": {"v=spf1 a -all"}, "bounce.hosting.example.org": {"v=spf1 a -all"}}}, DNSOK, DNSOK, DNSOK, DNSOK, 1},
-		"mismatch":    {&fakeReverse{names: []string{"other.example.org."}, hosts: []string{"45.0.0.99"}, txt: map[string][]string{"smtp.hosting.example.org": {"v=spf1 a -all"}, "bounce.hosting.example.org": {"v=spf1 ip4:45.0.0.99 -all"}}}, DNSMismatch, DNSMismatch, DNSOK, DNSMismatch, 1},
-		"missing":     {&fakeReverse{addrErr: notFound, hostErr: notFound, txtErr: map[string]error{"smtp.hosting.example.org": notFound, "bounce.hosting.example.org": notFound}}, DNSMissing, DNSMissing, DNSMissing, DNSMissing, 0},
-		"unavailable": {&fakeReverse{addrErr: errors.New("timeout"), hostErr: errors.New("timeout"), txtErr: map[string]error{"smtp.hosting.example.org": errors.New("x"), "bounce.hosting.example.org": errors.New("x")}}, DNSUnavailable, DNSUnavailable, DNSUnavailable, DNSUnavailable, 0},
+		"all good": {&fakeReverse{names: []string{"SMTP.hosting.example.org."}, hosts: []string{"45.0.0.10"}, mx: mxSelf,
+			txt: map[string][]string{name: {"v=spf1 ip4:45.0.0.0/24 -all"}}}, DNSOK, DNSOK, DNSOK, DNSOK, 1},
+		"a mechanism": {&fakeReverse{names: []string{name + "."}, hosts: []string{"45.0.0.10"}, mx: mxSelf,
+			txt: map[string][]string{name: {"v=spf1 a -all"}}}, DNSOK, DNSOK, DNSOK, DNSOK, 1},
+		// No MX record: the name is its own exchanger, so its address decides.
+		"implicit mx": {&fakeReverse{names: []string{name + "."}, hosts: []string{"45.0.0.10"}, mxErr: notFound,
+			txt: map[string][]string{name: {"v=spf1 a -all"}}}, DNSOK, DNSOK, DNSOK, DNSOK, 1},
+		"mismatch": {&fakeReverse{names: []string{"other.example.org."}, hosts: []string{"45.0.0.99"}, mx: mxSelf,
+			txt: map[string][]string{name: {"v=spf1 ip4:45.0.0.99 -all"}}}, DNSMismatch, DNSMismatch, DNSMismatch, DNSMismatch, 1},
+		"missing": {&fakeReverse{addrErr: notFound, hostErr: notFound, mxErr: notFound, txtErr: map[string]error{name: notFound}},
+			DNSMissing, DNSMissing, DNSMissing, DNSMissing, 0},
+		"unavailable": {&fakeReverse{addrErr: errors.New("timeout"), hostErr: errors.New("timeout"), mxErr: errors.New("timeout"), txtErr: map[string]error{name: errors.New("x")}},
+			DNSUnavailable, DNSUnavailable, DNSUnavailable, DNSUnavailable, 0},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(label, func(t *testing.T) {
 			got := checkSendingIPDNS(context.Background(), tc.dns, tc.dns, ip)
-			if got.Reverse != tc.reverse || got.Forward != tc.forward || got.HeloSPF != tc.heloSPF || got.BounceSPF != tc.bounceSPF || len(got.ReverseNames) != tc.reverseNames {
+			if got.Reverse != tc.reverse || got.Forward != tc.forward || got.MX != tc.mx || got.SPF != tc.spf || len(got.ReverseNames) != tc.reverseNames {
 				t.Fatalf("%+v", got)
 			}
 			if !tc.dns.deadlined {
@@ -246,7 +210,7 @@ func TestSendingIPDNSCheck(t *testing.T) {
 }
 
 func TestSendingIPDNSCheckRoute(t *testing.T) {
-	row := SendingIP{ID: strings.Repeat("c", 32), Name: "hosting", Address: "45.0.0.10", HeloName: "smtp.hosting.example.org", BounceDomain: "bounce.hosting.example.org"}
+	row := SendingIP{ID: strings.Repeat("c", 32), Address: "45.0.0.10", HeloName: "smtp.hosting.example.org"}
 	store := &sendingIPTestStore{fakeStore: &fakeStore{}, row: row}
 	dns := &fakeReverse{names: []string{"smtp.hosting.example.org."}, hosts: []string{"45.0.0.10"}}
 	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store, DNS: dns, ReverseDNS: dns}
@@ -292,6 +256,7 @@ func TestSPFListsAddress(t *testing.T) {
 type hostTable map[string][]string
 
 func (h hostTable) LookupAddr(context.Context, string) ([]string, error) { return nil, nil }
+func (h hostTable) LookupMX(context.Context, string) ([]*net.MX, error)  { return nil, nil }
 func (h hostTable) LookupHost(_ context.Context, host string) ([]string, error) {
 	if v, ok := h[host]; ok {
 		return v, nil

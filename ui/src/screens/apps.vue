@@ -46,7 +46,7 @@
                         </td>
                         <td class="nowrap" data-testid="sending-ip-cell">
                             <template v-if="app.sending_ip_id === null">{{ MAIN_IP_LABEL }}</template>
-                            <template v-else-if="ipNames">{{ ipNames.get(app.sending_ip_id) ?? 'Unknown' }}</template>
+                            <template v-else-if="ipLabels">{{ ipLabels.get(app.sending_ip_id) ?? 'Unknown' }}</template>
                             <span v-else class="muted" title="The list of sending IPs couldn't be loaded.">Unknown</span>
                         </td>
                         <td>
@@ -82,7 +82,7 @@ import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import HelpButton from '@/shared/components/help-button.vue';
 import Loader from '@/shared/components/loader.vue';
 import CreateAppModal from '@/shared/components/create-app-modal.vue';
-import { MAIN_IP_LABEL, parseSendingIps } from '@/sending-ips';
+import { ipLabel, MAIN_IP_LABEL, parseSendingIps } from '@/sending-ips';
 import { isOpaqueId } from '@/validation';
 
 const router = useRouter();
@@ -91,11 +91,11 @@ const apps = shallowRef<App[] | null>(null);
 const isLoading = ref(true);
 const loadError = ref<ApiErrorDescription | null>(null);
 
-// The named sending IPs. A failure to load them never blocks the list: the
+// The sending IPs. A failure to load them never blocks the list: the
 // column then says "Unknown" and the create form offers no IP choice.
 const ips = shallowRef<SendingIp[]>([]);
 const ipsLoaded = ref(false);
-const ipNames = computed(() => (ipsLoaded.value ? new Map(ips.value.map(ip => [ip.id, ip.name])) : null));
+const ipLabels = computed(() => (ipsLoaded.value ? new Map(ips.value.map(ip => [ip.id, ipLabel(ip)])) : null));
 
 const isCreateOpen = ref(false);
 const isCreating = ref(false);
@@ -168,7 +168,11 @@ async function create({ name, sendingIpId }: { name: string; sendingIpId: string
         await router.push({ name: 'app-keys', params: { appId: data.id } });
     } catch (err) {
         if (isUnmounted) return;
-        createError.value = describeApiError(err, { mutation: true, notFound: 'That sending IP was not found. It may have been removed. Choose another and try again.' });
+        createError.value = describeApiError(err, {
+            mutation: true,
+            notFound: 'That sending IP was not found. It may have been removed. Choose another and try again.',
+            conflict: 'The sending worker doesn\'t have that IP right now, so it can\'t be chosen. Choose another and try again.'
+        });
     } finally {
         isCreating.value = false;
     }

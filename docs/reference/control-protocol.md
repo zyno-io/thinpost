@@ -181,7 +181,7 @@ The control plane validates the lists and treats a violation as an invalid readi
 
 An Edge whose Ready reports no sources, or sources without host names, keeps its session: replay, bounces, inbound mail and submission all work. The control plane just has nothing to address a delivery from, so it hands that Edge no deliveries and they stay queued.
 
-The control plane addresses every delivery from the live session's Ready, never from its own configuration. The HELO name and the return-path domain are the host name the Edge reported for the address the delivery is sent from. An app on the primary address (the first entry) leaves `DeliveryStart.source_address` and `helo_name` empty and the Edge sends from its primary under its own name; an app assigned to a sending IP names that address and its reported host name. The control plane never hands the Edge a delivery for an address the Edge did not report. Such a delivery stays queued and is never sent from another address.
+The control plane addresses every delivery from the live session's Ready, never from its own configuration. The HELO name and the return-path domain are the host name the Edge reported for the address the delivery is sent from. Every delivery names its address in `DeliveryStart.source_address` and its reported host name in `helo_name`: the app's assigned sending IP, or the primary address (the first entry) for an app without one. The control plane never hands the Edge a delivery for an address the Edge did not report. Such a delivery stays queued and is never sent from another address.
 
 ### Lease messages
 

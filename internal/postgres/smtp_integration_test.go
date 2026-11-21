@@ -232,11 +232,10 @@ func TestSMTPConnectionPostgres(t *testing.T) {
 	assigned, unassigned := strings.Repeat("a", 32), strings.Repeat("b", 32)
 	ipOne, ipTwo := strings.Repeat("1", 32), strings.Repeat("2", 32)
 	exec(`INSERT INTO apps(id,name) VALUES ($1,'Pinned'),($2,'Default')`, assigned, unassigned)
-	primary := netip.MustParseAddr("45.0.1.22")
 
-	connect := func(app string, p netip.Addr) admin.SMTPConnection {
+	connect := func(app string) admin.SMTPConnection {
 		t.Helper()
-		c, err := repo.SMTPConnection(ctx, app, p)
+		c, err := repo.SMTPConnection(ctx, app)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -257,50 +256,54 @@ func TestSMTPConnectionPostgres(t *testing.T) {
 		}
 		return *c.HostSource
 	}
-	if _, err := repo.SMTPConnection(ctx, strings.Repeat("9", 32), primary); !errors.Is(err, admin.ErrNotFound) {
+	if _, err := repo.SMTPConnection(ctx, strings.Repeat("9", 32)); !errors.Is(err, admin.ErrNotFound) {
 		t.Fatal("unknown app", err)
 	}
 
-	// No row for the primary: no host and the prompt flag.
-	if c := connect(unassigned, primary); c.Host != nil || c.HostSource != nil || !c.PrimaryUnnamed {
-		t.Fatal("unnamed primary", c)
-	}
-	// An unset primary (no bridge) is neither a host nor a prompt.
-	if c := connect(unassigned, netip.Addr{}); c.Host != nil || c.PrimaryUnnamed {
-		t.Fatal("unset primary", c)
+	// Before any report there is no host to offer.
+	if c := connect(unassigned); c.Host != nil || c.HostSource != nil || c.HostStatus != admin.SMTPHostNotReported {
+		t.Fatal("no report", c)
 	}
 
-	exec(`INSERT INTO sending_ips(id,name,address,helo_name,bounce_domain) VALUES
-		($1,'main','45.0.1.22','smtp-main.example.org','mail.example.org'),
-		($2,'extra','45.0.0.10','smtp-extra.example.org','mail.example.org')`, ipOne, ipTwo)
-	if c := connect(unassigned, primary); host(c) != "smtp-main.example.org" || source(c) != "primary" || c.PrimaryUnnamed {
-		t.Fatal("primary row", c)
+	exec(`INSERT INTO sending_ips(id,address,helo_name) VALUES
+		($1,'45.0.1.22','smtp-main.example.org'),
+		($2,'45.0.0.10','smtp-extra.example.org')`, ipOne, ipTwo)
+	// Rows alone (a report that has not arrived since an upgrade) name no host.
+	if c := connect(unassigned); c.Host != nil || c.HostStatus != admin.SMTPHostNotReported {
+		t.Fatal("rows without a report", c)
 	}
-	exec(`UPDATE apps SET sending_ip_id=$2 WHERE id=$1`, assigned, ipTwo)
-	if c := connect(assigned, primary); host(c) != "smtp-extra.example.org" || source(c) != "app_sending_ip" || c.PrimaryUnnamed {
-		t.Fatal("assigned row", c)
-	}
-	// An assigned app does not need the primary row at all.
-	if c := connect(assigned, netip.Addr{}); host(c) != "smtp-extra.example.org" {
-		t.Fatal("assigned row without primary", c)
-	}
-
-	// An edge report whose first address differs from the configured primary
-	// does not change the host: the Edge never steers clients.
-	exec(`INSERT INTO sending_ips(id,name,address,helo_name,bounce_domain) VALUES ($1,'third','45.0.0.11','smtp-third.example.org','mail.example.org')`, strings.Repeat("3", 32))
-	if _, err := repo.DB.ExecContext(ctx, `INSERT INTO edge_source_reports(worker_id,epoch,addresses,bounce_domains,reported_at,submission_ports)
-		VALUES ('w1',1,'{45.0.0.11,45.0.1.22}'::inet[],'{mail.example.org}',clock_timestamp(),'{587,465}')`); err != nil {
+	// The main IP is the first address of the last report.
+	if _, err := repo.DB.ExecContext(ctx, `INSERT INTO edge_source_reports(worker_id,epoch,addresses,reported_at,submission_ports)
+		VALUES ('w1',1,'{45.0.1.22,45.0.0.10}'::inet[],clock_timestamp(),'{587,465}')`); err != nil {
 		t.Fatal(err)
 	}
-	c := connect(unassigned, primary)
-	if host(c) != "smtp-main.example.org" || len(c.ObservedPorts) != 2 || c.ObservedPorts[0] != 587 || c.ObservedAt == nil {
-		t.Fatal("edge report steered the host", c)
+	c := connect(unassigned)
+	if host(c) != "smtp-main.example.org" || source(c) != "primary" || c.HostStatus != admin.SMTPHostOK || len(c.ObservedPorts) != 2 || c.ObservedPorts[0] != 587 || c.ObservedAt == nil {
+		t.Fatal("main IP host", c)
+	}
+	exec(`UPDATE apps SET sending_ip_id=$2 WHERE id=$1`, assigned, ipTwo)
+	if c := connect(assigned); host(c) != "smtp-extra.example.org" || source(c) != "app_sending_ip" || c.HostStatus != admin.SMTPHostOK {
+		t.Fatal("assigned row", c)
+	}
+	// Reordering the report changes which IP is the main one.
+	if _, err := repo.DB.ExecContext(ctx, `UPDATE edge_source_reports SET addresses='{45.0.0.10,45.0.1.22}'::inet[],reported_at=reported_at+interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	if c := connect(unassigned); host(c) != "smtp-extra.example.org" {
+		t.Fatal("reordered report", c)
+	}
+	// An app whose IP the Edge no longer reports is offered no host.
+	if _, err := repo.DB.ExecContext(ctx, `UPDATE edge_source_reports SET addresses='{45.0.1.22}'::inet[],reported_at=reported_at+interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	if c := connect(assigned); c.Host != nil || c.HostSource != nil || c.HostStatus != admin.SMTPHostIPUnavailable {
+		t.Fatal("unreported assigned IP", c)
 	}
 	// A report that lists no ports means unknown, not none.
 	if _, err := repo.DB.ExecContext(ctx, `UPDATE edge_source_reports SET submission_ports=NULL,reported_at=reported_at+interval '1 second'`); err != nil {
 		t.Fatal(err)
 	}
-	if c = connect(unassigned, primary); len(c.ObservedPorts) != 0 || c.ObservedAt != nil {
+	if c = connect(unassigned); len(c.ObservedPorts) != 0 || c.ObservedAt != nil {
 		t.Fatal("unreported ports", c)
 	}
 }

@@ -143,15 +143,18 @@ retry 120 "the operator API to show the message delivered" delivered
 echo "operator API reports the message delivered"
 
 step "SMTP submission (587 STARTTLS and 465 implicit TLS)"
-# The Edge listens on the same sending IP and certificate as port 25. Port 587
-# and 465 need the sending IP's row to name the host clients connect to.
+# The Edge listens on the same sending IP and certificate as port 25. Its
+# configuration names the IP (address and HELO name); the Edge reports both when
+# it connects, and the console lists them read-only. Clients connect to that
+# HELO name, so check the list and the SMTP tab's host.
 SMTP_HOST=smtp.quickstart.example
+sending_ip_listed() { # the Edge's first (main) address and its HELO name are listed
+  jq -e --arg h "$SMTP_HOST" '.edge_reports_identity == true and ([.ips[] | select(.address == "11.42.51.10" and .helo_name == $h and .is_primary == true and .on_edge == true)] | length == 1)' >/dev/null <<<"$(api GET /api/v1/sending-ips 2>/dev/null)"
+}
+retry 60 "the sending IP 11.42.51.10 with HELO name $SMTP_HOST to be listed" sending_ip_listed
+echo "sending IP 11.42.51.10 is listed with HELO name $SMTP_HOST"
 smtp_info="$(api GET "/api/v1/apps/$APP/smtp")" || fail "reading the SMTP tab data failed"; json "SMTP connection info" "$smtp_info"
-if jq -e '.connection.primary_unnamed == true' >/dev/null <<<"$smtp_info"; then
-  api POST /api/v1/sending-ips "{\"name\":\"quickstart-primary\",\"address\":\"11.42.51.10\",\"helo_name\":\"$SMTP_HOST\",\"bounce_domain\":\"$SMTP_HOST\"}" >/dev/null || fail "naming the primary sending IP failed"
-  smtp_info="$(api GET "/api/v1/apps/$APP/smtp")" || fail "reading the SMTP tab data failed"
-fi
-jq -e --arg h "$SMTP_HOST" '.connection | .host == $h' >/dev/null <<<"$smtp_info" || fail "unexpected SMTP host: $(jq -c .connection <<<"$smtp_info")"
+jq -e --arg h "$SMTP_HOST" '.connection | .host == $h and .host_status == "ok"' >/dev/null <<<"$smtp_info" || fail "unexpected SMTP host: $(jq -c .connection <<<"$smtp_info")"
 echo "clients connect to $SMTP_HOST"
 ports_reported() { # the Edge reports 465 and 587 when it negotiates submission/1
   jq -e '(.connection.observed_ports // []) | (index(465) != null and index(587) != null)' >/dev/null <<<"$(api GET "/api/v1/apps/$APP/smtp" 2>/dev/null)"

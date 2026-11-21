@@ -61,7 +61,8 @@ export function parseSmtpSettings(data: unknown): SmtpSettings {
 export function parseAppSmtp(data: unknown): AppSmtp {
     if (!isRecord(data) || !Array.isArray(data.credentials) || !isRecord(data.connection)) throw new InvalidResponseError();
     const connection = data.connection;
-    if (typeof connection.primary_unnamed !== 'boolean') throw new InvalidResponseError();
+    const hostStatus = connection.host_status;
+    if (hostStatus !== 'ok' && hostStatus !== 'not_reported' && hostStatus !== 'ip_unavailable') throw new InvalidResponseError();
     const hostSource = connection.host_source;
     if (hostSource !== null && hostSource !== 'app_sending_ip' && hostSource !== 'primary') throw new InvalidResponseError();
     const observed = Array.isArray(connection.observed_ports) ? connection.observed_ports.filter((p): p is number => Number.isInteger(p)) : [];
@@ -71,7 +72,7 @@ export function parseAppSmtp(data: unknown): AppSmtp {
         connection: {
             ...(typeof connection.host === 'string' && connection.host ? { host: connection.host } : {}),
             host_source: hostSource,
-            primary_unnamed: connection.primary_unnamed,
+            host_status: hostStatus,
             ports: [
                 { port: 465, security: 'tls' },
                 { port: 587, security: 'starttls' }

@@ -206,8 +206,8 @@ paths:
       operationId: createApp
       description: >-
         Creates an app. sending_ip_id optionally pins it to a sending IP (404 when the
-        IP does not exist); without it the app uses the Edge's primary address. The
-        pin is audited as app.sending_ip.updated.
+        IP does not exist, 409 when the Edge is not reporting it right now); without it
+        the app uses the Edge's main IP. The pin is audited as app.sending_ip.updated.
       requestBody:
         required: true
         content:
@@ -225,95 +225,29 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/App' }
+        '409': { description: The Edge is not reporting the chosen sending IP right now }
         default: { $ref: '#/components/responses/Error' }
   /sending-ips:
     get:
       operationId: listSendingIps
       description: >-
-        The named sending IPs and what the Edge reported at its last session start. The
-        Edge's first reported address (its primary) is every app's default, and apps with
-        no assignment send from it. on_edge and bounce_on_edge are null (unknown) when the
-        Edge reported no sources, for example an older Edge or no report yet. Reads in a
-        read-only transaction and works while the runtime gate is closed.
+        The sending IPs, mirrored from what the Edge reported at its last session start.
+        Each is identified by its address and its HELO name, which is also the bounce
+        domain; both are set in the Edge's own configuration. The Edge's first reported
+        address (the main IP) is every app's default, and apps with no choice send from
+        it. The list is read-only: rows appear when the Edge reports them, and rows no
+        app is pinned to disappear when the Edge stops reporting them. POST, PUT, PATCH
+        and DELETE on this path or on a single row answer 405. on_edge is null (unknown)
+        when the Edge has not reported its addresses, and false for a pinned IP the Edge
+        no longer reports. Reads in a read-only transaction and works while the runtime
+        gate is closed.
       responses:
         '200':
-          description: The pool
+          description: The sending IPs, the main IP first
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SendingIps' }
         '503': { description: Unavailable }
-        default: { $ref: '#/components/responses/Error' }
-    post:
-      operationId: createSendingIp
-      description: >-
-        Names an outbound address. The address must be a public IPv4 literal; the name a
-        lowercase slug (it appears in logs, the address never does). A row names an
-        address, it does not make the Edge able to send from it: the address must also be
-        declared in the Edge's configuration. 409 for a duplicate name or address or a pool
-        of 64. Needs the open gate. Audited as sending_ip.created with no app and no address.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [name, address, helo_name, bounce_domain]
-              properties:
-                name: { type: string, pattern: '^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$' }
-                address: { type: string, description: Public IPv4 literal. }
-                helo_name: { type: string, minLength: 3, maxLength: 253, description: Lowercase DNS name the Edge greets with from this address; its reverse DNS should match. }
-                bounce_domain: { type: string, minLength: 3, maxLength: 219, description: Lowercase domain of the return path for mail sent from this address; its SPF record must list the address. Must be the helo_name or a domain it belongs to, which the Edge accepts as a bounce domain. }
-      responses:
-        '201':
-          description: The new row
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/SendingIp' }
-        '409': { description: Duplicate name or address, or the pool is full }
-        default: { $ref: '#/components/responses/Error' }
-  /sending-ips/{sendingIpId}:
-    parameters:
-      - { $ref: '#/components/parameters/SendingIpId' }
-    patch:
-      operationId: updateSendingIp
-      description: >-
-        Edits the name, HELO name or bounce domain; at least one is required. The address
-        never changes: a different address is a new row. The new HELO name and bounce
-        domain apply from the next delivery claimed. Keep a retired bounce domain's MX
-        record until late bounces stop arriving. An identical request changes and audits
-        nothing. Needs the open gate. Audited as sending_ip.updated.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              minProperties: 1
-              properties:
-                name: { type: string, pattern: '^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$' }
-                helo_name: { type: string, minLength: 3, maxLength: 253 }
-                bounce_domain: { type: string, minLength: 3, maxLength: 219 }
-      responses:
-        '200':
-          description: The updated row
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/SendingIp' }
-        '404': { description: No such sending IP }
-        '409': { description: The name is already used }
-        default: { $ref: '#/components/responses/Error' }
-    delete:
-      operationId: deleteSendingIp
-      description: >-
-        Removes an unused row. 409 while any app is assigned the IP (including a race with a
-        concurrent assignment). Delivery history keeps the address. Needs the open gate.
-        Audited as sending_ip.deleted.
-      responses:
-        '204': { description: Deleted }
-        '404': { description: No such sending IP }
-        '409': { description: An app uses this IP }
         default: { $ref: '#/components/responses/Error' }
   /sending-ips/{sendingIpId}/check-dns:
     parameters:
@@ -321,11 +255,15 @@ paths:
     post:
       operationId: checkSendingIpDns
       description: >-
-        An advisory DNS check, read from public DNS under an 8 second limit. Nothing is
-        stored or logged. bounce_spf looks for an ip4: entry (single address or range) or
-        an a entry (bare a or a:name, optional /bits; at most two names resolved) in the
-        bounce domain's SPF record; includes and redirects are not followed,
-        so "mismatch" can be a false alarm for a record that lists the address through an include.
+        An advisory DNS check of the IP's HELO name, read from public DNS under an 8 second
+        limit. Nothing is stored or logged. reverse: the address's PTR records include the
+        HELO name. forward: the HELO name resolves to the address. mx: the HELO name's mail
+        exchangers (at most four are resolved) include the address, so bounces reach it; a
+        name with no MX record counts as its own exchanger. spf: the HELO name's SPF record
+        has an ip4: entry (single address or range) or an a entry (bare a or a:name,
+        optional /bits; at most two names resolved) that covers the address. Includes and
+        redirects are not followed, so "mismatch" can be a false alarm for a record that
+        lists the address through an include.
       responses:
         '200':
           description: The result of each check
@@ -341,7 +279,7 @@ paths:
       operationId: getAppSendingIp
       responses:
         '200':
-          description: The app's sending IP; null means the Edge's primary address
+          description: The app's sending IP; null means the Edge's main IP
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AppSendingIp' }
@@ -349,11 +287,14 @@ paths:
     put:
       operationId: setAppSendingIp
       description: >-
-        Assigns the app's sending IP, or null for the Edge's primary address. Queued and
-        retried deliveries use the new IP at their next claim; an attempt already with the
-        Edge finishes on the old one. A delivery whose IP the Edge did not report stays
-        queued; it is never sent from another address. Needs the open gate. Audited as
-        app.sending_ip.updated (an identical assignment changes and audits nothing).
+        Chooses the app's sending IP, or null for the Edge's main IP. This is the only
+        thing the console can change about sending IPs. The IP must be one the Edge is
+        reporting now (409 otherwise); null is always allowed, and repeating the app's
+        current choice always succeeds. Queued and retried deliveries use the new IP at
+        their next claim; an attempt already with the Edge finishes on the old one. If an
+        IP is later dropped from the Edge's configuration, its apps' mail waits (it is
+        never sent from another address) until they are moved. Needs the open gate.
+        Audited as app.sending_ip.updated (an identical choice changes and audits nothing).
       requestBody:
         required: true
         content:
@@ -374,6 +315,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AppSendingIp' }
         '404': { description: No such app or sending IP }
+        '409': { description: The Edge is not reporting this sending IP right now }
         default: { $ref: '#/components/responses/Error' }
   /apps/{appId}/deactivate:
     parameters:
@@ -1020,11 +962,10 @@ paths:
       description: >-
         Everything the SMTP tab shows: the From policy, the app's SMTP credentials
         (active and revoked) and where clients connect. The host is the HELO name of
-        the app's assigned sending IP or, for an app without one, of the sending-IP
-        row whose address is the control plane's configured primary source. It never
-        comes from an Edge report. When the app uses the primary address and no row
-        names it, host is absent and primary_unnamed is true: name the primary under
-        Operations, Sending IPs.
+        the app's chosen sending IP or, for an app without one, of the Edge's main IP,
+        as the Edge last reported it. When there is no host, host_status says why:
+        not_reported (the sending worker has not reported its IPs yet) or ip_unavailable
+        (the app's IP is no longer on the sending worker).
       responses:
         '200':
           description: The app's SMTP submission settings
@@ -2247,71 +2188,67 @@ components:
         active: { type: boolean }
         created_at: { type: string, format: date-time }
         sending_ip_id:
-          description: The app's sending IP; null means the Edge's primary address.
+          description: The app's sending IP; null means the Edge's main IP.
           oneOf:
             - { $ref: '#/components/schemas/Id' }
             - { type: 'null' }
     AppSendingIp:
       type: object
-      required: [sending_ip_id, name]
+      required: [sending_ip_id, address, helo_name]
+      description: The app's choice. All three are null when the app has none and uses the Edge's main IP.
       properties:
         sending_ip_id:
           oneOf:
             - { $ref: '#/components/schemas/Id' }
             - { type: 'null' }
-        name:
+        address:
+          oneOf:
+            - { type: string }
+            - { type: 'null' }
+        helo_name:
           oneOf:
             - { type: string }
             - { type: 'null' }
     SendingIp:
       type: object
-      required: [id, name, address, helo_name, bounce_domain, created_at, app_count, is_primary, on_edge, bounce_on_edge]
+      required: [id, address, helo_name, created_at, app_count, is_primary, on_edge]
       properties:
         id: { $ref: '#/components/schemas/Id' }
-        name: { type: string }
         address: { type: string }
-        helo_name: { type: string }
-        bounce_domain: { type: string }
+        helo_name: { type: string, description: The name the Edge greets with from this address, its reverse DNS name and the domain of the return path for mail sent from it; as the Edge last reported it. }
         created_at: { type: string, format: date-time }
-        app_count: { type: integer, minimum: 0, description: Apps pinned to this IP. For the primary's row, apps with no assignment send from it too (unpinned_app_count). }
-        is_primary: { type: boolean, description: True when the Edge's last report lists this address first. }
+        app_count: { type: integer, minimum: 0, description: Apps pinned to this IP. For the main IP, apps with no choice send from it too (unpinned_app_count). }
+        is_primary: { type: boolean, description: True when the Edge's last report lists this address first (the main IP). }
         on_edge:
-          description: Whether the Edge reported this address. Null when unknown.
-          oneOf:
-            - { type: boolean }
-            - { type: 'null' }
-        bounce_on_edge:
-          description: Whether the Edge reported accepting this bounce domain. Null when unknown.
+          description: Whether the Edge's last report lists this address. Null when the Edge has not reported its addresses.
           oneOf:
             - { type: boolean }
             - { type: 'null' }
     SendingIps:
       type: object
-      required: [ips, unpinned_app_count, edge_reported_at, edge_reports_sources, edge_primary_address, unnamed_edge_addresses]
+      required: [ips, unpinned_app_count, edge_reported_at, edge_reports_identity, edge_primary_address]
       properties:
         ips: { type: array, maxItems: 64, items: { $ref: '#/components/schemas/SendingIp' } }
-        unpinned_app_count: { type: integer, minimum: 0, description: Apps with no assignment; they use the Edge's primary address. }
+        unpinned_app_count: { type: integer, minimum: 0, description: Apps with no choice; they use the Edge's main IP. }
         edge_reported_at:
           oneOf:
             - { type: string, format: date-time }
             - { type: 'null' }
-        edge_reports_sources: { type: boolean, description: False when the Edge's last report listed no sources. }
+        edge_reports_identity: { type: boolean, description: False when the Edge's last report listed no addresses with names; it is then given no mail to send. }
         edge_primary_address:
-          description: The address the Edge reported first, which unassigned apps send from. Null when it reported no sources.
+          description: The address the Edge reported first, which apps with no choice send from. Null when it reported none.
           oneOf:
             - { type: string }
             - { type: 'null' }
-        unnamed_edge_addresses: { type: array, items: { type: string }, description: Addresses the Edge reported that have no row yet, in the Edge's order. }
-        global_bounce_domain: { type: string, description: The bounce domain the primary uses when it has no row. Absent when this replica does not know it. }
     SendingIpDnsCheck:
       type: object
-      required: [reverse, reverse_names, forward, helo_spf, bounce_spf]
+      required: [reverse, reverse_names, forward, mx, spf]
       properties:
         reverse: { $ref: '#/components/schemas/DnsCheckStatus' }
         reverse_names: { type: array, maxItems: 8, items: { type: string } }
         forward: { $ref: '#/components/schemas/DnsCheckStatus' }
-        helo_spf: { $ref: '#/components/schemas/DnsCheckStatus' }
-        bounce_spf: { $ref: '#/components/schemas/DnsCheckStatus' }
+        mx: { $ref: '#/components/schemas/DnsCheckStatus' }
+        spf: { $ref: '#/components/schemas/DnsCheckStatus' }
     DnsCheckStatus:
       type: string
       enum: [ok, mismatch, missing, unavailable]
@@ -2448,14 +2385,17 @@ components:
               ready: { type: boolean }
     SmtpConnection:
       type: object
-      required: [host_source, primary_unnamed, ports, observed_ports]
+      required: [host_source, host_status, ports, observed_ports]
       properties:
-        host: { type: string, description: The SMTP host name; absent when primary_unnamed or when no host is known. }
+        host: { type: string, description: The SMTP host name, the HELO name of the IP the app sends from; absent unless host_status is ok. }
         host_source:
           type: [string, 'null']
           enum: [app_sending_ip, primary, null]
           description: Where host came from; null when there is no host.
-        primary_unnamed: { type: boolean, description: The app uses the primary address and no sending IP row names it. }
+        host_status:
+          type: string
+          enum: [ok, not_reported, ip_unavailable]
+          description: ok when host is set; not_reported while the sending worker has not reported its IPs; ip_unavailable when the app's chosen IP is no longer on the sending worker.
         ports:
           type: array
           description: Always 465 (implicit TLS) and 587 (STARTTLS).

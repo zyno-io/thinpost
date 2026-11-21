@@ -9,7 +9,7 @@ import { data } from './specs.data'
 
 # Admin API
 
-The control plane serves the operator API under `/api/v1`. The [console](/guide/console) is its main client, and it is the interface for managing apps, API keys, sender domains, sending IPs, webhooks, suppressions, inbound domains, messages and operations.
+The control plane serves the operator API under `/api/v1`. The [console](/guide/console) is its main client, and it is the interface for managing apps, API keys, sender domains, each app's sending IP, webhooks, suppressions, inbound domains, messages and operations.
 
 - **Authentication.** Every operation except `GET /api/v1/config` requires a bearer access token from your OpenID Connect provider, validated as described in [Environment variables](/reference/configuration#operator-authentication-oidc). Only tokens that carry the administrator role are accepted. API-key secrets are returned only when a key is created.
 - **Submitting mail** is not part of this API, with one exception. Applications send through the [native route](/guide/native-api) or the [provider-compatible routes](/reference/compatibility/) with an app API key, and read messages back with the [App API](/reference/api/app). The exception is `POST /api/v1/apps/{appId}/messages/test`, which lets an administrator send a constrained test message as an app (the console's **Send test message**). It uses the same acceptance path as the app API, so the app's limits apply and its webhooks fire, and it is audited. See [Console](/guide/console#send-a-test-message).

@@ -1,21 +1,31 @@
 import { InvalidResponseError } from './api-errors';
-import type { SendingIp, SendingIpDnsCheck, SendingIps } from './openapi-client-generated';
-import { normalizeDomain } from './validation';
+import type { AppSendingIp, SendingIp, SendingIpDnsCheck, SendingIps } from './openapi-client-generated';
 
-/** The sending IP name a person sees for an app that has no assignment. */
+/** The sending IP name a person sees for an app that has no choice. */
 export const MAIN_IP_LABEL = 'Main IP';
 
 export const MAX_SENDING_IPS = 64;
 
-const NAME = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
-const RESERVED = new Set(['primary', 'other', 'removed']);
 const ID = /^[0-9a-f]{32}$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const isTime = (value: unknown): value is string => typeof value === 'string' && value.length <= 64 && !Number.isNaN(new Date(value).getTime());
 const isNullableBool = (value: unknown) => value === null || typeof value === 'boolean';
 
-/** Checks the response shape so a stale or foreign body never renders as an empty pool. */
+/** An IP is shown by its HELO name and address, for example `mx.example.net (203.0.113.10)`. */
+export function ipLabel(ip: Pick<SendingIp, 'helo_name' | 'address'>): string {
+    return `${ip.helo_name} (${ip.address})`;
+}
+
+/** An app's choice: all three fields are null for no choice, and all set otherwise. */
+export function isAppSendingIp(data: unknown): data is AppSendingIp {
+    if (!isRecord(data)) return false;
+    const { sending_ip_id: id, address, helo_name: helo } = data;
+    if (id === null) return address === null && helo === null;
+    return typeof id === 'string' && ID.test(id) && typeof address === 'string' && address.length <= 64 && typeof helo === 'string' && helo.length <= 253;
+}
+
+/** Checks the response shape so a stale or foreign body never renders as an empty list. */
 export function parseSendingIps(data: unknown): SendingIps {
     if (
         !isRecord(data) ||
@@ -24,12 +34,8 @@ export function parseSendingIps(data: unknown): SendingIps {
         !Number.isInteger(data.unpinned_app_count) ||
         (data.unpinned_app_count as number) < 0 ||
         !(data.edge_reported_at === null || isTime(data.edge_reported_at)) ||
-        typeof data.edge_reports_sources !== 'boolean' ||
-        !(data.edge_primary_address === null || typeof data.edge_primary_address === 'string') ||
-        !Array.isArray(data.unnamed_edge_addresses) ||
-        data.unnamed_edge_addresses.length > 32 ||
-        data.unnamed_edge_addresses.some(a => typeof a !== 'string' || a.length > 64) ||
-        (data.global_bounce_domain !== undefined && typeof data.global_bounce_domain !== 'string')
+        typeof data.edge_reports_identity !== 'boolean' ||
+        !(data.edge_primary_address === null || typeof data.edge_primary_address === 'string')
     ) {
         throw new InvalidResponseError();
     }
@@ -42,20 +48,15 @@ export function parseSendingIp(data: unknown): SendingIp {
         !isRecord(data) ||
         typeof data.id !== 'string' ||
         !ID.test(data.id) ||
-        typeof data.name !== 'string' ||
-        !NAME.test(data.name) ||
         typeof data.address !== 'string' ||
         data.address.length > 64 ||
         typeof data.helo_name !== 'string' ||
         data.helo_name.length > 253 ||
-        typeof data.bounce_domain !== 'string' ||
-        data.bounce_domain.length > 219 ||
         !isTime(data.created_at) ||
         !Number.isInteger(data.app_count) ||
         (data.app_count as number) < 0 ||
         typeof data.is_primary !== 'boolean' ||
-        !isNullableBool(data.on_edge) ||
-        !isNullableBool(data.bounce_on_edge)
+        !isNullableBool(data.on_edge)
     ) {
         throw new InvalidResponseError();
     }
@@ -69,46 +70,11 @@ export function parseDnsCheck(data: unknown): SendingIpDnsCheck {
         !Array.isArray(data.reverse_names) ||
         data.reverse_names.length > 8 ||
         data.reverse_names.some(n => typeof n !== 'string' || n.length > 253) ||
-        !['reverse', 'forward', 'helo_spf', 'bounce_spf'].every(k => typeof data[k] === 'string' && STATUSES.includes(data[k] as string))
+        !['reverse', 'forward', 'mx', 'spf'].every(k => typeof data[k] === 'string' && STATUSES.includes(data[k] as string))
     ) {
         throw new InvalidResponseError();
     }
     return data as unknown as SendingIpDnsCheck;
-}
-
-// --- Input rules, mirroring the API. The server remains authoritative. ---
-
-export function validateIpName(value: string): string | null {
-    if (!value) return 'Enter a name.';
-    if (RESERVED.has(value)) return `"${value}" is reserved. Choose another name.`;
-    if (!NAME.test(value)) return 'Use 1 to 32 lowercase letters, digits and hyphens, starting and ending with a letter or digit.';
-    return null;
-}
-
-/** A public IPv4 address as four plain numbers; the server also refuses private, loopback and reserved ranges. */
-export function validateIpAddress(value: string): string | null {
-    if (!value) return 'Enter an IPv4 address.';
-    const parts = value.split('.');
-    if (parts.length !== 4 || !parts.every(p => /^(0|[1-9]\d{0,2})$/.test(p) && Number(p) <= 255)) return 'Enter an IPv4 address such as 203.0.113.10.';
-    const [a = 0, b = 0] = parts.map(Number);
-    if (a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) {
-        return 'Use a public address, not a private or reserved one.';
-    }
-    return null;
-}
-
-export function validateIpDomain(value: string, label: string, max: number): string | null {
-    const normalized = normalizeDomain(value);
-    if (normalized.error) return normalized.error;
-    if (normalized.domain !== value) return `Use lowercase letters only, with no spaces, in the ${label}.`;
-    if (value.length < 3 || value.length > max) return `Use at most ${max} characters.`;
-    return null;
-}
-
-/** The bounce domain must be the HELO name or a domain it belongs to, so the sending worker accepts the bounces. */
-export function validateBounceForHelo(helo: string, bounce: string): string | null {
-    if (!helo || !bounce || helo === bounce || helo.endsWith(`.${bounce}`)) return null;
-    return 'Use this IP\'s mail server name, or a domain it belongs to, as the bounce domain.';
 }
 
 // --- Display ---
@@ -119,60 +85,24 @@ export function onWorker(ip: Pick<SendingIp, 'on_edge'>): OnWorker {
     return ip.on_edge === null ? 'unknown' : ip.on_edge ? 'yes' : 'no';
 }
 
-/** One line of what an administrator should know about an IP's presence on the sending worker; empty when all is well. */
-export function workerNote(ip: Pick<SendingIp, 'on_edge' | 'bounce_on_edge'>): string {
-    if (ip.on_edge === false) return 'The sending worker doesn\'t have this address, so mail from apps that use it is waiting. It is never sent from another address.';
-    if (ip.on_edge && ip.bounce_on_edge === false) return 'The sending worker doesn\'t accept this IP\'s bounce domain, so mail from apps that use it is waiting.';
-    return '';
+/** "mail from N apps is waiting" for an IP the sending worker no longer has; empty when all is well. */
+export function workerNote(ip: Pick<SendingIp, 'on_edge' | 'app_count'>): string {
+    if (ip.on_edge !== false) return '';
+    if (ip.app_count === 0) return 'The sending worker no longer has this IP.';
+    const apps = ip.app_count === 1 ? '1 app' : `${ip.app_count} apps`;
+    return `The sending worker no longer has this IP, so mail from ${apps} is waiting. Move ${ip.app_count === 1 ? 'it' : 'them'} to another IP. Mail is never sent from a different address.`;
 }
 
-/** Apps whose mail leaves from this row: those pinned to it, plus those with no assignment when it is the main IP. */
+/** Apps whose mail leaves from this row: those pinned to it, plus those with no choice when it is the main IP. */
 export function appsUsing(ip: Pick<SendingIp, 'app_count' | 'is_primary'>, unpinned: number): number {
     return ip.app_count + (ip.is_primary ? unpinned : 0);
 }
 
-/** Why a row can't be deleted right now, or null. */
-export function deleteBlocker(ip: Pick<SendingIp, 'app_count'>, gateMode: string | null, signedIn: boolean): string | null {
-    if (!signedIn) return 'Sign in again to change sending IPs.';
-    if (gateMode !== null && gateMode !== 'open') return 'Changes are only possible while mail intake is open.';
-    if (ip.app_count > 0) return `${ip.app_count === 1 ? '1 app uses' : `${ip.app_count} apps use`} this IP. Move ${ip.app_count === 1 ? 'it' : 'them'} to another IP first.`;
-    return null;
-}
-
-export function changeBlocker(gateMode: string | null, signedIn: boolean): string | null {
-    if (!signedIn) return 'Sign in again to change sending IPs.';
-    if (gateMode !== null && gateMode !== 'open') return 'Changes are only possible while mail intake is open.';
-    return null;
-}
-
-export interface SpfGroup {
-    domain: string;
-    addresses: string[];
-    /**
-     * The record text to add: `a` when the domain is the HELO name of its only IP (the name already
-     * points at the IP, so the record follows the address), otherwise one ip4: entry per address.
-     */
-    entries: string;
-}
-
-/** Sending IPs grouped by bounce domain: the SPF record of each domain must list exactly its own IPs. */
-export function spfGroups(ips: readonly SendingIp[]): SpfGroup[] {
-    const groups = new Map<string, SendingIp[]>();
-    for (const ip of ips) groups.set(ip.bounce_domain, [...(groups.get(ip.bounce_domain) ?? []), ip]);
-    return [...groups.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([domain, members]) => ({
-            domain,
-            addresses: members.map(ip => ip.address),
-            entries: members.length === 1 && members[0]!.helo_name === domain ? 'a' : members.map(ip => `ip4:${ip.address}`).join(' ')
-        }));
-}
-
 export const DNS_CHECKS = [
     { key: 'reverse', label: 'Reverse DNS names this IP by its HELO name' },
-    { key: 'forward', label: 'The HELO name points back to this IP' },
-    { key: 'helo_spf', label: 'The HELO name has an SPF record' },
-    { key: 'bounce_spf', label: 'The bounce domain\'s SPF record lists this IP' }
+    { key: 'forward', label: 'The HELO name points to this IP' },
+    { key: 'mx', label: 'Mail for the HELO name (bounces) reaches this IP' },
+    { key: 'spf', label: 'The HELO name\'s SPF record lists this IP' }
 ] as const;
 
 type DnsTone = '' | 'success' | 'warning' | 'danger';
@@ -188,5 +118,15 @@ export function dnsStatus(status: string): { text: string; tone: DnsTone } {
     return DNS_STATUS_TEXT[status] ?? { text: 'Couldn\'t check', tone: '' };
 }
 
+/** What to ask DNS staff for, for each check that isn't OK. */
+export function dnsHints(ip: Pick<SendingIp, 'address' | 'helo_name'>, check: SendingIpDnsCheck): string[] {
+    const hints: string[] = [];
+    if (check.reverse === 'mismatch' || check.reverse === 'missing') hints.push(`Set the reverse DNS (PTR record) of ${ip.address} to ${ip.helo_name}.`);
+    if (check.forward === 'mismatch' || check.forward === 'missing') hints.push(`Point ${ip.helo_name} to ${ip.address} with an A record.`);
+    if (check.mx === 'mismatch' || check.mx === 'missing') hints.push(`Add an MX record for ${ip.helo_name} that points to ${ip.helo_name}, so bounces come back to this IP.`);
+    if (check.spf === 'mismatch' || check.spf === 'missing') hints.push(`Give ${ip.helo_name} a TXT record such as "v=spf1 ip4:${ip.address} -all" (or "v=spf1 a -all" once its A record points to this IP), keeping anything it already lists.`);
+    return hints;
+}
+
 /** An SPF record that lists the IP through an include isn't followed, so a mismatch there can be a false alarm. */
-export const BOUNCE_SPF_CAVEAT = 'Only ip4: and a entries are read. An address listed through an include: or redirect shows as not matching.';
+export const SPF_CAVEAT = 'Only ip4: and a entries are read. An address listed through an include: or redirect shows as not matching.';

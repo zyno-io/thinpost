@@ -70,13 +70,14 @@ func (r *Repository) claimDeliveryOnce(ctx context.Context, lease ControllerLeas
 	var trackingCutoff sql.NullTime
 	var firstAttempt sql.NullTime
 	var suppression sql.NullString
-	var ipID, ipName, ipAddress sql.NullString
+	var pinnedAddress sql.NullString
 	var now time.Time
 	// Every delivery is addressed from the live session's report: the HELO and
-	// bounce domain are the reported name of the address it leaves from. An app
-	// pinned to an IP is claimed only while that address is reported, and waits
-	// otherwise; it is never sent from another. An unpinned app uses the
-	// primary. A worker that reported no sources (or no names) is given nothing.
+	// bounce domain are the reported name of the address it leaves from, and the
+	// source is always named explicitly. An app pinned to an IP is claimed only
+	// while that address is reported, and waits otherwise; it is never sent from
+	// another. An unpinned app uses the main IP (the first reported address). A
+	// worker that reported no sources (or no names) is given nothing.
 	primary, ok := caps.Primary()
 	if !ok {
 		return claim, false, delivery.ErrNoWork
@@ -91,12 +92,12 @@ func (r *Repository) claimDeliveryOnce(ctx context.Context, lease ControllerLeas
 		(SELECT min(a.started_at) FROM delivery_attempts a WHERE a.delivery_id=d.id AND a.outcome IS DISTINCT FROM 'recipient_policy_denied'),clock_timestamp(),
 		(SELECT s.reason FROM message_recipients r JOIN suppressions s ON s.app_id=r.app_id AND s.address_lower=r.address_lower
 			WHERE r.message_id=d.message_id AND r.recipient_index=d.recipient_index),
-		ip.id,ip.name,host(ip.address)
+		host(ip.address)
 		FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN apps app ON app.id=m.app_id
 		LEFT JOIN sending_ips ip ON ip.id=app.sending_ip_id
 		WHERE app.active AND d.state='queued' AND d.retry_after<=clock_timestamp()
 		AND (app.sending_ip_id IS NULL OR host(ip.address)=ANY($2::text[]))
-		ORDER BY d.retry_after,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1`, delivery.TrackingMinimumRemaining.Milliseconds(), addresses).Scan(&claim.DeliveryID, &claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.FinalKey, &claim.RecipientIndex, &claim.EnhancedProtection, &claim.AcceptedAt, &claim.RouteAttempt, &claim.RecipientPolicyOverride, &trackingUnavailable, &trackingCutoff, &firstAttempt, &now, &suppression, &ipID, &ipName, &ipAddress)
+		ORDER BY d.retry_after,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1`, delivery.TrackingMinimumRemaining.Milliseconds(), addresses).Scan(&claim.DeliveryID, &claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.FinalKey, &claim.RecipientIndex, &claim.EnhancedProtection, &claim.AcceptedAt, &claim.RouteAttempt, &claim.RecipientPolicyOverride, &trackingUnavailable, &trackingCutoff, &firstAttempt, &now, &suppression, &pinnedAddress)
 	if errors.Is(err, sql.ErrNoRows) {
 		return claim, false, delivery.ErrNoWork
 	}
@@ -116,19 +117,18 @@ func (r *Repository) claimDeliveryOnce(ctx context.Context, lease ControllerLeas
 			return claim, false, err
 		}
 	}
-	// The address recorded is the one the worker is asked to send from; NULL
-	// means its primary, which it uses when the start names no source.
-	var sourceAddress any
-	claim.BounceDomain = primary.Hostname
-	if ipID.Valid {
-		source, ok := caps.Source(ipAddress.String)
-		if !ok {
+	// The address recorded is the one the worker is asked to send from: the
+	// app's pinned IP, else the main IP. It is never NULL for a new attempt.
+	source := primary
+	if pinnedAddress.Valid {
+		var ok bool
+		if source, ok = caps.Source(pinnedAddress.String); !ok {
 			return claim, false, errors.New("claimed sending IP is not reported by the worker")
 		}
-		claim.SourceName, claim.ResolvedAddress = ipName.String, ipAddress.String
-		claim.SourceAddress, claim.HeloName, claim.BounceDomain = ipAddress.String, source.Hostname, source.Hostname
-		sourceAddress = ipAddress.String
+		claim.ResolvedAddress = pinnedAddress.String
 	}
+	sourceAddress := source.Address.String()
+	claim.SourceAddress, claim.HeloName, claim.BounceDomain, claim.SourceName = sourceAddress, source.Hostname, source.Hostname, source.Hostname
 	if _, err = tx.ExecContext(ctx, `INSERT INTO delivery_attempts(id,delivery_id,worker_id,epoch,start_authorized,source_address) VALUES ($1,$2,$3,$4,false,$5::text::inet)`, attemptID, claim.DeliveryID, lease.WorkerID, lease.Epoch, sourceAddress); err != nil {
 		return claim, false, err
 	}
@@ -198,9 +198,10 @@ func (r *Repository) CommitDeliveryResultIdentified(ctx context.Context, result 
 	} else if err != nil {
 		return committed, err
 	}
-	// source_address NULL is the worker's primary; an address with no record
-	// (deleted since) is logged as "removed", never as the address.
-	if err = tx.QueryRowContext(ctx, `SELECT m.app_id,m.id,CASE WHEN a.source_address IS NULL THEN 'primary' ELSE COALESCE(ip.name,'removed') END
+	// The attempt is logged under the HELO name of its address: "primary" only
+	// for an attempt from before schema 45 (source_address NULL), and "removed"
+	// for an address whose row is gone. Never the address itself.
+	if err = tx.QueryRowContext(ctx, `SELECT m.app_id,m.id,CASE WHEN a.source_address IS NULL THEN 'primary' ELSE COALESCE(ip.helo_name,'removed') END
 		FROM deliveries d JOIN messages m ON m.id=d.message_id
 		LEFT JOIN delivery_attempts a ON a.id=$2 AND a.delivery_id=d.id
 		LEFT JOIN sending_ips ip ON ip.address=a.source_address

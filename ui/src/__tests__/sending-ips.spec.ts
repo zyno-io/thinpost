@@ -8,9 +8,6 @@ import { mountAppRoute } from './mount-app';
 
 const api = vi.hoisted(() => ({
     listSendingIps: vi.fn(),
-    createSendingIp: vi.fn(),
-    updateSendingIp: vi.fn(),
-    deleteSendingIp: vi.fn(),
     checkSendingIpDns: vi.fn(),
     getAppSendingIp: vi.fn(),
     setAppSendingIp: vi.fn(),
@@ -47,57 +44,35 @@ const app = { id: APP_ID, name: 'Billing', active: true, created_at: '2026-10-01
 function ip(overrides: Record<string, unknown> = {}) {
     return {
         id: MAIN_ID,
-        name: 'app-mail',
         address: '45.0.1.22',
-        helo_name: 'smtp.mx.example.net',
-        bounce_domain: 'bounce.example.net',
+        helo_name: 'mx.example.net',
         created_at: '2026-11-01T10:00:00Z',
         app_count: 1,
         is_primary: true,
         on_edge: true,
-        bounce_on_edge: true,
         ...overrides
     };
 }
-const hosting = (overrides: Record<string, unknown> = {}) =>
-    ip({ id: HOSTING_ID, name: 'hosting', address: '45.0.0.10', helo_name: 'smtp.hosting.example.org', bounce_domain: 'hosting.example.org', app_count: 2, is_primary: false, ...overrides });
+const hosting = (overrides: Record<string, unknown> = {}) => ip({ id: HOSTING_ID, address: '45.0.0.10', helo_name: 'smtp.hosting.example.org', app_count: 2, is_primary: false, ...overrides });
 function pool(overrides: Record<string, unknown> = {}) {
     return {
         ips: [ip(), hosting()],
         unpinned_app_count: 3,
         edge_reported_at: '2026-11-12T10:00:00Z',
-        edge_reports_sources: true,
+        edge_reports_identity: true,
         edge_primary_address: '45.0.1.22',
-        unnamed_edge_addresses: [],
-        global_bounce_domain: 'bounce.example.net',
         ...overrides
     };
 }
+const HOSTING_LABEL = 'smtp.hosting.example.org (45.0.0.10)';
+const MAIN_LABEL = 'mx.example.net (45.0.1.22)';
 
 let wrapper: VueWrapper | undefined;
-async function mountCard(gateMode: string | null = 'open') {
-    wrapper = mount(Card, { props: { gateMode }, global: { plugins: [installVf] }, attachTo: document.body });
+async function mountCard() {
+    wrapper = mount(Card, { global: { plugins: [installVf] }, attachTo: document.body });
     await flushPromises();
 }
-const buttons = (label: string) => wrapper!.findAll('button').filter(b => b.text().includes(label));
-function button(label: string) {
-    const match = buttons(label)[0];
-    if (!match) throw new Error(`button "${label}" not found`);
-    return match;
-}
-const row = (name: string) => wrapper!.find(`tr[data-ip="${name}"]`);
-const modalInput = (labelText: string) => {
-    const label = [...document.querySelectorAll('label')].find(l => l.textContent?.trim() === labelText);
-    if (!label) throw new Error(`no field ${labelText}`);
-    return document.getElementById(label.getAttribute('for')!) as HTMLInputElement;
-};
-async function type(labelText: string, value: string) {
-    const input = modalInput(labelText);
-    input.value = value;
-    input.dispatchEvent(new Event('input'));
-    input.dispatchEvent(new Event('blur'));
-    await flushPromises();
-}
+const row = (address: string) => wrapper!.find(`tr[data-ip="${address}"]`);
 const dialogButton = (label: string) => [...document.querySelectorAll('[role="dialog"] button')].find(b => b.textContent?.includes(label)) as HTMLButtonElement;
 
 beforeEach(() => {
@@ -116,301 +91,143 @@ afterEach(() => {
 });
 
 describe('sending IP helpers', () => {
-    it('validates input like the server', () => {
-        expect(sending.validateIpName('app-mail')).toBeNull();
-        for (const bad of ['', 'primary', 'other', 'removed', 'Hosting', '-x', 'x-', 'a b', 'a'.repeat(33), '45.0.1.22']) expect(sending.validateIpName(bad), bad).toBeTruthy();
-        expect(sending.validateIpAddress('45.0.0.10')).toBeNull();
-        for (const bad of ['', '45.0.0', '45.0.0.256', '045.0.0.1', '10.0.0.1', '127.0.0.1', '192.168.1.1', '172.16.0.1', '169.254.1.1', '224.0.0.1', '0.1.2.3', '2607:f8b0::1', 'mail.example.com']) {
-            expect(sending.validateIpAddress(bad), bad).toBeTruthy();
-        }
-        expect(sending.validateIpDomain('smtp.example.org', 'HELO name', 253)).toBeNull();
-        for (const bad of ['', 'localhost', 'SMTP.example.org', 'a b.example.org', '45.0.0.10', 'x.'.repeat(130)]) expect(sending.validateIpDomain(bad, 'HELO name', 253), bad).toBeTruthy();
-        expect(sending.validateIpDomain('a'.repeat(60) + '.' + 'b'.repeat(60) + '.' + 'c'.repeat(60) + '.' + 'd'.repeat(40) + '.example', 'bounce domain', 219)).toBeTruthy();
-    });
-
-    it('requires the bounce domain to be the HELO name or a domain it belongs to', () => {
-        expect(sending.validateBounceForHelo('smtp.example.org', 'smtp.example.org')).toBeNull();
-        expect(sending.validateBounceForHelo('smtp.example.org', 'example.org')).toBeNull();
-        expect(sending.validateBounceForHelo('smtp.example.org', 'mtp.example.org')).toBeTruthy();
-        expect(sending.validateBounceForHelo('smtp.example.org', 'other.example')).toBeTruthy();
-    });
-
-    it('rejects a malformed pool or DNS response', () => {
+    it('rejects a malformed list or DNS response', () => {
         expect(sending.parseSendingIps(pool())).toBeTruthy();
-        for (const body of [null, '<html>', {}, pool({ ips: 'x' }), pool({ ips: [{ ...ip(), on_edge: 'yes' }] }), pool({ ips: [{ ...ip(), name: 'Bad Name' }] }), pool({ unpinned_app_count: -1 }), pool({ edge_reports_sources: 'yes' })]) {
+        for (const body of [null, '<html>', {}, pool({ ips: 'x' }), pool({ ips: [{ ...ip(), on_edge: 'yes' }] }), pool({ ips: [{ ...ip(), helo_name: 5 }] }), pool({ unpinned_app_count: -1 }), pool({ edge_reports_identity: 'yes' }), pool({ edge_reports_identity: undefined })]) {
             expect(() => sending.parseSendingIps(body)).toThrow("didn't understand");
         }
-        expect(() => sending.parseDnsCheck({ reverse: 'ok', forward: 'ok', helo_spf: 'ok', bounce_spf: 'bogus', reverse_names: [] })).toThrow();
-        expect(sending.parseDnsCheck({ reverse: 'ok', forward: 'ok', helo_spf: 'ok', bounce_spf: 'ok', reverse_names: [] })).toBeTruthy();
+        expect(() => sending.parseDnsCheck({ reverse: 'ok', forward: 'ok', mx: 'ok', spf: 'bogus', reverse_names: [] })).toThrow();
+        expect(() => sending.parseDnsCheck({ reverse: 'ok', forward: 'ok', helo_spf: 'ok', bounce_spf: 'ok', reverse_names: [] })).toThrow();
+        expect(sending.parseDnsCheck({ reverse: 'ok', forward: 'ok', mx: 'ok', spf: 'ok', reverse_names: [] })).toBeTruthy();
     });
 
-    it('groups IPs by bounce domain for SPF', () => {
-        const groups = sending.spfGroups([ip(), hosting(), hosting({ id: '3'.repeat(32), name: 'hosting-2', address: '45.0.0.11' }), ip({ id: '4'.repeat(32), name: 'other', address: '45.0.1.23' })] as never);
-        expect(groups).toEqual([
-            { domain: 'bounce.example.net', addresses: ['45.0.1.22', '45.0.1.23'], entries: 'ip4:45.0.1.22 ip4:45.0.1.23' },
-            { domain: 'hosting.example.org', addresses: ['45.0.0.10', '45.0.0.11'], entries: 'ip4:45.0.0.10 ip4:45.0.0.11' }
-        ]);
-        expect(sending.spfGroups([hosting({ helo_name: 'smtp.hosting.test', bounce_domain: 'smtp.hosting.test' })] as never)).toEqual([
-            { domain: 'smtp.hosting.test', addresses: ['45.0.0.10'], entries: 'a' }
-        ]);
+    it('checks the shape of an app\'s choice', () => {
+        expect(sending.isAppSendingIp({ sending_ip_id: null, address: null, helo_name: null })).toBe(true);
+        expect(sending.isAppSendingIp({ sending_ip_id: HOSTING_ID, address: '45.0.0.10', helo_name: 'smtp.hosting.example.org' })).toBe(true);
+        for (const bad of [null, {}, { sending_ip_id: null }, { sending_ip_id: null, address: '45.0.0.10', helo_name: null }, { sending_ip_id: 'x', address: '45.0.0.10', helo_name: 'h.example' }, { sending_ip_id: HOSTING_ID, address: null, helo_name: null }, { sending_ip_id: HOSTING_ID, name: 'hosting' }]) {
+            expect(sending.isAppSendingIp(bad), JSON.stringify(bad)).toBe(false);
+        }
     });
 
-    it('explains why a delete is not possible', () => {
-        expect(sending.deleteBlocker({ app_count: 0 }, 'open', true)).toBeNull();
-        expect(sending.deleteBlocker({ app_count: 1 }, 'open', true)).toBe('1 app uses this IP. Move it to another IP first.');
-        expect(sending.deleteBlocker({ app_count: 3 }, 'open', true)).toContain('3 apps use this IP');
-        expect(sending.deleteBlocker({ app_count: 0 }, 'closed', true)).toContain('mail intake is open');
-        expect(sending.deleteBlocker({ app_count: 0 }, 'open', false)).toContain('Sign in');
+    it('labels an IP by its HELO name and address', () => {
+        expect(sending.ipLabel({ helo_name: 'mx.example.net', address: '45.0.1.22' })).toBe(MAIN_LABEL);
+    });
+
+    it('says how many apps are waiting when the sending worker no longer has an IP', () => {
+        expect(sending.workerNote({ on_edge: true, app_count: 2 })).toBe('');
+        expect(sending.workerNote({ on_edge: null, app_count: 2 })).toBe('');
+        expect(sending.workerNote({ on_edge: false, app_count: 0 })).toBe('The sending worker no longer has this IP.');
+        expect(sending.workerNote({ on_edge: false, app_count: 1 })).toContain('mail from 1 app is waiting. Move it to another IP');
+        expect(sending.workerNote({ on_edge: false, app_count: 3 })).toContain('mail from 3 apps is waiting. Move them to another IP');
+    });
+
+    it('turns each failed check into something to ask DNS staff for', () => {
+        const target = { address: '45.0.0.10', helo_name: 'smtp.hosting.example.org' };
+        expect(sending.dnsHints(target, { reverse: 'ok', reverse_names: [], forward: 'ok', mx: 'ok', spf: 'ok' })).toEqual([]);
+        expect(sending.dnsHints(target, { reverse: 'ok', reverse_names: [], forward: 'ok', mx: 'unavailable', spf: 'unavailable' })).toEqual([]);
+        const hints = sending.dnsHints(target, { reverse: 'mismatch', reverse_names: ['x.example'], forward: 'missing', mx: 'missing', spf: 'mismatch' });
+        expect(hints).toHaveLength(4);
+        expect(hints[0]).toBe('Set the reverse DNS (PTR record) of 45.0.0.10 to smtp.hosting.example.org.');
+        expect(hints[1]).toContain('Point smtp.hosting.example.org to 45.0.0.10');
+        expect(hints[2]).toContain('MX record for smtp.hosting.example.org');
+        expect(hints[3]).toContain('ip4:45.0.0.10');
     });
 });
 
 describe('sending IPs card', () => {
-    it('lists the pool with the main IP, app counts and worker status', async () => {
+    it('lists each IP with its HELO name, the main IP, app counts and worker status', async () => {
         await mountCard();
-        expect(row('app-mail').find('[data-testid="main-tag"]').exists()).toBe(true);
-        expect(row('app-mail').text()).toContain('45.0.1.22');
-        expect(row('app-mail').text()).toContain('smtp.mx.example.net');
-        expect(row('app-mail').text()).toContain('bounce.example.net');
+        expect(row('45.0.1.22').find('[data-testid="main-tag"]').exists()).toBe(true);
+        expect(row('45.0.1.22').text()).toContain('45.0.1.22');
+        expect(row('45.0.1.22').text()).toContain('mx.example.net');
         // The main IP serves the apps that chose it and the ones that never chose.
-        expect(row('app-mail').findAll('td')[3]!.text()).toBe('4');
-        expect(row('hosting').findAll('td')[3]!.text()).toBe('2');
-        expect(row('hosting').find('[data-testid="main-tag"]').exists()).toBe(false);
-        expect(row('hosting').find('[data-testid="on-worker"]').text()).toBe('Yes');
+        expect(row('45.0.1.22').findAll('td')[1]!.text()).toBe('4');
+        expect(row('45.0.0.10').findAll('td')[1]!.text()).toBe('2');
+        expect(row('45.0.0.10').find('[data-testid="main-tag"]').exists()).toBe(false);
+        expect(row('45.0.0.10').find('[data-testid="on-worker"]').text()).toBe('Yes');
         expect(wrapper!.find('[data-testid="reported-at"]').exists()).toBe(true);
         const help = await openHelp(wrapper!, 'sending IPs');
         expect(help).toContain('never sent from a different address');
     });
 
-    it('says when an address is not on the sending worker, and when it is not known', async () => {
-        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip(), hosting({ on_edge: false, bounce_on_edge: false })] }) });
+    it('is read-only and says who to ask for a change', async () => {
         await mountCard();
-        expect(row('hosting').find('[data-testid="on-worker"]').text()).toBe('No');
-        expect(wrapper!.find('tr[data-detail="hosting"] [data-testid="worker-note"]').text()).toContain('is never sent from another address');
-        wrapper!.unmount();
-        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip({ on_edge: null, bounce_on_edge: null }), hosting({ on_edge: null, bounce_on_edge: null })], edge_reports_sources: false, edge_reported_at: '2026-11-12T10:00:00Z', edge_primary_address: null }) });
-        await mountCard();
-        expect(row('hosting').find('[data-testid="on-worker"]').text()).toBe('Unknown');
-        expect(wrapper!.find('[data-testid="no-sources"]').text()).toContain('isn\'t known');
-        wrapper!.unmount();
-        api.listSendingIps.mockResolvedValue({ data: pool({ edge_reported_at: null, edge_reports_sources: false, edge_primary_address: null }) });
-        await mountCard();
-        expect(wrapper!.find('[data-testid="no-report"]').exists()).toBe(true);
+        expect(wrapper!.find('[data-testid="read-only-note"]').text()).toBe(
+            'These IPs and their names are set up on the sending worker and appear here when it connects. To add or change one, ask your Thinpost administrator.'
+        );
+        for (const gone of ['add-ip', 'edit-ip', 'delete-ip', 'name-ip', 'unnamed', 'spf', 'blocker']) expect(wrapper!.find(`[data-testid="${gone}"]`).exists(), gone).toBe(false);
+        expect(wrapper!.findAll('button').map(b => b.text().trim())).toEqual(expect.not.arrayContaining(['Add IP', 'Edit', 'Delete']));
+        expect(wrapper!.text()).not.toMatch(/bounce domain|Name it|Not named yet/i);
+        // The name column and the bounce domain column are gone.
+        expect(wrapper!.findAll('th[scope="col"]').map(h => h.text())).toEqual(['IP address', 'HELO name', 'Apps using it', 'On the sending worker', 'DNS']);
     });
 
-    it('shows an addresses the worker reported that has no name, and the empty state', async () => {
-        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [], unnamed_edge_addresses: ['45.0.1.22', '45.0.0.10'], unpinned_app_count: 5 }) });
+    it('says how many apps are waiting when an IP is not on the sending worker, and when it is not known', async () => {
+        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip(), hosting({ on_edge: false })] }) });
         await mountCard();
-        const unnamed = wrapper!.findAll('[data-testid="unnamed"]');
-        expect(unnamed).toHaveLength(2);
-        expect(unnamed[0]!.text()).toContain('Main IP');
-        expect(unnamed[0]!.text()).toContain('5');
-        expect(unnamed[1]!.text()).not.toContain('Main IP');
+        expect(row('45.0.0.10').find('[data-testid="on-worker"]').text()).toBe('No');
+        expect(wrapper!.find('tr[data-detail="45.0.0.10"] [data-testid="worker-note"]').text()).toContain('mail from 2 apps is waiting. Move them to another IP');
         wrapper!.unmount();
-        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [], unnamed_edge_addresses: [] }) });
+        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip({ on_edge: null }), hosting({ on_edge: null })], edge_reports_identity: false, edge_reported_at: '2026-11-12T10:00:00Z', edge_primary_address: null }) });
         await mountCard();
-        expect(wrapper!.find('[data-testid="empty"]').text()).toContain('Every app sends from the main IP');
-        expect(wrapper!.find('[data-testid="empty"]').text()).toContain('bounce.example.net');
+        expect(row('45.0.0.10').find('[data-testid="on-worker"]').text()).toBe('Unknown');
+        expect(wrapper!.find('[data-testid="no-sources"]').text()).toContain('isn\'t sending mail');
+        wrapper!.unmount();
+        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [], edge_reported_at: null, edge_reports_identity: false, edge_primary_address: null }) });
+        await mountCard();
+        expect(wrapper!.find('[data-testid="no-report"]').text()).toBe('The sending worker hasn\'t connected yet, so its IPs aren\'t known.');
+        expect(wrapper!.find('[data-testid="empty"]').exists()).toBe(true);
         expect(wrapper!.find('[data-testid="sending-ips"]').exists()).toBe(false);
     });
 
-    it('shows what to add to each bounce domain\'s SPF record', async () => {
+    it('runs the DNS check and explains the results with what to ask for', async () => {
         await mountCard();
-        const hostingSpf = wrapper!.find('[data-spf-domain="hosting.example.org"]');
-        expect(hostingSpf.text()).toContain('ip4:45.0.0.10');
-        expect(hostingSpf.text()).not.toContain('45.0.1.22');
-        expect(wrapper!.find('[data-spf-domain="bounce.example.net"]').text()).toContain('ip4:45.0.1.22');
-    });
-
-    it('disables delete with the reason, and allows it for an unused IP', async () => {
-        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip(), hosting({ app_count: 0 })] }) });
-        await mountCard();
-        const mainDelete = row('app-mail').find('[data-testid="delete-ip"]');
-        expect(mainDelete.attributes('disabled')).toBeDefined();
-        expect(wrapper!.find('tr[data-detail="app-mail"] [data-testid="delete-reason"]').text()).toBe('Can\'t delete: 1 app uses this IP. Move it to another IP first.');
-        const unusedDelete = row('hosting').find('[data-testid="delete-ip"]');
-        expect(unusedDelete.attributes('disabled')).toBeUndefined();
-        vf.showConfirmDestroy.mockResolvedValue(true);
-        api.deleteSendingIp.mockResolvedValue({});
-        await unusedDelete.trigger('click');
-        await flushPromises();
-        expect(api.deleteSendingIp).toHaveBeenCalledWith({ path: { sendingIpId: HOSTING_ID } });
-        expect(api.listSendingIps).toHaveBeenCalledTimes(2);
-    });
-
-    it('warns, when deleting the main IP\'s record, what unassigned apps will use instead', async () => {
-        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip({ app_count: 0 })] }) });
-        await mountCard();
-        vf.showConfirmDestroy.mockResolvedValue(false);
-        await row('app-mail').find('[data-testid="delete-ip"]').trigger('click');
-        await flushPromises();
-        expect(vf.showConfirmDestroy.mock.calls[0]![1]).toContain('own hostname and the default bounce domain');
-    });
-
-    it('does not delete when the confirmation is declined', async () => {
-        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [hosting({ app_count: 0, is_primary: false })] }) });
-        await mountCard();
-        vf.showConfirmDestroy.mockResolvedValue(false);
-        await row('hosting').find('[data-testid="delete-ip"]').trigger('click');
-        await flushPromises();
-        expect(api.deleteSendingIp).not.toHaveBeenCalled();
-    });
-
-    it('blocks every change while mail intake is closed or the session ended', async () => {
-        await mountCard('closed');
-        expect(wrapper!.find('[data-testid="blocker"]').text()).toContain('mail intake is open');
-        expect(wrapper!.find('[data-testid="add-ip"]').attributes('disabled')).toBeDefined();
-        expect(row('hosting').find('[data-testid="edit-ip"]').attributes('disabled')).toBeDefined();
-        expect(row('hosting').find('[data-testid="delete-ip"]').attributes('disabled')).toBeDefined();
-        wrapper!.unmount();
-        authState.status = 'signed-out' as never;
-        await mountCard('open');
-        expect(wrapper!.find('[data-testid="blocker"]').text()).toContain('Sign in');
-    });
-
-    it('adds an IP after validating the form', async () => {
-        await mountCard();
-        await wrapper!.find('[data-testid="add-ip"]').trigger('click');
-        await flushPromises();
-        await type('Name', 'Bad Name');
-        await type('IP address', '10.0.0.1');
-        await type('HELO name', 'localhost');
-        await type('Bounce domain', 'Bounce.Example');
-        dialogButton('Add IP').click();
-        await flushPromises();
-        expect(api.createSendingIp).not.toHaveBeenCalled();
-        expect(document.querySelector('[role="dialog"]')!.textContent).toContain('Use 1 to 32 lowercase letters');
-        await type('Name', 'third');
-        await type('IP address', '45.0.0.11');
-        await type('HELO name', 'smtp.third.example.org');
-        await type('Bounce domain', 'third.example.org');
-        api.createSendingIp.mockResolvedValue({ data: hosting({ id: '5'.repeat(32), name: 'third', address: '45.0.0.11', app_count: 0 }) });
-        dialogButton('Add IP').click();
-        await flushPromises();
-        expect(api.createSendingIp).toHaveBeenCalledWith({ body: { name: 'third', address: '45.0.0.11', helo_name: 'smtp.third.example.org', bounce_domain: 'third.example.org' } });
-        expect(vf.showToast).toHaveBeenCalled();
-        expect(document.querySelector('[role="dialog"]')).toBeNull();
-    });
-
-    it('starts the bounce domain from the HELO name and keeps it under that name', async () => {
-        await mountCard();
-        await wrapper!.find('[data-testid="add-ip"]').trigger('click');
-        await flushPromises();
-        await type('HELO name', 'smtp.hosting.example');
-        expect((document.querySelector('[role="dialog"]')!.querySelector('input[id$="-bounce"]') as HTMLInputElement).value).toBe('smtp.hosting.example');
-        // Once someone chooses a bounce domain, the HELO name no longer overwrites it.
-        await type('Bounce domain', 'other.example');
-        await type('HELO name', 'smtp.hosting.example.net');
-        expect((document.querySelector('[role="dialog"]')!.querySelector('input[id$="-bounce"]') as HTMLInputElement).value).toBe('other.example');
-        await type('Name', 'hosting-2');
-        await type('IP address', '45.0.0.12');
-        dialogButton('Add IP').click();
-        await flushPromises();
-        expect(api.createSendingIp).not.toHaveBeenCalled();
-        expect(document.querySelector('[role="dialog"]')!.textContent).toContain('mail server name, or a domain it belongs to');
-        await type('Bounce domain', 'hosting.example.net');
-        api.createSendingIp.mockResolvedValue({ data: hosting({ id: '6'.repeat(32), name: 'hosting-2', address: '45.0.0.12', app_count: 0 }) });
-        dialogButton('Add IP').click();
-        await flushPromises();
-        expect(api.createSendingIp).toHaveBeenCalledWith({ body: { name: 'hosting-2', address: '45.0.0.12', helo_name: 'smtp.hosting.example.net', bounce_domain: 'hosting.example.net' } });
-    });
-
-    it('lets a row saved before the bounce-domain rule be renamed', async () => {
-        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip(), hosting({ bounce_domain: 'bounce.hosting.example.org' })] }) });
-        await mountCard();
-        await row('hosting').find('[data-testid="edit-ip"]').trigger('click');
-        await flushPromises();
-        await type('Name', 'hosting-renamed');
-        api.updateSendingIp.mockResolvedValue({ data: hosting({ name: 'hosting-renamed' }) });
-        dialogButton('Save').click();
-        await flushPromises();
-        expect(api.updateSendingIp).toHaveBeenCalledWith({ path: { sendingIpId: HOSTING_ID }, body: { name: 'hosting-renamed' } });
-        // Changing the bounce domain to one the HELO name is not under is still refused.
-        api.updateSendingIp.mockClear();
-        await row('hosting').find('[data-testid="edit-ip"]').trigger('click');
-        await flushPromises();
-        await type('Bounce domain', 'elsewhere.example.net');
-        dialogButton('Save').click();
-        await flushPromises();
-        expect(api.updateSendingIp).not.toHaveBeenCalled();
-    });
-
-    it('keeps the form open and explains a duplicate', async () => {
-        await mountCard();
-        await wrapper!.find('[data-testid="add-ip"]').trigger('click');
-        await flushPromises();
-        await type('Name', 'hosting');
-        await type('IP address', '45.0.0.10');
-        await type('HELO name', 'smtp.hosting.example.org');
-        await type('Bounce domain', 'hosting.example.org');
-        api.createSendingIp.mockRejectedValue(httpError(409));
-        dialogButton('Add IP').click();
-        await flushPromises();
-        expect(document.querySelector('[role="dialog"]')!.textContent).toContain('already has that name or address');
-    });
-
-    it('edits only the changed fields and never offers to change the address', async () => {
-        await mountCard();
-        await row('hosting').find('[data-testid="edit-ip"]').trigger('click');
-        await flushPromises();
-        expect(document.querySelector('[data-testid="fixed-address"]')!.textContent).toContain('45.0.0.10');
-        expect(document.querySelector('[role="dialog"]')!.textContent).toContain('An address can\'t be changed');
-        expect(dialogButton('Save').disabled).toBe(true);
-        await type('HELO name', 'smtp2.hosting.example.org');
-        api.updateSendingIp.mockResolvedValue({ data: hosting() });
-        dialogButton('Save').click();
-        await flushPromises();
-        expect(api.updateSendingIp).toHaveBeenCalledWith({ path: { sendingIpId: HOSTING_ID }, body: { helo_name: 'smtp2.hosting.example.org' } });
-    });
-
-    it('names an address the worker reported without letting its address change', async () => {
-        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [], unnamed_edge_addresses: ['45.0.0.10'] }) });
-        await mountCard();
-        await wrapper!.find('[data-testid="name-ip"]').trigger('click');
-        await flushPromises();
-        expect(document.querySelector('[data-testid="fixed-address"]')!.textContent).toContain('45.0.0.10');
-        await type('Name', 'hosting');
-        await type('HELO name', 'smtp.hosting.example.org');
-        await type('Bounce domain', 'hosting.example.org');
-        api.createSendingIp.mockResolvedValue({ data: hosting() });
-        dialogButton('Add IP').click();
-        await flushPromises();
-        expect(api.createSendingIp.mock.calls[0]![0].body.address).toBe('45.0.0.10');
-    });
-
-    it('runs the DNS check and explains the results', async () => {
-        await mountCard();
-        api.checkSendingIpDns.mockResolvedValue({ data: { reverse: 'ok', reverse_names: ['smtp.hosting.example.org'], forward: 'ok', helo_spf: 'missing', bounce_spf: 'mismatch' } });
-        await row('hosting').find('[data-testid="check-dns"]').trigger('click');
+        api.checkSendingIpDns.mockResolvedValue({ data: { reverse: 'ok', reverse_names: ['smtp.hosting.example.org'], forward: 'ok', mx: 'missing', spf: 'mismatch' } });
+        await row('45.0.0.10').find('[data-testid="check-dns"]').trigger('click');
         await flushPromises();
         expect(api.checkSendingIpDns).toHaveBeenCalledWith({ path: { sendingIpId: HOSTING_ID } });
-        expect(row('hosting').find('[data-testid="dns-summary"]').text()).toBe('Needs attention');
-        const results = wrapper!.find('tr[data-detail="hosting"] [data-testid="dns-results"]').text();
-        expect(results).toContain('The HELO name has an SPF record');
+        expect(row('45.0.0.10').find('[data-testid="dns-summary"]').text()).toBe('Needs attention');
+        const detail = wrapper!.find('tr[data-detail="45.0.0.10"]');
+        const results = detail.find('[data-testid="dns-results"]').text();
+        expect(results).toContain('Mail for the HELO name (bounces) reaches this IP');
+        expect(results).toContain('The HELO name\'s SPF record lists this IP');
         expect(results).toContain('Not found');
         expect(results).toContain('Only ip4: and a entries are read');
+        const hints = detail.find('[data-testid="dns-hints"]').text();
+        expect(hints).toContain('MX record for smtp.hosting.example.org');
+        expect(hints).toContain('v=spf1 ip4:45.0.0.10');
+        expect(hints).not.toContain('reverse DNS');
     });
 
-    it('reports a failed DNS check without hiding the pool', async () => {
+    it('shows no fix-it hints when every check passes', async () => {
+        await mountCard();
+        api.checkSendingIpDns.mockResolvedValue({ data: { reverse: 'ok', reverse_names: ['smtp.hosting.example.org'], forward: 'ok', mx: 'ok', spf: 'ok' } });
+        await row('45.0.0.10').find('[data-testid="check-dns"]').trigger('click');
+        await flushPromises();
+        expect(row('45.0.0.10').find('[data-testid="dns-summary"]').text()).toBe('All good');
+        expect(wrapper!.find('[data-testid="dns-hints"]').exists()).toBe(false);
+    });
+
+    it('reports a failed DNS check without hiding the list', async () => {
         await mountCard();
         api.checkSendingIpDns.mockRejectedValue(httpError(503));
-        await row('hosting').find('[data-testid="check-dns"]').trigger('click');
+        await row('45.0.0.10').find('[data-testid="check-dns"]').trigger('click');
         await flushPromises();
         expect(wrapper!.text()).toContain('The DNS check is unavailable right now');
-        expect(row('hosting').exists()).toBe(true);
+        expect(row('45.0.0.10').exists()).toBe(true);
     });
 
-    it('shows an error instead of an empty pool when loading fails', async () => {
+    it('shows an error instead of an empty list when loading fails', async () => {
         api.listSendingIps.mockRejectedValue(httpError(503));
         await mountCard();
         expect(wrapper!.text()).toContain('Sending IPs are temporarily unavailable');
         expect(wrapper!.find('[data-testid="sending-ips"]').exists()).toBe(false);
         expect(wrapper!.find('[data-testid="empty"]').exists()).toBe(false);
-        expect(wrapper!.find('[data-testid="add-ip"]').attributes('disabled')).toBeDefined();
     });
 });
 
 describe('sending IP panel', () => {
-    async function mountPanel(current: Record<string, unknown> = { sending_ip_id: null, name: null }) {
+    async function mountPanel(current: Record<string, unknown> = { sending_ip_id: null, address: null, helo_name: null }) {
         api.getAppSendingIp.mockResolvedValue({ data: current });
         const mounted = await mountAppRoute(`/apps/${APP_ID}`, { 'app-keys': Panel });
         wrapper = mounted.wrapper;
@@ -419,36 +236,33 @@ describe('sending IP panel', () => {
         api.listApps.mockResolvedValue({ data: { apps: [app] } });
     });
 
-    it('shows the main IP and lets the administrator change it', async () => {
+    it('shows the main IP and lets the person change it', async () => {
         await mountPanel();
         expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain('Main IP');
         const select = wrapper!.find('[data-testid="sending-ip-select"]');
-        // The main IP's own record is the default choice, not a second entry.
-        expect(select.findAll('option').map(o => o.text())).toEqual(['Main IP (default)', 'hosting']);
+        // The main IP's own row is the default choice, not a second entry.
+        expect(select.findAll('option').map(o => o.text())).toEqual(['Main IP (default)', HOSTING_LABEL]);
         expect(wrapper!.find('[data-testid="save-sending-ip"]').attributes('disabled')).toBeDefined();
         await select.setValue(HOSTING_ID);
-        api.setAppSendingIp.mockResolvedValue({ data: { sending_ip_id: HOSTING_ID, name: 'hosting' } });
+        api.setAppSendingIp.mockResolvedValue({ data: { sending_ip_id: HOSTING_ID, address: '45.0.0.10', helo_name: 'smtp.hosting.example.org' } });
         await wrapper!.find('[data-testid="save-sending-ip"]').trigger('click');
         await flushPromises();
         expect(api.setAppSendingIp).toHaveBeenCalledWith({ path: { appId: APP_ID }, body: { sending_ip_id: HOSTING_ID } });
-        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain('hosting');
+        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain('smtp.hosting.example.org');
         expect(wrapper!.text()).toContain('starting with its next delivery');
     });
 
-    it('shows mail waiting for an unassigned app when the main IP\'s record is not fully on the sending worker', async () => {
-        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip({ bounce_on_edge: false }), hosting()] }) });
+    it('names the main IP an app with no choice sends from', async () => {
         await mountPanel();
-        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain('Main IP');
-        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain('smtp.mx.example.net');
-        expect(wrapper!.find('[data-testid="worker-state"]').text()).toBe('Mail is waiting');
-        expect(wrapper!.find('[data-testid="worker-note"]').text()).toContain('bounce domain');
+        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain(`Main IP: ${MAIN_LABEL}`);
+        expect(wrapper!.find('[data-testid="worker-state"]').text()).toBe('Available');
     });
 
     it('sends null to go back to the main IP', async () => {
-        await mountPanel({ sending_ip_id: HOSTING_ID, name: 'hosting' });
+        await mountPanel({ sending_ip_id: HOSTING_ID, address: '45.0.0.10', helo_name: 'smtp.hosting.example.org' });
         expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain('hosting');
         await wrapper!.find('[data-testid="sending-ip-select"]').setValue('');
-        api.setAppSendingIp.mockResolvedValue({ data: { sending_ip_id: null, name: null } });
+        api.setAppSendingIp.mockResolvedValue({ data: { sending_ip_id: null, address: null, helo_name: null } });
         await wrapper!.find('[data-testid="save-sending-ip"]').trigger('click');
         await flushPromises();
         expect(api.setAppSendingIp).toHaveBeenCalledWith({ path: { appId: APP_ID }, body: { sending_ip_id: null } });
@@ -456,18 +270,40 @@ describe('sending IP panel', () => {
 
     it('warns that mail is waiting when the IP is not on the sending worker', async () => {
         api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip(), hosting({ on_edge: false })] }) });
-        await mountPanel({ sending_ip_id: HOSTING_ID, name: 'hosting' });
+        await mountPanel({ sending_ip_id: HOSTING_ID, address: '45.0.0.10', helo_name: 'smtp.hosting.example.org' });
         expect(wrapper!.find('[data-testid="worker-state"]').text()).toBe('Mail is waiting');
-        expect(wrapper!.find('[data-testid="worker-note"]').text()).toContain('never sent from another address');
+        expect(wrapper!.find('[data-testid="worker-note"]').text()).toContain('never sent from a different address');
     });
 
-    it('says so when no other IPs are named, and when the list cannot load', async () => {
+    it('disables an IP the sending worker does not have, unless it is the one in use', async () => {
+        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip(), hosting({ on_edge: false })] }) });
+        await mountPanel();
+        const option = wrapper!.find('[data-testid="sending-ip-select"] option:nth-child(2)');
+        expect(option.text()).toBe(`${HOSTING_LABEL} (not on the sending worker)`);
+        expect(option.attributes('disabled')).toBeDefined();
+        wrapper!.unmount();
+        await mountPanel({ sending_ip_id: HOSTING_ID, address: '45.0.0.10', helo_name: 'smtp.hosting.example.org' });
+        expect(wrapper!.find('[data-testid="sending-ip-select"] option:nth-child(2)').attributes('disabled')).toBeUndefined();
+    });
+
+    it('explains a refusal when the sending worker does not have the IP', async () => {
+        await mountPanel();
+        await wrapper!.find('[data-testid="sending-ip-select"]').setValue(HOSTING_ID);
+        api.setAppSendingIp.mockRejectedValue(httpError(409));
+        await wrapper!.find('[data-testid="save-sending-ip"]').trigger('click');
+        await flushPromises();
+        expect(wrapper!.text()).toContain('doesn\'t have that IP right now');
+        expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain('Main IP');
+    });
+
+    it('says so when there are no other IPs, and when the list cannot load', async () => {
         api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip()] }) });
         await mountPanel();
         expect(wrapper!.find('[data-testid="no-ips"]').text()).toContain('uses the main IP');
+        expect(wrapper!.find('[data-testid="no-ips"]').text()).toContain('ask your Thinpost administrator');
         wrapper!.unmount();
         api.listSendingIps.mockRejectedValue(httpError(503));
-        await mountPanel({ sending_ip_id: HOSTING_ID, name: 'hosting' });
+        await mountPanel({ sending_ip_id: HOSTING_ID, address: '45.0.0.10', helo_name: 'smtp.hosting.example.org' });
         expect(wrapper!.find('[data-testid="current-ip"]').text()).toContain('hosting');
         expect(wrapper!.find('[data-testid="pool-unavailable"]').exists()).toBe(true);
         expect(wrapper!.find('[data-testid="sending-ip-select"]').exists()).toBe(false);
@@ -492,7 +328,7 @@ describe('sending IP panel', () => {
     });
 
     it('appears on the app screen', async () => {
-        api.getAppSendingIp.mockResolvedValue({ data: { sending_ip_id: null, name: null } });
+        api.getAppSendingIp.mockResolvedValue({ data: { sending_ip_id: null, address: null, helo_name: null } });
         api.listAppKeys.mockResolvedValue({ data: { keys: [] } });
         const mounted = await mountAppRoute(`/apps/${APP_ID}`, { 'app-keys': AppKeys });
         wrapper = mounted.wrapper;
@@ -522,7 +358,7 @@ describe('apps list and create form', () => {
     it('has a Sending IP column that says Main IP, the name, or Unknown', async () => {
         await mountApps();
         const cells = wrapper!.findAll('[data-testid="sending-ip-cell"]').map(c => c.text());
-        expect(cells).toEqual(['Main IP', 'hosting', 'Unknown']);
+        expect(cells).toEqual(['Main IP', HOSTING_LABEL, 'Unknown']);
     });
 
     it('says Unknown for a pinned app when the IP list cannot load, without blocking the list', async () => {
@@ -533,7 +369,7 @@ describe('apps list and create form', () => {
         expect(wrapper!.findAll('tbody tr')).toHaveLength(3);
     });
 
-    it('hides the IP picker while no IPs are named, and when the list cannot load', async () => {
+    it('hides the IP picker while there is no other IP, and when the list cannot load', async () => {
         api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip()] }) });
         await mountApps();
         await button('Create app').trigger('click');
@@ -548,12 +384,12 @@ describe('apps list and create form', () => {
         expect(api.createApp).toHaveBeenCalledWith({ body: { name: 'New' } });
     });
 
-    it('offers the named IPs, with the main IP as the default, and sends the choice', async () => {
+    it('offers the IPs the sending worker has, with the main IP as the default, and sends the choice', async () => {
         await mountApps();
         await button('Create app').trigger('click');
         await flushPromises();
         const picker = document.querySelector('[data-testid="sending-ip-picker"]') as HTMLSelectElement;
-        expect([...picker.options].map(o => o.textContent)).toEqual(['Main IP (default)', 'hosting']);
+        expect([...picker.options].map(o => o.textContent)).toEqual(['Main IP (default)', HOSTING_LABEL]);
         const input = document.querySelector('input[type="text"]') as HTMLInputElement;
         input.value = 'New';
         input.dispatchEvent(new Event('input'));
@@ -563,6 +399,30 @@ describe('apps list and create form', () => {
         dialogButton('Create app').click();
         await flushPromises();
         expect(api.createApp).toHaveBeenCalledWith({ body: { name: 'New', sending_ip_id: HOSTING_ID } });
+    });
+
+    it('leaves out an IP the sending worker no longer has', async () => {
+        api.listSendingIps.mockResolvedValue({ data: pool({ ips: [ip(), hosting({ on_edge: false })] }) });
+        await mountApps();
+        await button('Create app').trigger('click');
+        await flushPromises();
+        expect(document.querySelector('[data-testid="sending-ip-picker"]')).toBeNull();
+    });
+
+    it('explains when the chosen IP is refused because the sending worker does not have it', async () => {
+        await mountApps();
+        await button('Create app').trigger('click');
+        await flushPromises();
+        const picker = document.querySelector('[data-testid="sending-ip-picker"]') as HTMLSelectElement;
+        const input = document.querySelector('input[type="text"]') as HTMLInputElement;
+        input.value = 'New';
+        input.dispatchEvent(new Event('input'));
+        picker.value = HOSTING_ID;
+        picker.dispatchEvent(new Event('change'));
+        api.createApp.mockRejectedValue(httpError(409));
+        dialogButton('Create app').click();
+        await flushPromises();
+        expect(document.querySelector('[role="dialog"]')!.textContent).toContain('doesn\'t have that IP right now');
     });
 
     function button(label: string) {

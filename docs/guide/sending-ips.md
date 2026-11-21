@@ -1,11 +1,11 @@
 ---
 title: Sending IPs
-description: Name outbound addresses, assign apps to them, set up PTR, HELO and SPF, and roll a new address out safely.
+description: See the edge's outbound addresses, choose which one each app sends from, set up PTR, HELO, MX and SPF, and roll a new address out safely.
 ---
 
 # Sending IPs
 
-The edge worker can send from several public addresses so that different apps build separate reputations. A noisy or low-quality app then cannot damage the standing of another. Each address is a **sending IP** in Thinpost.
+The edge worker can send from several public addresses so that different apps build separate reputations. A noisy or low-quality app then cannot damage the standing of another. Each address is a **sending IP** in Thinpost. The edge's configuration defines the addresses and their names. The console lists them, and the only thing you choose there is which IP each app sends from.
 
 ## What a sending IP is
 
@@ -14,12 +14,22 @@ Three places each own one part of a sending IP:
 | Owner | Decides |
 | --- | --- |
 | **Deployment (Helm values)** | Which addresses exist on the edge: the primary `sourceAddress` and any `additionalSources`. Each entry needs a `hostname` (the name it greets with, its PTR and HELO) and a certificate Secret for that name. |
-| **Database (console)** | What each address is called (a lowercase slug used in logs instead of the address), which apps are assigned to it. |
+| **Database (console)** | A read-only copy of what the edge last reported: each address and its HELO name, so the console can list them. Rows are created from the edge's report, never by hand. The only thing the console stores is which app uses which IP. |
 | **Edge (runtime)** | What it can actually bind. At session start it reports its addresses and the name each one greets with. Control sends every delivery with that name as the HELO name and the return-path domain. An edge that reports no names is sent no mail. A delivery for an address the edge did not report stays queued and is never sent from another address. |
 
-An app with no assignment uses the **primary** address. The primary needs no database row, but may have one that only gives it a name.
+There is nothing to name, edit or delete in the console. A new address appears in the list when the edge reports it, a changed HELO name is updated from the next report, and an address the edge stops reporting disappears unless an app still uses it. To add or change an IP, change the edge's configuration (see below) or ask your Thinpost administrator.
 
-The HELO name is also the **SMTP submission host**: the server name the console's SMTP tab gives to the software that sends an app's mail over SMTP, because that name already has a valid certificate. An app uses the HELO name of its assigned sending IP, or of the row that names the primary address. If the primary has no row, the SMTP tab asks for one, so name it here. See [Operator console](/guide/console#smtp). Clients connect to this name on ports 465 and 587 of the sending IP, which reuse the same certificate as port 25.
+An app with no choice uses the **main IP**, the first address the edge reports. Every reported address has a row, including the main IP, so every delivery is sent from an explicitly named address. Changing the order of the edge's addresses changes the main IP, and so where every app with no choice sends from.
+
+The HELO name is also the **SMTP submission host**: the server name the console's SMTP tab gives to the software that sends an app's mail over SMTP, because that name already has a valid certificate. An app uses the HELO name of its chosen sending IP, or of the main IP. Until the edge has connected, or while an app's IP is not on the edge, the SMTP tab says there is no server name yet. See [Operator console](/guide/console#smtp). Clients connect to this name on ports 465 and 587 of the sending IP, which reuse the same certificate as port 25.
+
+### Choosing an IP for an app
+
+You can choose an app's IP when you create the app, or later on the app's **Keys** page. Only an IP the edge is reporting right now can be chosen (otherwise the change is refused), and going back to the main IP is always allowed. The change applies to mail sent from then on, including messages already waiting.
+
+### When an IP disappears from the edge
+
+If the edge's configuration drops an address that apps still use, the row stays, marked as not on the sending worker, and those apps' mail waits. It is never sent from another address. The console shows how many apps are waiting. Move them to another IP and the mail flows again. Move apps off an IP before you remove it from the edge.
 
 ::: warning Documentation addresses are refused
 Thinpost rejects documentation, private, loopback, link-local and other special-purpose ranges as sending sources, so the examples below use `<your public IPv4>` rather than a sample address. The address must be a routable public IPv4 address that you control.
@@ -43,23 +53,25 @@ None of these records are published by Thinpost. Set them at the address owner (
 - The **HELO name** is the PTR of the address. The edge greets with it and control sends it as the outbound HELO, so the banner, the HELO and the PTR agree.
 - `v=spf1 a -all` uses the name's own A record, so it follows the address. Do not use `ptr`, which RFC 7208 deprecates.
 - The **MX** record makes bounces and inbound mail for the address arrive at the address itself.
-- The **bounce domain** is the HELO name. Every message leaves with a return path like `b+<token>@<HELO name>`, using the name the edge reported for the address the message is sent from. The edge accepts bounces for every one of its own names automatically, so the MX record above is all bounces need. A bounce domain saved in the console no longer changes what is sent.
-- If you rename an address's HELO name, messages sent under the old name can still bounce for days. Keep the old name in `additionalBounceDomains` (below) so the edge still accepts those bounces.
+- The **bounce domain** is the HELO name. Every message leaves with a return path like `b+<token>@<HELO name>`, using the name the edge reported for the address the message is sent from. The edge accepts bounces for every one of its own names automatically, so the MX record above is all bounces need. There is no separate bounce domain to set.
+- If you rename an address's HELO name, messages sent under the old name can still bounce for days, and the edge refuses bounces addressed to a name it no longer has. Keep the old name in `additionalBounceDomains` (below) so the edge still accepts those bounces.
 
 A customer's own SPF record does not need to mention Thinpost.
 
 ### The console's DNS check
 
-The console has a **Check DNS** action for each sending IP. It reads public DNS from the control process, stores nothing and is advisory. It reports whether:
+The console has a **Check DNS** action for each sending IP. It reads public DNS from the control process, stores nothing and is advisory. Every check is about the HELO name, which is also the bounce domain. It reports whether:
 
-- the PTR names include the HELO name,
-- the HELO name resolves back to the address,
-- the HELO name has an SPF record, and
-- the bounce domain's SPF record covers the address through an `ip4:` or `a` entry.
+- **reverse:** the PTR names include the HELO name,
+- **forward:** the HELO name resolves back to the address,
+- **mx:** the HELO name's MX records lead to the address, so bounces reach it (a name with no MX record counts as its own mail server), and
+- **spf:** the HELO name's SPF record covers the address through an `ip4:` or `a` entry.
 
-It does not follow `include:` or `redirect=`, so an address listed only through an include shows as not matching.
+When a check fails, the console lists what to ask whoever manages your DNS to change, for that IP. It does not follow `include:` or `redirect=`, so an address listed only through an include shows as not matching.
 
 ## Add a sending IP
+
+An address is added in the edge's configuration, not in the console.
 
 Do these in order. Each step is safe on its own, and none changes mail flow until the last.
 
@@ -69,7 +81,7 @@ Do these in order. Each step is safe on its own, and none changes mail flow unti
 4. **Issue a certificate** for the address's HELO name, in its own Secret in the edge namespace. Create it **before** you change the Helm values: a missing or wrong certificate stops the edge at its next start, and with it all mail.
 5. **Publish DNS** as above and set the PTR.
 6. **Add the address** to `additionalSources` with its `hostname` and `certificateSecret`, then upgrade the edge release. The edge restarts, so sending pauses briefly and bounce senders retry. See [Helm: Edge](/deploy/helm-edge).
-7. **In the console,** choose **Add IP** on the Operations screen, run **Check DNS**, and then assign one low-volume app.
+7. **In the console,** open **Operations → Sending IPs**. The new address appears once the restarted edge connects. Run **Check DNS**, and then choose it for one low-volume app.
 8. **Verify from outside.** Check the greeting, the STARTTLS certificate and an inbound test message on the new address.
 9. **Warm it up.** Watch the first app's deliveries, then move more apps one at a time.
 
@@ -79,8 +91,8 @@ A retired bounce domain stays in `additionalBounceDomains` so the edge keeps acc
 
 This order keeps mail flowing on a running install:
 
-1. In the console, name the primary (its HELO name and bounce domain) and run the DNS check.
-2. Add the addresses to `additionalSources`, upgrade the edge, then add the IP in the console and assign apps.
+1. In the console, run the DNS check on the main IP.
+2. Add the addresses to `additionalSources` and upgrade the edge. When it reconnects, the new IPs appear in the console, and you can choose them for apps.
 
 Never roll the control plane back with Helm; roll forward with a fix. See [Upgrades](/deploy/upgrades).
 

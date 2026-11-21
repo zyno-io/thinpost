@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"net/netip"
 	"time"
 
 	"github.com/zyno-io/thinpost/internal/admin"
@@ -102,19 +101,24 @@ func (r *Repository) SetSMTPSettings(ctx context.Context, actor, appID string, p
 	return policy, nil
 }
 
-// SMTPConnection resolves the SMTP host from operator-set sending-IP rows: the
-// app's assigned row, else the row whose address is the configured primary
-// source. Nothing the Edge reports chooses the host; its report supplies only
-// the observed submission ports. An unset primary resolves no host and does not
-// set PrimaryUnnamed.
-func (r *Repository) SMTPConnection(ctx context.Context, appID string, primary netip.Addr) (admin.SMTPConnection, error) {
-	out := admin.SMTPConnection{Ports: admin.SMTPPorts(), ObservedPorts: []int{}}
+// SMTPConnection resolves the SMTP host: the HELO name of the app's chosen
+// sending IP, else of the main IP (the first address) of the Edge's last
+// report. The names are the ones the Edge reported, mirrored into sending_ips.
+// HostStatus is "not_reported" while no report names the IP, and
+// "ip_unavailable" when the app's IP is not among the addresses the Edge now
+// reports.
+func (r *Repository) SMTPConnection(ctx context.Context, appID string) (admin.SMTPConnection, error) {
+	out := admin.SMTPConnection{Ports: admin.SMTPPorts(), ObservedPorts: []int{}, HostStatus: admin.SMTPHostNotReported}
 	if !opaqueID(appID) {
 		return out, admin.ErrInvalidInput
 	}
-	var assigned bool
-	var helo sql.NullString
-	err := r.DB.QueryRowContext(ctx, `SELECT a.sending_ip_id IS NOT NULL,s.helo_name FROM apps a LEFT JOIN sending_ips s ON s.id=a.sending_ip_id WHERE a.id=$1`, appID).Scan(&assigned, &helo)
+	var assigned, haveReport, onEdge bool
+	var helo, mainHelo sql.NullString
+	err := r.DB.QueryRowContext(ctx, `SELECT a.sending_ip_id IS NOT NULL,s.helo_name,r.addresses IS NOT NULL,COALESCE(s.address=ANY(r.addresses),false),
+		(SELECT m.helo_name FROM sending_ips m WHERE m.address=r.addresses[1])
+		FROM apps a LEFT JOIN sending_ips s ON s.id=a.sending_ip_id
+		LEFT JOIN LATERAL (SELECT addresses FROM edge_source_reports ORDER BY reported_at DESC LIMIT 1) r ON true
+		WHERE a.id=$1`, appID).Scan(&assigned, &helo, &haveReport, &onEdge, &mainHelo)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, admin.ErrNotFound
 	}
@@ -122,20 +126,14 @@ func (r *Repository) SMTPConnection(ctx context.Context, appID string, primary n
 		return out, err
 	}
 	switch {
-	case assigned && helo.Valid:
+	case assigned && helo.Valid && haveReport && onEdge:
 		source := admin.SMTPHostAppSendingIP
-		out.Host, out.HostSource = &helo.String, &source
-	case !assigned && primary.IsValid():
-		err = r.DB.QueryRowContext(ctx, `SELECT helo_name FROM sending_ips WHERE address=$1::inet`, primary.Unmap().String()).Scan(&helo)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return out, err
-		}
-		if err == nil {
-			source := admin.SMTPHostPrimary
-			out.Host, out.HostSource = &helo.String, &source
-		} else {
-			out.PrimaryUnnamed = true
-		}
+		out.Host, out.HostSource, out.HostStatus = &helo.String, &source, admin.SMTPHostOK
+	case assigned && haveReport:
+		out.HostStatus = admin.SMTPHostIPUnavailable
+	case !assigned && mainHelo.Valid:
+		source := admin.SMTPHostPrimary
+		out.Host, out.HostSource, out.HostStatus = &mainHelo.String, &source, admin.SMTPHostOK
 	}
 	var reported time.Time
 	var ports []byte

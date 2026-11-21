@@ -198,7 +198,6 @@ func run() error {
 		}
 		bridgeConfig.Recipients = recipients
 		operator.BounceDomain = bridgeConfig.BounceDomain
-		operator.PrimarySource = bridgeConfig.Source
 	}
 	// Acceptance and SMTP intake are built before the bridge, which hands the
 	// intake to its control session (the submission/1 capability). An edge that

@@ -1,0 +1,30 @@
+-- Schema 45: sending IPs come from the Edge's report.
+--
+-- The Edge's configuration is now the single source of each sending IP's
+-- identity: its address, the HELO name it greets with and the bounce domain,
+-- which is that same name. Control mirrors the report into sending_ips (one
+-- row per reported address, plus pinned rows the Edge no longer reports) so
+-- the console can list the addresses and pin apps to them by a stable id.
+-- Rows are written only from the report, never by an operator, so the
+-- per-IP label (name) and the separately stored bounce domain are gone, and
+-- the report copy no longer keeps a second list of names (a source's name is
+-- its HELO name, stored on its row).
+--
+-- Deploy review (lock and rollout): the pre hook closes the gate before this
+-- runs. Both ALTER TABLE statements only drop columns, which is a catalog-only
+-- change (no rewrite and no scan); dropping name also drops its unique index
+-- and its CHECK, and dropping bounce_domains also drops
+-- the two-column CHECK that tied it to addresses. Both tables are tiny. Every
+-- existing row keeps its id, so every apps.sending_ip_id pin survives. The
+-- first Ready after the upgrade refreshes each row's helo_name from the report
+-- and prunes unpinned rows the Edge does not report. Schema-44 pods fail
+-- closed on the new schema and are fenced by the closed gate until the reopen
+-- waits for every pod to run the new image. Runtime grants are unchanged:
+-- sending_ips keeps SELECT, INSERT, UPDATE and DELETE (the report writer
+-- inserts, renames and prunes rows) and edge_source_reports keeps SELECT,
+-- INSERT and UPDATE. The collector and retirement roles get nothing. No
+-- routine or extension is installed.
+-- Recovery: the recovery chain stops at 28, so this is applied by the normal
+-- deploy after "recovery open". Roll forward only.
+ALTER TABLE sending_ips DROP COLUMN name, DROP COLUMN bounce_domain;
+ALTER TABLE edge_source_reports DROP COLUMN bounce_domains;

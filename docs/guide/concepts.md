@@ -39,7 +39,7 @@ A **receiving domain** is a domain whose mail Thinpost accepts for an app. It is
 
 ## Sending IPs
 
-A **sending IP** is a named public address the edge worker can send from. Each has a HELO name, a bounce domain and a set of assigned apps. An app with no assignment uses the edge's primary address. See [Sending IPs](/guide/sending-ips).
+A **sending IP** is a public address the edge worker can send from. It is identified by its address and its HELO name, which is also its bounce domain. The edge's configuration defines them and the console lists them, read-only. An app with no choice uses the edge's main IP (its first address). See [Sending IPs](/guide/sending-ips).
 
 ## Messages and deliveries
 

@@ -56,9 +56,10 @@ in `edge.env`), with the same certificate as port 25 (`smtp.quickstart.example`)
 Those ports exist only on the internal `edgepub` network, so use the `tools-smtp`
 helper, which sits on that network and has the quickstart CA:
 
-1. In the console, open the app's **SMTP** tab (name the primary sending IP under
-   **Operations → Sending IPs** first if it asks: address `11.42.51.10`, HELO name
-   and bounce domain `smtp.quickstart.example`) and create a credential.
+1. In the console, open the app's **SMTP** tab and create a credential. The server
+   name it shows is the Edge's HELO name, `smtp.quickstart.example`; the Edge
+   reports it (with its address `11.42.51.10`) when it connects, and
+   **Operations → Sending IPs** lists it read-only. Nothing needs naming first.
 2. Send a message (the recipient must be `demo@quickstart.example`):
 
 ```sh
