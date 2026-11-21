@@ -1136,10 +1136,10 @@ func (x *LeaseAccepted) GetPayloadSha256() []byte {
 	return nil
 }
 
-// source_addresses and bounce_domains are additive (schema 40). A non-empty
-// source_addresses means the worker supports a per-delivery source address; the
-// primary (its listener address) is first. An absent list means a legacy worker
-// that sends only from its primary address and its own hostname.
+// source_addresses is additive (schema 40). A non-empty source_addresses means
+// the worker supports a per-delivery source address; the primary (its listener
+// address) is first. A worker that reports no addresses, or no source_hostnames
+// for them, is sent no deliveries.
 type Ready struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	WorkerId        string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
@@ -1148,7 +1148,10 @@ type Ready struct {
 	ProtocolVersion uint32                 `protobuf:"varint,4,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	JournalId       string                 `protobuf:"bytes,5,opt,name=journal_id,json=journalId,proto3" json:"journal_id,omitempty"`
 	SourceAddresses []string               `protobuf:"bytes,6,rep,name=source_addresses,json=sourceAddresses,proto3" json:"source_addresses,omitempty"`
-	BounceDomains   []string               `protobuf:"bytes,7,rep,name=bounce_domains,json=bounceDomains,proto3" json:"bounce_domains,omitempty"`
+	// Deprecated: no longer sent by the Edge, and ignored by the control plane (a
+	// source's bounce domain is its source_hostnames entry). Field 7 stays so
+	// an older control plane still parses it; the number must not be reused.
+	BounceDomains []string `protobuf:"bytes,7,rep,name=bounce_domains,json=bounceDomains,proto3" json:"bounce_domains,omitempty"`
 	// Additive (inbound mail): optional features this worker supports, such as
 	// "inbound/1". An older control plane ignores the field and sends no inbound
 	// frames; a worker without it never receives them.

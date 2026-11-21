@@ -63,10 +63,10 @@ message Open { string worker_id = 1; string controller_id = 2; uint64 epoch = 3;
 // the authenticated controller certificate and its conservative expiry bound.
 message LeaseRenewal { bytes lease_payload = 1; bytes lease_signature = 2; }
 message LeaseAccepted { uint64 epoch = 1; bytes payload_sha256 = 2; }
-// source_addresses and bounce_domains are additive (schema 40). A non-empty
-// source_addresses means the worker supports a per-delivery source address; the
-// primary (its listener address) is first. An absent list means a legacy worker
-// that sends only from its primary address and its own hostname.
+// source_addresses is additive (schema 40). A non-empty source_addresses means
+// the worker supports a per-delivery source address; the primary (its listener
+// address) is first. A worker that reports no addresses, or no source_hostnames
+// for them, is sent no deliveries.
 message Ready {
   string worker_id = 1;
   uint64 epoch = 2;
@@ -74,6 +74,9 @@ message Ready {
   uint32 protocol_version = 4;
   string journal_id = 5;
   repeated string source_addresses = 6;
+  // Deprecated: no longer sent by the Edge, and ignored by the control plane (a
+  // source's bounce domain is its source_hostnames entry). Field 7 stays so
+  // an older control plane still parses it; the number must not be reused.
   repeated string bounce_domains = 7;
   // Additive (inbound mail): optional features this worker supports, such as
   // "inbound/1". An older control plane ignores the field and sends no inbound

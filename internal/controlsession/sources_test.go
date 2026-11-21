@@ -101,7 +101,6 @@ func TestReadyWithoutSourcesYieldsNoCapabilities(t *testing.T) {
 func TestReadyWithSourcesButNoNamesYieldsNoCapabilities(t *testing.T) {
 	caps := pullOnce(t, func(r *controlv1.Ready) {
 		r.SourceAddresses = []string{"45.0.1.22", "45.0.0.10"}
-		r.BounceDomains = []string{"bounce.example.net"}
 	}, nil)
 	if len(caps.Sources) != 0 {
 		t.Fatalf("capabilities from a Ready with no names: %+v", caps)
@@ -113,8 +112,6 @@ func TestReadyWithSourcesAndNames(t *testing.T) {
 	caps := pullOnce(t, func(r *controlv1.Ready) {
 		r.SourceAddresses = []string{"45.0.1.22", "45.0.0.10"}
 		r.SourceHostnames = []string{"mx.example.net", "smtp.hosting.example.org"}
-		// Only checked for form; the names are the bounce domains.
-		r.BounceDomains = []string{"unrelated.example.net"}
 	}, reports)
 	if len(caps.Sources) != 2 || caps.Sources[0].Address.String() != "45.0.1.22" || caps.Sources[0].Hostname != "mx.example.net" || caps.Sources[1].Address.String() != "45.0.0.10" || caps.Sources[1].Hostname != "smtp.hosting.example.org" {
 		t.Fatalf("capabilities %+v", caps)
@@ -219,27 +216,16 @@ func TestInvalidReadyEndsTheSession(t *testing.T) {
 		many = append(many, netip.AddrFrom4([4]byte{45, 0, 0, byte(i + 1)}).String())
 	}
 	for name, mutate := range map[string]func(*controlv1.Ready){
-		"duplicate source":     func(r *controlv1.Ready) { r.SourceAddresses = []string{"45.0.0.10", "45.0.0.10"} },
-		"private source":       func(r *controlv1.Ready) { r.SourceAddresses = []string{"10.1.2.3"} },
-		"documentation source": func(r *controlv1.Ready) { r.SourceAddresses = []string{"203.0.113.9"} },
-		"IPv6 source":          func(r *controlv1.Ready) { r.SourceAddresses = []string{"2607:f8b0:4000::1"} },
-		"mapped source":        func(r *controlv1.Ready) { r.SourceAddresses = []string{"::ffff:45.0.0.10"} },
-		"padded source":        func(r *controlv1.Ready) { r.SourceAddresses = []string{" 45.0.0.10"} },
-		"not an address":       func(r *controlv1.Ready) { r.SourceAddresses = []string{"mail.example.com"} },
-		"empty source":         func(r *controlv1.Ready) { r.SourceAddresses = []string{""} },
-		"too many sources":     func(r *controlv1.Ready) { r.SourceAddresses = many },
-		"uppercase domain": func(r *controlv1.Ready) {
-			r.SourceAddresses, r.BounceDomains = []string{"45.0.0.10"}, []string{"Bounce.example"}
-		},
-		"duplicate domain": func(r *controlv1.Ready) {
-			r.SourceAddresses, r.BounceDomains = []string{"45.0.0.10"}, []string{"b.example", "b.example"}
-		},
-		"overlong domain": func(r *controlv1.Ready) { r.SourceAddresses, r.BounceDomains = []string{"45.0.0.10"}, []string{long} },
-		"too many domains": func(r *controlv1.Ready) {
-			r.SourceAddresses, r.BounceDomains = []string{"45.0.0.10"}, strings.Split(strings.Repeat("a.example,", 9)[:89], ",")
-		},
-		"domains without sources": func(r *controlv1.Ready) { r.BounceDomains = []string{"bounce.example.net"} },
-		"names without sources":   func(r *controlv1.Ready) { r.SourceHostnames = []string{"mx.example.net"} },
+		"duplicate source":      func(r *controlv1.Ready) { r.SourceAddresses = []string{"45.0.0.10", "45.0.0.10"} },
+		"private source":        func(r *controlv1.Ready) { r.SourceAddresses = []string{"10.1.2.3"} },
+		"documentation source":  func(r *controlv1.Ready) { r.SourceAddresses = []string{"203.0.113.9"} },
+		"IPv6 source":           func(r *controlv1.Ready) { r.SourceAddresses = []string{"2607:f8b0:4000::1"} },
+		"mapped source":         func(r *controlv1.Ready) { r.SourceAddresses = []string{"::ffff:45.0.0.10"} },
+		"padded source":         func(r *controlv1.Ready) { r.SourceAddresses = []string{" 45.0.0.10"} },
+		"not an address":        func(r *controlv1.Ready) { r.SourceAddresses = []string{"mail.example.com"} },
+		"empty source":          func(r *controlv1.Ready) { r.SourceAddresses = []string{""} },
+		"too many sources":      func(r *controlv1.Ready) { r.SourceAddresses = many },
+		"names without sources": func(r *controlv1.Ready) { r.SourceHostnames = []string{"mx.example.net"} },
 		"fewer names than sources": func(r *controlv1.Ready) {
 			r.SourceAddresses, r.SourceHostnames = []string{"45.0.0.10", "45.0.0.11"}, []string{"mx.example.net"}
 		},
@@ -253,9 +239,6 @@ func TestInvalidReadyEndsTheSession(t *testing.T) {
 			r.SourceAddresses, r.SourceHostnames = []string{"45.0.0.10"}, []string{"45.0.0.10"}
 		},
 		"overlong name": func(r *controlv1.Ready) { r.SourceAddresses, r.SourceHostnames = []string{"45.0.0.10"}, []string{long} },
-		"domain that is an address": func(r *controlv1.Ready) {
-			r.SourceAddresses, r.BounceDomains = []string{"45.0.0.10"}, []string{"45.0.0.10"}
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			work := &capsWork{seen: make(chan struct{}, 1)}

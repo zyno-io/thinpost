@@ -166,7 +166,7 @@ A capability list holds at most 8 entries of at most 32 characters from `a-z 0-9
 | --- | --- | --- |
 | `worker_id`, `epoch`, `session_id`, `protocol_version`, `journal_id` | | Echo `Open`. The control plane rejects any mismatch. |
 | `source_addresses` | repeated string | The addresses the Edge can send from, primary first. |
-| `bounce_domains` | repeated string | Domains the Edge accepts bounces for. Checked for form and otherwise ignored: a source's bounce domain is its `source_hostnames` entry. |
+| `bounce_domains` | repeated string | Deprecated and unused. The Edge no longer sends it and the control plane ignores it; a source's bounce domain is its `source_hostnames` entry. The field number stays reserved for older control planes that still parse it. |
 | `capabilities` | repeated string | Optional features the Edge supports (`inbound/1`, `submission/1`). |
 | `source_hostnames` | repeated string | The SMTP name each source address greets with, one per `source_addresses` entry in the same order. Required for deliveries. This name is both the HELO name and the return-path domain for the address. |
 | `submission_ports` | repeated uint32 | Public ports on which the Edge currently accepts SMTP AUTH (465 and 587). Observed availability only; never used to tell clients where to connect. Meaningful only with `submission/1`. |
@@ -175,9 +175,8 @@ The control plane validates the lists and treats a violation as an invalid readi
 
 - `source_addresses`: at most 16 entries, each unique, in canonical text form, and a public address.
 - `source_hostnames`: absent, or exactly one normalized, unique DNS name per source address, each at most 219 characters. Control sends nothing from an Edge that reports no names (see below).
-- `bounce_domains`: at most 24 entries, normalized and unique, each at most 219 characters.
 - `submission_ports`: at most 8 entries, each unique and from 1 to 65535. It is checked only when the Edge reported `submission/1` and the control plane serves it, and a violation then is an invalid readiness; otherwise the field is ignored. The Edge refuses to enable submission with an invalid list. The control plane records the ports for display only when it serves `submission/1` itself and the Edge reported the capability; otherwise it records none.
-- No sources with bounce domains or host names is malformed. No sources and no domains is an old-shape Ready.
+- Host names without sources is malformed. No sources and no host names is an old-shape Ready.
 
 An Edge whose Ready reports no sources, or sources without host names, keeps its session: replay, bounces, inbound mail and submission all work. The control plane just has nothing to address a delivery from, so it hands that Edge no deliveries and they stay queued.
 
@@ -226,10 +225,10 @@ Sent after a `Pull`. The MIME bytes follow as `DataChunk` frames.
 | `expected_size` | uint64 | Size of the MIME in bytes. Must be between 1 and 8 MiB. |
 | `sha256` | bytes | SHA-256 of the MIME, 32 bytes. |
 | `tracking_send_cutoff_unix_ms` | int64 | Zero for untracked or indefinite signed links. Otherwise a deadline in Unix milliseconds that bounds SMTP time (see [SMTP execution](#smtp-execution)). |
-| `source_address` | string | The address to send from. Empty together with `helo_name` means the Edge's primary address and its own host name. |
-| `helo_name` | string | The SMTP name to greet with. |
+| `source_address` | string | The address to send from. Required. |
+| `helo_name` | string | The SMTP name to greet with. Required. |
 
-`source_address` and `helo_name` are either both empty or both set. When set, the source must be one the Edge reported and the name a normalized DNS name; otherwise the Edge journals a retryable `REJECTED` outcome with code zero and dials nothing.
+`source_address` and `helo_name` are both required. The source must be one the Edge reported and the name must be that source's `source_hostnames` entry; an empty or mismatched field means the Edge journals a retryable `REJECTED` outcome with code zero and dials nothing.
 
 The Edge refuses a `DeliveryStart` that arrives before reconciliation, without a pull outstanding, while another delivery is assembling, outside an authorized lease, or with an `epoch` other than the session's.
 

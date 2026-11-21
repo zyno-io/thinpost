@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"math/big"
 	"net"
+	"net/netip"
 	"net/url"
 	"testing"
 	"time"
@@ -68,7 +69,7 @@ func TestPermitTimeoutOverMutualTLS(t *testing.T) {
 	s, j, _, _ := setup(t, true)
 	s.permitTimeout = 150 * time.Millisecond
 	dialer := &timeoutTestDialer{}
-	s.executor = &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example"}
+	s.executor = &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: []netip.Addr{netip.MustParseAddr("45.0.1.22")}, SourceHostnames: []string{"smtp.sender.example"}}
 	roots, clientCert, serverCert := permitTestCertificates(t)
 	serverTLS, err := controltls.Server(roots, serverCert, []string{"spiffe://thinpost.test/staging/controller/one"})
 	if err != nil {
@@ -122,7 +123,7 @@ func TestPermitTimeoutOverMutualTLS(t *testing.T) {
 	}
 	mime := []byte("synthetic message")
 	digest := sha256.Sum256(mime)
-	start := &controlv1.DeliveryStart{AttemptId: "attempt", DeliveryId: "delivery", Epoch: 1, MxName: "mx.example", DestinationIp: "8.8.8.8", EnvelopeFrom: "bounce@example.com", Recipient: "to@example.net", ExpectedSize: uint64(len(mime)), Sha256: digest[:]}
+	start := &controlv1.DeliveryStart{AttemptId: "attempt", DeliveryId: "delivery", Epoch: 1, MxName: "mx.example", DestinationIp: "8.8.8.8", EnvelopeFrom: "bounce@example.com", Recipient: "to@example.net", ExpectedSize: uint64(len(mime)), Sha256: digest[:], SourceAddress: "45.0.1.22", HeloName: "smtp.sender.example"}
 	if err = client.Send(&controlv1.ControlFrame{Body: &controlv1.ControlFrame_Delivery{Delivery: start}}); err != nil {
 		t.Fatal(err)
 	}

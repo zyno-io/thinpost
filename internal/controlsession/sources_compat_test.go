@@ -84,7 +84,7 @@ func TestOldShapeReadyDecodesWithoutCapabilities(t *testing.T) {
 	}
 	// And a new worker's Ready, decoded by an old control plane, only gains
 	// unknown fields: every field it knows is intact.
-	newWire, err := proto.Marshal(&controlv1.Ready{WorkerId: "worker", Epoch: 1, ProtocolVersion: uint32(edgeprotocol.Version), SourceAddresses: []string{"45.0.0.10"}, BounceDomains: []string{"b.example"}})
+	newWire, err := proto.Marshal(&controlv1.Ready{WorkerId: "worker", Epoch: 1, ProtocolVersion: uint32(edgeprotocol.Version), SourceAddresses: []string{"45.0.0.10"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,23 +124,5 @@ func TestOldEdgeWouldPermitNewDeliveryStartFields(t *testing.T) {
 	}
 	if sha256.Sum256(reencoded) != want {
 		t.Fatal("an old Edge computes a different digest, so this test no longer shows why control must gate")
-	}
-}
-
-// A start with empty source fields (an app on the primary address) is
-// byte-identical to the schema-39 one: control sets neither new field, so an old
-// Edge hashes what it always did.
-func TestStartWithoutSourceFieldsIsIdenticalToTheOldWireShape(t *testing.T) {
-	start := newStart("", "")
-	wire, err := proto.MarshalOptions{Deterministic: true}.Marshal(start)
-	if err != nil {
-		t.Fatal(err)
-	}
-	old := oldDeliveryStart(t)
-	if err = proto.Unmarshal(wire, old); err != nil {
-		t.Fatal(err)
-	}
-	if len(old.GetUnknown()) != 0 {
-		t.Fatal("a legacy start carries fields an old Edge does not know")
 	}
 }

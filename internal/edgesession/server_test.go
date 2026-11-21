@@ -571,7 +571,7 @@ func TestStartPermitTimeoutEndsSessionAndReplaysUnsentResult(t *testing.T) {
 	defer cancel()
 	s.permitTimeout = 100 * time.Millisecond
 	dialer := &timeoutTestDialer{}
-	s.executor = &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example"}
+	s.executor = &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: []netip.Addr{netip.MustParseAddr("45.0.1.22")}, SourceHostnames: []string{"smtp.sender.example"}}
 	stream := &channelStream{ctx: ctx, incoming: make(chan *controlv1.ControlFrame, 8), sent: make(chan *controlv1.EdgeFrame, 8)}
 	done := make(chan error, 1)
 	go func() { done <- s.Connect(stream) }()
@@ -586,7 +586,7 @@ func TestStartPermitTimeoutEndsSessionAndReplaysUnsentResult(t *testing.T) {
 	}
 	mime := []byte("signed MIME")
 	digest := sha256.Sum256(mime)
-	start := &controlv1.DeliveryStart{AttemptId: "attempt", DeliveryId: "delivery", Epoch: 1, MxName: "mx.example", DestinationIp: "8.8.8.8", EnvelopeFrom: "bounce@example.com", Recipient: "to@example.net", ExpectedSize: uint64(len(mime)), Sha256: digest[:]}
+	start := &controlv1.DeliveryStart{AttemptId: "attempt", DeliveryId: "delivery", Epoch: 1, MxName: "mx.example", DestinationIp: "8.8.8.8", EnvelopeFrom: "bounce@example.com", Recipient: "to@example.net", ExpectedSize: uint64(len(mime)), Sha256: digest[:], SourceAddress: "45.0.1.22", HeloName: "smtp.sender.example"}
 	stream.incoming <- &controlv1.ControlFrame{Body: &controlv1.ControlFrame_Delivery{Delivery: start}}
 	stream.incoming <- &controlv1.ControlFrame{Body: &controlv1.ControlFrame_MimeChunk{MimeChunk: &controlv1.DataChunk{Id: "attempt", Data: mime, Last: true}}}
 	request := (<-stream.sent).GetStartRequest()

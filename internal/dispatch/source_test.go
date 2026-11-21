@@ -42,11 +42,13 @@ func TestSourceFieldsAreSetOnlyForAddressesTheWorkerReported(t *testing.T) {
 	pinned := base
 	pinned.SourceAddress, pinned.HeloName, pinned.BounceDomain, pinned.SourceName, pinned.ResolvedAddress = hostingAddr.String(), hostingHost, hostingHost, "hosting", hostingAddr.String()
 	unpinned := base
-	unpinned.BounceDomain = primaryHost
+	unpinned.SourceAddress, unpinned.HeloName, unpinned.BounceDomain = primaryAddr.String(), primaryHost, primaryHost
+	unpinnedEmpty := base
+	unpinnedEmpty.BounceDomain = primaryHost
 	for name, tc := range map[string]struct {
 		claim delivery.Claim
 		caps  delivery.EdgeCapabilities
-		want  string // "" = sent with empty fields, "sent" = with fields, "held" = committed as a local rejection
+		want  string // "sent" = with the expected fields, "held" = committed as a local rejection
 	}{
 		"pinned app, address reported":                       {pinned, reportedCaps(primaryAddr, hostingAddr), "sent"},
 		"pinned app, address not reported":                   {pinned, reportedCaps(primaryAddr), "held"},
@@ -57,7 +59,8 @@ func TestSourceFieldsAreSetOnlyForAddressesTheWorkerReported(t *testing.T) {
 		"bounce domain that is not the source's name":        {withBounce(pinned, primaryHost), reportedCaps(primaryAddr, hostingAddr), "held"},
 		"bounce domain the worker did not report":            {withBounce(pinned, "bounce.other.example"), reportedCaps(primaryAddr, hostingAddr), "held"},
 		"claim with no bounce domain":                        {withBounce(pinned, ""), reportedCaps(primaryAddr, hostingAddr), "held"},
-		"unpinned app, bounce domain is the primary's name":  {unpinned, reportedCaps(primaryAddr, hostingAddr), ""},
+		"unpinned app, on the primary":                       {unpinned, reportedCaps(primaryAddr, hostingAddr), "sent"},
+		"unpinned app without source fields":                 {unpinnedEmpty, reportedCaps(primaryAddr, hostingAddr), "held"},
 		"unpinned app, no bounce domain":                     {withBounce(unpinned, ""), reportedCaps(primaryAddr), "held"},
 		"unpinned app, bounce domain of a non-primary":       {withBounce(unpinned, hostingHost), reportedCaps(primaryAddr, hostingAddr), "held"},
 		"unpinned app, worker reported nothing":              {unpinned, delivery.EdgeCapabilities{}, "held"},
@@ -73,13 +76,11 @@ func TestSourceFieldsAreSetOnlyForAddressesTheWorkerReported(t *testing.T) {
 					t.Fatalf("delivery with an unreported source was not held: start=%v results=%+v err=%v", start, r.results, err)
 				}
 			case "sent":
-				if err != nil || start.SourceAddress != hostingAddr.String() || start.HeloName != hostingHost {
+				if err != nil || start.SourceAddress != tc.claim.SourceAddress || start.HeloName != tc.claim.HeloName || start.SourceAddress == "" || start.HeloName == "" {
 					t.Fatalf("start %v err %v", start, err)
 				}
 			default:
-				if err != nil || start.SourceAddress != "" || start.HeloName != "" {
-					t.Fatalf("a delivery that needs no source carried one: %v %v", start, err)
-				}
+				t.Fatalf("unknown expectation %q", tc.want)
 			}
 		})
 	}

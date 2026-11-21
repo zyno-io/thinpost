@@ -61,7 +61,7 @@ func (w *oneClaimWork) Next(ctx context.Context, lease postgres.ControllerLease,
 	}
 	mime := []byte("Subject: synthetic\r\n\r\nbody\r\n")
 	digest := sha256.Sum256(mime)
-	return &controlv1.DeliveryStart{AttemptId: claim.AttemptID, DeliveryId: claim.DeliveryID, Epoch: lease.Epoch, MxName: "mx.example", DestinationIp: "8.8.8.8", EnvelopeFrom: "bounce@example.com", Recipient: "to@example.net", ExpectedSize: uint64(len(mime)), Sha256: digest[:]}, mime, nil
+	return &controlv1.DeliveryStart{AttemptId: claim.AttemptID, DeliveryId: claim.DeliveryID, Epoch: lease.Epoch, SourceAddress: claim.SourceAddress, HeloName: claim.HeloName, MxName: "mx.example", DestinationIp: "8.8.8.8", EnvelopeFrom: "bounce@example.com", Recipient: "to@example.net", ExpectedSize: uint64(len(mime)), Sha256: digest[:]}, mime, nil
 }
 
 type neverSMTP struct{ calls atomic.Int32 }
@@ -156,7 +156,7 @@ func TestCommittedPermitLostBeforeEdgeTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	dialer := &neverSMTP{}
-	worker := &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example"}
+	worker := &edgeworker.Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: []netip.Addr{netip.MustParseAddr("45.0.1.22")}, SourceHostnames: []string{"bounce.example.com"}}
 	edge, err := edgesession.New("worker", []string{controllerID}, j, worker, authority, 2)
 	if err != nil {
 		t.Fatal(err)

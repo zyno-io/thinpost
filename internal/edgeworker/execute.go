@@ -175,16 +175,13 @@ func (w *Worker) Execute(ctx context.Context, fence journal.Fence, start *contro
 	return &controlv1.DeliveryResult{AttemptId: start.AttemptId, DeliveryId: start.DeliveryId, Epoch: start.Epoch, Outcome: result, SmtpCode: uint32(code), SmtpStage: protoStage, SmtpEnhanced: enhanced}, nil
 }
 
-// chooseSource resolves the delivery's source address and HELO name. Both empty
-// means the primary address and the worker's own hostname (older controls).
-// Otherwise both must be set, the source must be one this worker owns, and the
-// HELO name must equal that source's configured hostname: control cannot make
-// the worker greet a receiver under a name the address does not carry. The
-// returned error is generic: it never names the address or the name.
+// chooseSource resolves the delivery's source address and HELO name. Both must
+// be set, the source must be one this worker owns, and the HELO name must equal
+// that source's configured hostname: control cannot make the worker greet a
+// receiver under a name the address does not carry. A start without either
+// field is refused, never defaulted. The returned error is generic: it never
+// names the address or the name.
 func (w *Worker) chooseSource(start *controlv1.DeliveryStart) (netip.Addr, string, error) {
-	if start.SourceAddress == "" && start.HeloName == "" {
-		return netip.Addr{}, w.HeloName, nil
-	}
 	if start.SourceAddress == "" || start.HeloName == "" {
 		return netip.Addr{}, "", errors.New("incomplete delivery source")
 	}

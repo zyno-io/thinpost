@@ -987,11 +987,8 @@ func mapResult(worker, journalID string, result *controlv1.DeliveryResult) (deli
 	return delivery.Result{AttemptID: result.AttemptId, DeliveryID: result.DeliveryId, WorkerID: worker, JournalID: journalID, Epoch: result.Epoch, Outcome: outcome, SMTPCode: int(result.SmtpCode), SMTPStage: stage, SMTPEnhanced: enhanced}, nil
 }
 
-// maxReportedSources and maxReportedBounceDomains bound a worker's Ready lists.
-const (
-	maxReportedSources       = egress.MaxSources
-	maxReportedBounceDomains = 24
-)
+// maxReportedSources bounds a worker's Ready source list.
+const maxReportedSources = egress.MaxSources
 
 func sourceAddresses(sources []delivery.Source) []netip.Addr {
 	addresses := make([]netip.Addr, len(sources))
@@ -1001,25 +998,25 @@ func sourceAddresses(sources []delivery.Source) []netip.Addr {
 	return addresses
 }
 
-// capabilitiesFromReady validates a worker's reported sources, the SMTP name of
-// each (parallel to the sources), and its bounce domains. Reported sources must
+// capabilitiesFromReady validates a worker's reported sources and the SMTP name
+// of each (parallel to the sources). Reported sources must
 // be unique, literal, canonical public IPv4 addresses; the first is the
 // primary. Names must be normalized and unique. A worker that reports no
 // sources, or sources without names, is still valid (its session serves replay,
 // bounces, inbound and submission) but yields no capabilities, so nothing is
 // claimed for it: control never addresses a delivery from anything but the
-// worker's own report. Bounce domains are checked for form and otherwise
-// ignored; a source's name is its bounce domain. Names without sources, or a
-// different count of names, are malformed.
+// worker's own report. The deprecated bounce_domains field is ignored; a
+// source's name is its bounce domain. Names without sources, or a different
+// count of names, are malformed.
 func capabilitiesFromReady(ready *controlv1.Ready) (delivery.EdgeCapabilities, bool) {
-	sources, domains, hostnames := ready.GetSourceAddresses(), ready.GetBounceDomains(), ready.GetSourceHostnames()
+	sources, hostnames := ready.GetSourceAddresses(), ready.GetSourceHostnames()
 	if len(sources) == 0 {
-		return delivery.EdgeCapabilities{}, len(domains) == 0 && len(hostnames) == 0
+		return delivery.EdgeCapabilities{}, len(hostnames) == 0
 	}
 	if len(hostnames) != 0 && len(hostnames) != len(sources) {
 		return delivery.EdgeCapabilities{}, false
 	}
-	if len(sources) > maxReportedSources || len(domains) > maxReportedBounceDomains {
+	if len(sources) > maxReportedSources {
 		return delivery.EdgeCapabilities{}, false
 	}
 	addresses := make([]netip.Addr, 0, len(sources))
@@ -1045,17 +1042,6 @@ func capabilitiesFromReady(ready *controlv1.Ready) (delivery.EdgeCapabilities, b
 			return delivery.EdgeCapabilities{}, false
 		}
 		seenHostnames[name] = struct{}{}
-	}
-	seenDomains := make(map[string]struct{}, len(domains))
-	for _, domain := range domains {
-		normalized, ok := admin.NormalizeDomain(domain)
-		if !ok || normalized != domain || len(domain) > 219 {
-			return delivery.EdgeCapabilities{}, false
-		}
-		if _, duplicate := seenDomains[domain]; duplicate {
-			return delivery.EdgeCapabilities{}, false
-		}
-		seenDomains[domain] = struct{}{}
 	}
 	if len(hostnames) == 0 {
 		return delivery.EdgeCapabilities{}, true

@@ -59,9 +59,9 @@ type Server struct {
 	submission submissionBridge
 	takeover   sync.Mutex
 	owner      *sessionOwner
-	// sources and bounceDomains are reported in Ready. Advertise sets them once
-	// at startup, before the server accepts a stream.
-	sources, sourceHostnames, bounceDomains []string
+	// sources and their hostnames are reported in Ready. Advertise sets them
+	// once at startup, before the server accepts a stream.
+	sources, sourceHostnames []string
 	// Tests may shorten the permit deadline; production cannot lengthen it.
 	permitTimeout time.Duration
 }
@@ -253,9 +253,6 @@ func New(workerID string, identities []string, journal Journal, executor Executo
 	return s, nil
 }
 
-// Advertise sets the outbound source addresses (primary first) and the bounce
-// domains this worker reports in Ready. Call it once, before serving. A worker
-// that never calls it reports neither and is treated as a legacy worker.
 // EnableInbound makes the worker advertise the inbound capability and route
 // inbound mail through Inbound. Call it once, before serving. Without it the
 // worker never advertises the capability, never sends an inbound frame and
@@ -292,10 +289,13 @@ func (s *Server) Submission() SubmissionClient { return &s.submission }
 // Inbound is the SMTP receiver's view of the inbound path.
 func (s *Server) Inbound() bounce.Inbound { return &s.inbound }
 
-func (s *Server) Advertise(sources, hostnames, bounceDomains []string) {
+// Advertise sets the outbound source addresses (primary first) and the SMTP
+// name of each, which this worker reports in Ready. Call it once, before
+// serving. A worker that never calls it reports neither, and control sends it
+// no deliveries.
+func (s *Server) Advertise(sources, hostnames []string) {
 	s.sources = append([]string(nil), sources...)
 	s.sourceHostnames = append([]string(nil), hostnames...)
-	s.bounceDomains = append([]string(nil), bounceDomains...)
 }
 func (s *Server) Connect(stream grpc.BidiStreamingServer[controlv1.ControlFrame, controlv1.EdgeFrame]) error {
 	select {
@@ -363,7 +363,7 @@ func (s *Server) Connect(stream grpc.BidiStreamingServer[controlv1.ControlFrame,
 	if !authorized() {
 		return status.Error(codes.PermissionDenied, "controller lease expired")
 	}
-	if err = stream.Send(&controlv1.EdgeFrame{Body: &controlv1.EdgeFrame_Ready{Ready: &controlv1.Ready{WorkerId: s.workerID, JournalId: journalID, Epoch: open.Epoch, SessionId: open.SessionId, ProtocolVersion: edgeprotocol.Version, SourceAddresses: s.sources, SourceHostnames: s.sourceHostnames, BounceDomains: s.bounceDomains, Capabilities: capabilities, SubmissionPorts: submissionPorts}}}); err != nil {
+	if err = stream.Send(&controlv1.EdgeFrame{Body: &controlv1.EdgeFrame_Ready{Ready: &controlv1.Ready{WorkerId: s.workerID, JournalId: journalID, Epoch: open.Epoch, SessionId: open.SessionId, ProtocolVersion: edgeprotocol.Version, SourceAddresses: s.sources, SourceHostnames: s.sourceHostnames, Capabilities: capabilities, SubmissionPorts: submissionPorts}}}); err != nil {
 		return err
 	}
 	// Replay one result at a time and wait for its exact acknowledgement. This
