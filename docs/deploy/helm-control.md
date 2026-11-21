@@ -72,7 +72,6 @@ The Deployment mounts each Secret as a read-only directory and reads individual 
 | `thinpost-fingerprint-key` | `keys.json` | JSON array of 1 to 8 base64 strings, each decoding to 32 to 1024 bytes. The first key signs new fingerprints and the rest only verify. | Idempotency fingerprints. Mounted at `/run/thinpost/fingerprint`. |
 | `thinpost-bounce-keyring` | `keys.json` | JSON object from version to a base64 secret of at least 32 bytes. At most 32 versions. | Opaque bounce addresses. Mounted at `/run/thinpost/bounce`. |
 | `thinpost-tracking-link-keys` | `keys.json` | JSON `{"seed": "<base64 of 32 bytes>", "previous_seeds": []}`; see [Tracking](/guide/tracking) | Tracking link encryption. Mounted at `/run/thinpost/tracking`. May be empty when tracking is off. |
-| `thinpost-dkim` | One PEM file per key | Unencrypted RSA private key, PKCS#1 or PKCS#8; see [Domains](/guide/domains) | DKIM keys named by the signing catalog. Mounted at `/run/thinpost/dkim`. |
 | `thinpost-control-client` | `ca.crt`, `tls.crt`, `tls.key` | PEM | The control plane's client certificate and the private CA. Mounted at `/run/thinpost/control`. See [Control PKI](/deploy/control-pki). |
 
 Create them without a trailing newline in the database files:
@@ -94,14 +93,11 @@ kubectl -n $NS create secret generic thinpost-bounce-keyring --from-file=keys.js
 printf '{"seed":"%s","previous_seeds":[]}' "$(openssl rand -base64 32)" > keys.json
 kubectl -n $NS create secret generic thinpost-tracking-link-keys --from-file=keys.json
 rm keys.json
-
-kubectl -n $NS create secret generic thinpost-dkim \
-  --from-file=mail1.pem=mail1.pem
 ```
 
 `--from-literal` adds no newline. The object keyring is created in [Object storage](/deploy/object-storage), the object-storage credential there too, and `thinpost-control-client` by cert-manager in [Control PKI](/deploy/control-pki). Keep the fingerprint key stable for as long as your clients rely on idempotency keys, and keep every bounce key version that a retrying delivery might still carry.
 
-The fingerprint, bounce, tracking and DKIM material is loaded at start. Rotating any of it needs a rolling restart; see [Rotation](/operations/rotation).
+The fingerprint, bounce and tracking material is loaded at start. Rotating any of it needs a rolling restart; see [Rotation](/operations/rotation).
 
 ## External ConfigMaps
 
@@ -147,7 +143,7 @@ data:
 
 ### `thinpost-mail-runtime`
 
-The mail path: the edge connection, signing, fingerprints and tracking:
+The mail path: the edge connection, fingerprints and tracking:
 
 ```yaml
 apiVersion: v1
@@ -167,8 +163,7 @@ data:
   THINPOST_CONTROL_BOUNCE_ACTIVE_KEY: "v1"
   THINPOST_CONTROL_BOUNCE_KEYS_FILE: "/run/thinpost/bounce/keys.json"
 
-  # Signing and submission
-  THINPOST_CONTROL_SIGNING_CATALOG: "/run/thinpost/signing/catalog.json"
+  # Submission
   THINPOST_CONTROL_FINGERPRINT_KEYS_FILE: "/run/thinpost/fingerprint/keys.json"
 
   # Optional: open and click tracking
@@ -180,34 +175,10 @@ data:
 - `THINPOST_CONTROL_EDGE_TARGET` is a **literal IP address and port** that is private or loopback. Use a fixed ClusterIP, see [Services](#services). The edge's certificate must carry the DNS name in `THINPOST_CONTROL_EDGE_DNS` and the URI in `THINPOST_CONTROL_EDGE_IDENTITY`; the control certificate must carry `THINPOST_CONTROL_IDENTITY`.
 - The edge's sending addresses and their names come from the edge's own report, so control has no settings for them. `THINPOST_CONTROL_SMTP_SOURCE`, `THINPOST_CONTROL_BOUNCE_DOMAIN` and `THINPOST_INBOUND_MX_HOST` from earlier releases are ignored if still set, so they can stay in place while pods roll out. Remove them when convenient.
 - `THINPOST_CONTROL_BOUNCE_ACTIVE_KEY` names a version in the bounce keyring.
-- Message submission requires storage, signing and the edge connection together. The signing catalog is a JSON array of `app_id`, `domain`, `selector` and `key_path` objects and must hold at least one entry when set. It is described in [Domains](/guide/domains).
+- Message submission requires object storage and the edge connection together. There are no DKIM key files to mount: control generates each sender domain's DKIM key itself and keeps it in the database, sealed with the object encryption keyring. `THINPOST_CONTROL_SIGNING_CATALOG` from earlier releases is no longer read; it is ignored if still set, and the chart no longer mounts `thinpost-signing-catalog` or `thinpost-dkim`. See [Domains](/guide/domains).
 - Set the tracking variables only if you want tracking. They require the fingerprint key. `THINPOST_TRACKING_EVENT_LIMIT` is an integer from 1 to 1000. See [Tracking](/guide/tracking).
 - The chart sets `THINPOST_CONTROL_WORKER_ID`, `THINPOST_CONTROL_JOURNAL_ID` and `THINPOST_CONTROL_INSTANCE_ID` itself.
 - Other optional settings, such as `THINPOST_MAX_ATTACHMENT_BYTES`, are in the [configuration reference](/reference/configuration).
-
-### `thinpost-signing-catalog`
-
-The signing catalog as a file:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: thinpost-signing-catalog
-  namespace: thinpost-control
-data:
-  catalog.json: |
-    [
-      {
-        "app_id": "0123456789abcdef0123456789abcdef",
-        "domain": "mail.example.com",
-        "selector": "mail1",
-        "key_path": "/run/thinpost/dkim/mail1.pem"
-      }
-    ]
-```
-
-Mounted at `/run/thinpost/signing`. The `key_path` values point into the `thinpost-dkim` Secret at `/run/thinpost/dkim`.
 
 ### `thinpost-recipient-allowlist`
 

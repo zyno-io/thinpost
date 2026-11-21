@@ -117,7 +117,7 @@ func TestMigration045(t *testing.T) {
 		t.Fatal(err)
 	}
 	version, err := SchemaVersion(ctx, db)
-	if err != nil || version != 45 {
+	if err != nil || version != len(migrations) {
 		t.Fatal("schema version", version, err)
 	}
 }

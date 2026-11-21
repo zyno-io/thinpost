@@ -8,7 +8,6 @@ PKI=/pki
 ZONE=/zone
 DOMAIN=quickstart.example
 APP_ID=5ab1e0a9f1c64d2e8b3c7d0e1f2a3b4c
-SELECTOR=mail1
 
 if [ -f "$PKI/.complete" ]; then
   echo "pki-init: already complete"
@@ -48,11 +47,9 @@ printf '{"active":"k1","keys":{"k1":"%s"}}\n' "$(b64key)" >object-keyring.json
 printf '["%s"]\n' "$(b64key)" >fingerprint-keys.json
 printf '{"v1":"%s"}\n' "$(b64key)" >bounce-keys.json
 
-# DKIM signing key for the sender domain, and the signing catalog entry. The
-# app itself is created by db-init with this fixed ID, because the catalog is
-# read at control start-up.
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out dkim.pem 2>/dev/null
-printf '[{"app_id":"%s","domain":"%s","selector":"%s","key_path":"/pki/dkim.pem"}]\n' "$APP_ID" "$DOMAIN" "$SELECTOR" >signing-catalog.json
+# The Quickstart app is created by db-init with this fixed ID. There is no DKIM
+# key here: the control plane generates the sender domain's key, and publishing
+# its record in the zone (smoke.sh does it with zone-add.sh) verifies the domain.
 echo "$APP_ID" >app-id
 
 # Development issuer signing key.
@@ -69,10 +66,9 @@ chmod 700 /journal
 journal_id="$(su-exec 65532:65532 /usr/local/bin/thinpost-edge journal-id /journal/attempts.db)"
 printf 'THINPOST_CONTROL_JOURNAL_ID=%s\n' "$journal_id" >runtime.env
 
-# DNS zone: MX, SPF, DKIM and DMARC for the sender domain. The edge's name
-# (smtp) is also the bounce domain, so it has its own MX and SPF.
-dkim_p="$(openssl pkey -in dkim.pem -pubout -outform DER 2>/dev/null | openssl base64 -A)"
-dkim_txt="$(printf 'v=DKIM1; k=rsa; p=%s' "$dkim_p" | fold -w 200 | sed 's/.*/"&"/' | tr '\n' ' ')"
+# DNS zone: MX, SPF and DMARC for the sender domain. The DKIM record is added
+# later, once the control plane has generated the key (zone-add.sh). The edge's
+# name (smtp) is also the bounce domain, so it has its own MX and SPF.
 mkdir -p "$ZONE"
 cat >"$ZONE/$DOMAIN.zone" <<ZONE
 \$ORIGIN $DOMAIN.
@@ -86,7 +82,6 @@ smtp IN A 11.42.51.10
 smtp IN MX 10 smtp
 smtp IN TXT "v=spf1 a -all"
 @ IN TXT "v=spf1 ip4:11.42.51.10 -all"
-$SELECTOR._domainkey IN TXT ( $dkim_txt )
 _dmarc IN TXT "v=DMARC1; p=none"
 ZONE
 cat >"$ZONE/edge-reverse" <<ZONE

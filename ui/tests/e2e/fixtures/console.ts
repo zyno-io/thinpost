@@ -312,7 +312,7 @@ export async function installMocks(page: Page, options: MockOptions = {}) {
         if (rest === '/tracking-defaults') return json(route, method === 'PUT' ? (request.postDataJSON() as object) : { opens: false, clicks: true });
         if (rest === '/tracking-quota') return json(route, { daily_limit: 500, used: 120, suppressed: 7, day: '2026-11-11' });
         if (rest === '/domains') {
-            return json(route, { domains: [{ name: 'billing.example.com', active: true, created_at: '2026-10-04T12:00:00Z', verified_at: '2026-10-04T13:00:00Z' }] });
+            return json(route, { domains: [{ name: 'billing.example.com', active: true, created_at: '2026-10-04T12:00:00Z', verified_at: '2026-10-04T13:00:00Z', active_key: { selector: 'thinpost1', dns_name: 'thinpost1._domainkey.billing.example.com', dns_value: 'v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A', activated_at: '2026-10-04T13:00:00Z' } }] });
         }
         const hookId = '0a'.repeat(16);
         const hook = {

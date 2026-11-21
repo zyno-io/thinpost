@@ -1,85 +1,77 @@
 ---
 title: Sender domains
-description: Verify a sender domain, publish DKIM keys, and understand what Thinpost does and does not check in DNS.
+description: Verify a sender domain by publishing the DKIM record Thinpost generates, rotate keys, and understand what Thinpost does and does not check in DNS.
 ---
 
 # Sender domains
 
-An app can only send from domains an administrator has verified for it. Verification proves the app's owner controls the name. Making the mail authenticate, through DKIM, SPF and DMARC, is separate DNS work that you do alongside it.
+An app can only send from domains that are verified for it. Thinpost makes a DKIM key for each domain, and **publishing that key's DNS record is what verifies the domain**: the record proves you control the name, and it is also what lets receivers check Thinpost's signatures. SPF and DMARC are separate DNS work that you do alongside it.
 
 ## Verify a domain
 
-1. **Request the domain.** In the [console](/guide/console) open the app, choose **Sending domains** and add the domain. Through the API this is `POST /api/v1/apps/{appId}/domains`.
-2. **Publish the challenge.** Thinpost returns a TXT record name and value. Publish it at your authoritative DNS provider.
+1. **Add the domain.** In the [console](/guide/console) open the app, choose **Sending domains** and add the domain. Through the API this is `POST /api/v1/apps/{appId}/domains`. Thinpost generates an RSA-2048 key for the domain and keeps its private half; you never handle it.
+2. **Publish the DKIM record.** Thinpost shows a TXT record name and value. Publish it at your authoritative DNS provider.
 
    | Record | Name | Value |
    | --- | --- | --- |
-   | TXT | `_thinpost.mail.example.com` | `thinpost-verification=...` (shown once) |
+   | TXT | `thinpost1._domainkey.mail.example.com` | `v=DKIM1; k=rsa; p=<base64 public key>` |
 
-   The value is returned only when it is issued, because Thinpost stores only its hash. Requesting a new challenge for a pending domain replaces the old value.
-3. **Verify.** Choose **Verify** (or `POST .../domains/{domain}/verify`). Thinpost looks the record up through the control plane's DNS resolver and activates the domain when it sees the matching value.
+   The value holds only the public key, so it is not a secret. The console and the API show it at any time, and adding the same domain again returns the same record. The record is about 410 characters. Most DNS providers split it into 255-character strings for you; if yours refuses it, copy it with **Split into 255-character strings** in the console, which gives `"first part" "second part"`.
+3. **Verify.** Choose **Verify** (or `POST .../domains/{domain}/verify`). Thinpost looks the record up through the control plane's DNS resolver. When it finds this key, the domain becomes verified and the key becomes the one that signs its mail.
 
-Challenge creation and successful verification are audited.
+Adding, creating and activating keys and verifying a domain are audited.
+
+Thinpost accepts the record when exactly one TXT record exists at that name, it is a plain RSA key for email (`k=rsa`, SHA-256, no other service), it is not in testing mode, and its `p=` value is this key. Whitespace inside `p=` and extra tags such as `n=` are fine. Otherwise verification answers `409` with a reason, and the console explains it:
+
+| Reason | What it means |
+| --- | --- |
+| `not_found` | No TXT record at the name yet. DNS changes can take a while to spread. |
+| `multiple_records` | More than one TXT record at the name. Keep exactly one. |
+| `different_key` | A record exists but its key is not the one Thinpost made. Check that you copied the whole value. |
+| `testing_mode` | The record has `t=y`, which tells receivers to ignore failures. Remove it. |
+| `unsupported` | Not a standard DKIM record (another key type, a different hash, or another service). |
+
+A failed DNS lookup is `503`; try again.
 
 ::: warning What verification does not prove
-Verification shows that the resolver Thinpost uses returned the expected value. Thinpost does not validate DNSSEC. An active domain does not mean DKIM, SPF, DMARC or reverse DNS are configured, and the console says so. Domain removal is not available yet.
+Verification shows that the resolver Thinpost uses returned the expected record. Thinpost does not validate DNSSEC. A verified domain does not mean SPF, DMARC or reverse DNS are configured, and the console says so. Domain removal is not available yet.
 :::
 
-The same TXT name is shared with receiving-domain verification for [inbound mail](/guide/inbound). Thinpost accepts any matching value among the TXT records at that name, so one domain can carry both challenges.
+Receiving-domain verification for [inbound mail](/guide/inbound) is separate and uses its own `_thinpost` TXT name. Sender domains no longer use that name.
 
 ## DKIM signing
 
-Thinpost signs every message with a DKIM key you provide, using the sender domain as the `d=` value so DKIM aligns with the `From` domain for DMARC.
+Thinpost signs every message with the domain's active key, using the sender domain as the `d=` value so DKIM aligns with the `From` domain for DMARC, even under strict alignment (`adkim=s`). The selector is `thinpost1` for a domain's first key, then `thinpost2`, and so on. Selectors are unique for a domain across all apps that use it, and a retired selector is never reused.
 
-### Provide a key
+Thinpost rechecks the DNS record before it uses a key: the selector must have a single TXT record with the matching public key. It never signs with a key that is not published right now, and it also rechecks that the app and domain are still active. Signing resolves public keys through DNS without DNSSEC validation.
 
-Keys are RSA, at least 2048 and at most 8192 bits, in unencrypted PKCS#1 or PKCS#8 PEM form. The upper bound keeps signed messages small. Create one per sender domain and selector:
+The private key is stored in the database, encrypted with the [object encryption keyring](/deploy/object-storage), and bound to its row so a copy moved to another row will not open. A database dump alone cannot sign mail; the database plus the keyring can. There are no key files to mount and nothing to restart. Control needs the object encryption keyring to create or use keys.
 
-```sh
-openssl genrsa -out mail1.pem 2048
-openssl rsa -in mail1.pem -pubout -outform DER | openssl base64 -A
-```
+### Domains verified before DKIM keys existed
 
-The second command prints the base64 public key for the DNS record.
+A domain that was verified by an earlier release has no key until you create one. The console shows **No DKIM key yet** and a **Create DKIM key** button (API: `POST .../domains/{domain}/dkim-keys`). Publish the record it shows and choose **Verify**. Until the key is active:
 
-The control plane reads a **signing catalog**, a JSON file that maps each app and verified sender domain to a selector and the path of its mounted private key:
+- SMTP submission from the domain is refused with `451 4.3.5`, and the client keeps the message queued.
+- The HTTP API still accepts the message, but it can't be prepared. After its retries (12 attempts) it shows as `preparation_failed`. Once the key is active, [retry its preparation](/operations/recovery).
 
-```json
-[
-  {
-    "app_id": "0123456789abcdef0123456789abcdef",
-    "domain": "mail.example.com",
-    "selector": "mail1",
-    "key_path": "/run/secrets/thinpost/mail1.pem"
-  }
-]
-```
+A domain that was still waiting for its old `_thinpost` challenge when you upgraded gets a DKIM record instead; add it again or choose **Create DKIM key**.
 
-Mount the catalog and the key files from your secret store. The path of the catalog is `THINPOST_CONTROL_SIGNING_CATALOG`; in Kubernetes the Helm chart wires it for you ([Helm: control](/deploy/helm-control)).
+### Rotate a key
 
-### Publish the public key
+Rotation never leaves a gap, and you decide when it switches:
 
-Publish a TXT record at `<selector>._domainkey.<domain>`:
+1. **Create the next key.** Choose **Rotate key** (API: `POST .../domains/{domain}/dkim-keys`). Thinpost makes `thinpostN` and shows its record. The current key keeps signing.
+2. **Publish the new record** at its own name, then choose **Check record** (the same verify call). When Thinpost sees it, the key shows as ready to switch.
+3. **Switch.** Choose **Switch** (API: `POST .../dkim-keys/{selector}/activate`). Thinpost checks DNS again, then in one step makes the new key the signing key and retires the old one. The old private key is deleted from the database (older copies in backups stay sealed, and need the keyring to open).
+4. **Keep the old record.** Leave the old selector's TXT record in DNS until the date the console shows, which is at least seven days, and at least the [retry policy](/operations/recovery)'s maximum message age plus two days. Mail signed with the old key can still be waiting to be retried, and receivers need the record to verify it.
 
-| Record | Name | Value |
-| --- | --- | --- |
-| TXT | `mail1._domainkey.mail.example.com` | `v=DKIM1; k=rsa; p=<base64 public key>` |
-
-Thinpost rechecks the DNS record before it uses a key: the selector must have a single TXT record that contains the matching public key and permits SHA-256 signing. It also rechecks that the app and domain are still active. Signing resolves public keys through DNS without DNSSEC validation.
-
-### Rotation
-
-The catalog and keys load at process startup, so changing them requires restarting the control replicas. Thinpost is not a key manager, so:
-
-1. Create a new key with a new selector and publish its public record.
-2. Update the catalog to use the new selector and restart.
-3. Keep the old selector's public record published until every message signed with it has aged out of retries and recipients' queues.
+To abandon a rotation before switching, choose **Cancel** (API: `DELETE .../dkim-keys/{selector}`); the new key is deleted and the current one is untouched. Only a key that has not been switched in can be cancelled, and a domain has at most one pending key. Delete a cancelled key's record from DNS.
 
 See [Key and certificate rotation](/operations/rotation).
 
 ## SMTP and DKIM
 
-[SMTP submission](/guide/smtp) uses the same verified domains and the same DKIM keys. Whatever the From policy, the domain a message is sent from must have a DKIM key in the signing catalog with a matching DNS record, or Thinpost answers `451 4.3.5` and the client keeps the message queued until it is fixed. If the policy moves or replaces the sender address, its target domain must also be a **verified** sender domain of the app, with the same `451 4.3.5` if it is not. Under the default policy, a `From` on an unverified domain is refused with `550 5.7.1`. The SMTP tab warns you when the chosen domain would not be signed yet.
+[SMTP submission](/guide/smtp) uses the same verified domains and the same DKIM keys. Whatever the From policy, the domain a message is sent from must have an active DKIM key with a matching DNS record, or Thinpost answers `451 4.3.5` and the client keeps the message queued until it is fixed. If the policy moves or replaces the sender address, its target domain must also be a **verified** sender domain of the app, with the same `451 4.3.5` if it is not. Under the default policy, a `From` on an unverified domain is refused with `550 5.7.1`. The SMTP tab warns you when the chosen domain would not be signed yet.
 
 ## SPF and bounces
 
@@ -87,7 +79,9 @@ You do not add Thinpost to your own domain's SPF record. Every message uses `b+<
 
 ## DMARC
 
-Thinpost does not publish or check your DMARC policy. A DKIM-signed message from a verified domain aligns on DKIM. Publish a DMARC record on the sender domain, starting with `p=none` and aggregate reporting, and tighten it as you confirm all your mail authenticates.
+Thinpost does not publish or check your DMARC policy. Messages are DKIM-signed with `d=` set to the exact `From` domain, so they align on DKIM even when your DMARC record asks for strict alignment (`adkim=s`). Publish a DMARC record on the sender domain, starting with `p=none` and aggregate reporting, and tighten it as you confirm all your mail authenticates.
+
+SPF alignment depends on the bounce domain, which belongs to the sending IP and is not your domain, so mail passes DMARC through DKIM. If your DMARC record asks for strict SPF (`aspf=s`), DKIM still carries it.
 
 ## Next
 

@@ -2,158 +2,247 @@ package signing
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/rsa"
-	"crypto/x509"
 	"encoding/base64"
-	"math/big"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/zyno-io/thinpost/internal/dkimkey"
+	"github.com/zyno-io/thinpost/internal/objectstore"
 )
 
-type domains struct{ active bool }
+const app = "0123456789abcdef0123456789abcdef"
 
-func (d *domains) SigningDomainActive(context.Context, string, string) (bool, error) {
-	return d.active, nil
+func testRing(t *testing.T) *objectstore.Keyring {
+	t.Helper()
+	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	path := filepath.Join(t.TempDir(), "keyring.json")
+	if err := os.WriteFile(path, []byte(`{"active":"k1","keys":{"k1":"`+key+`"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ring, err := objectstore.LoadKeyring(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ring
 }
 
-func TestSigningKeySizeBound(t *testing.T) {
-	for _, tc := range []struct {
-		bits  int
-		valid bool
-	}{{2047, false}, {2048, true}, {8192, true}, {8193, false}} {
-		key := &rsa.PrivateKey{PublicKey: rsa.PublicKey{N: new(big.Int).Lsh(big.NewInt(1), uint(tc.bits-1)), E: 65537}}
-		_, err := New(&domains{}, &dns{}, []Entry{{AppID: "0123456789abcdef0123456789abcdef", Domain: "example.com", Selector: "mail", Signer: key}})
-		if (err == nil) != tc.valid {
-			t.Fatalf("key with %d bits: %v", tc.bits, err)
+// store is an in-memory dkim_keys: the active key per (app, domain).
+type store struct {
+	keys        map[string]dkimkey.Stored
+	activeCalls int
+	sealedCalls int
+}
+
+func (s *store) ActiveSigningKey(_ context.Context, appID, domain string) (dkimkey.Stored, error) {
+	s.activeCalls++
+	k, ok := s.keys[appID+"|"+domain]
+	if !ok {
+		return dkimkey.Stored{}, dkimkey.ErrNoKey
+	}
+	k.Sealed = nil
+	return k, nil
+}
+func (s *store) SealedSigningKey(_ context.Context, id string) (dkimkey.Stored, error) {
+	s.sealedCalls++
+	for _, k := range s.keys {
+		if k.ID == id {
+			return k, nil
 		}
 	}
+	return dkimkey.Stored{}, dkimkey.ErrNoKey
+}
+
+// add stores a freshly generated, sealed active key.
+func (s *store) add(t *testing.T, ring *objectstore.Keyring, appID, domain, selector string) dkimkey.Stored {
+	t.Helper()
+	material, err := dkimkey.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := fmt.Sprintf("%032x", len(s.keys)+1)
+	sealed, err := dkimkey.Seal(ring, id, appID, domain, selector, material.PKCS8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := dkimkey.Stored{ID: id, AppID: appID, Domain: domain, Selector: selector, PublicKey: material.SPKI, Sealed: sealed}
+	if s.keys == nil {
+		s.keys = map[string]dkimkey.Stored{}
+	}
+	s.keys[appID+"|"+domain] = k
+	return k
 }
 
 type dns struct {
 	records []string
 	name    string
+	lookups int
 }
 
 func (d *dns) LookupTXT(_ context.Context, name string) ([]string, error) {
 	d.name = name
+	d.lookups++
 	return d.records, nil
 }
 
-func TestSigningRequiresAppDomainAndPublishedMatchingDKIMKey(t *testing.T) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+func TestSigningUsesTheActiveDatabaseKeyAndRequiresItsRecord(t *testing.T) {
+	ring := testRing(t)
+	st := &store{}
+	key := st.add(t, ring, app, "example.com", "thinpost1")
+	value := dkimkey.RecordValue(key.PublicKey)
+	d := &dns{records: []string{value}}
+	resolver, err := New(st, ring, d)
 	if err != nil {
 		t.Fatal(err)
 	}
-	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	value := base64.StdEncoding.EncodeToString(der)
-	domains := &domains{active: true}
-	dns := &dns{records: []string{"v=DKIM1; k=rsa; h=sha256; p=" + value}}
-	app := "0123456789abcdef0123456789abcdef"
-	resolver, err := New(domains, dns, []Entry{{AppID: app, Domain: "example.com", Selector: "mail1", Signer: key}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolved, err := resolver.ForSender(context.Background(), app, "Test <sender@example.com>")
-	if err != nil || resolved.Domain != "example.com" || dns.name != "mail1._domainkey.example.com" {
+	ctx := context.Background()
+	resolved, err := resolver.ForSender(ctx, app, "Test <sender@Example.com>")
+	if err != nil || resolved.Domain != "example.com" || resolved.Selector != "thinpost1" || d.name != "thinpost1._domainkey.example.com" {
 		t.Fatal("valid DKIM rejected", err)
 	}
-	if _, err = resolver.ForSender(context.Background(), "abcdef0123456789abcdef0123456789", "sender@example.com"); err == nil {
+	// The signer is the stored key.
+	public := resolved.Signer.Public().(*rsa.PublicKey)
+	if public.N.BitLen() != dkimkey.Bits {
+		t.Fatal("wrong signer")
+	}
+	// The opened key is kept: a second message does not open it again.
+	if _, err = resolver.ForSender(ctx, app, "sender@example.com"); err != nil || st.sealedCalls != 1 {
+		t.Fatal("signer not cached", err, st.sealedCalls)
+	}
+	// Another app, and a domain with no key, never sign.
+	if _, err = resolver.ForSender(ctx, "abcdef0123456789abcdef0123456789", "sender@example.com"); err == nil {
 		t.Fatal("cross-app key allowed")
 	}
-	domains.active = false
-	if _, err = resolver.ForSender(context.Background(), app, "sender@example.com"); err == nil {
-		t.Fatal("inactive domain allowed")
+	if _, err = resolver.ForSender(ctx, app, "sender@nokey.example"); err == nil {
+		t.Fatal("domain without a key signed")
 	}
-	domains.active = true
-	for _, record := range []string{
-		"v=DKIM1; k=rsa; p=",
-		"v=DKIM1; k=rsa; p=" + value + "; t=y",
-		"v=DKIM1; k=rsa; p=" + value + "; h=sha1",
-		"v=DKIM1; k=rsa; p=" + value + "; s=other",
-		"v=DKIM1; k=rsa; p=" + value + "; p=" + value,
-		"k=rsa; v=DKIM1; p=" + value,
+	// Every record that does not publish exactly this key refuses the signing.
+	other, _ := dkimkey.Generate()
+	for _, records := range [][]string{
+		nil,
+		{"v=DKIM1; k=rsa; p="},
+		{value + "; t=y"},
+		{value, value},
+		{dkimkey.RecordValue(other.SPKI)},
+		{"unrelated"},
 	} {
-		dns.records = []string{record}
-		if _, err = resolver.ForSender(context.Background(), app, "sender@example.com"); err == nil {
-			t.Error("invalid DKIM record accepted")
+		d.records = records
+		if _, err = resolver.ForSender(ctx, app, "sender@example.com"); err == nil {
+			t.Errorf("signed with records %v", records)
 		}
 	}
-	dns.records = []string{"v=DKIM1; p=" + value, "v=DKIM1; p=" + value}
-	if _, err = resolver.ForSender(context.Background(), app, "sender@example.com"); err == nil {
-		t.Fatal("multiple DKIM records accepted")
+}
+
+func TestRotationSwitchSignsWithTheNewKey(t *testing.T) {
+	ring := testRing(t)
+	st := &store{}
+	oldKey := st.add(t, ring, app, "example.com", "thinpost1")
+	d := &dns{records: []string{dkimkey.RecordValue(oldKey.PublicKey)}}
+	resolver, _ := New(st, ring, d)
+	first, err := resolver.ForSender(context.Background(), app, "a@example.com")
+	if err != nil || first.Selector != "thinpost1" {
+		t.Fatal(err)
+	}
+	newKey := st.add(t, ring, app, "example.com", "thinpost2") // the switch replaced the active row
+	d.records = []string{dkimkey.RecordValue(newKey.PublicKey)}
+	second, err := resolver.ForSender(context.Background(), app, "a@example.com")
+	if err != nil || second.Selector != "thinpost2" || d.name != "thinpost2._domainkey.example.com" {
+		t.Fatal("did not switch", err)
+	}
+	// The switched-out key's opened private key is dropped, not kept beside the new one.
+	if len(resolver.signers) != 1 || resolver.signers[app+"|example.com"].id != newKey.ID || second.KeyID != newKey.ID {
+		t.Fatal("old signer kept", len(resolver.signers))
 	}
 }
 
-type countingDNS struct {
-	dns
-	lookups int
-}
-
-func (d *countingDNS) LookupTXT(ctx context.Context, name string) ([]string, error) {
-	d.lookups++
-	return d.dns.LookupTXT(ctx, name)
+func TestSigningRefusesAKeyThatCannotBeOpened(t *testing.T) {
+	ring := testRing(t)
+	st := &store{}
+	k := st.add(t, ring, app, "example.com", "thinpost1")
+	d := &dns{records: []string{dkimkey.RecordValue(k.PublicKey)}}
+	resolver, _ := New(st, ring, d)
+	// Ciphertext moved to another row (here: another selector) fails to open.
+	moved := st.keys[app+"|example.com"]
+	moved.Selector = "thinpost9"
+	st.keys[app+"|example.com"] = moved
+	d.records = []string{dkimkey.RecordValue(k.PublicKey)}
+	if _, err := resolver.ForSender(context.Background(), app, "a@example.com"); err == nil {
+		t.Fatal("moved ciphertext signed")
+	}
+	// A shredded key has no private half.
+	moved.Selector, moved.Sealed = "thinpost1", nil
+	st.keys[app+"|example.com"] = moved
+	if _, err := resolver.ForSender(context.Background(), app, "a@example.com"); err == nil {
+		t.Fatal("shredded key signed")
+	}
+	if _, err := New(nil, ring, d); err == nil {
+		t.Fatal("no store accepted")
+	}
 }
 
 func TestReadyChecksLikeForSenderAndCaches(t *testing.T) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	good := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(der)
-	domains := &domains{active: true}
-	dns := &countingDNS{dns: dns{records: []string{good}}}
-	app := "0123456789abcdef0123456789abcdef"
-	resolver, err := New(domains, dns, []Entry{{AppID: app, Domain: "example.com", Selector: "mail1", Signer: key}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ring := testRing(t)
+	st := &store{}
+	k := st.add(t, ring, app, "example.com", "thinpost1")
+	good := dkimkey.RecordValue(k.PublicKey)
+	d := &dns{records: []string{good}}
+	resolver, _ := New(st, ring, d)
 	now := time.Unix(1000, 0)
 	resolver.now = func() time.Time { return now }
 	ctx := context.Background()
 
 	// Success is cached for 60 seconds, then rechecked.
-	if err = resolver.Ready(ctx, app, "Example.com"); err != nil || dns.lookups != 1 {
-		t.Fatal("ready", err, dns.lookups)
+	if err := resolver.Ready(ctx, app, "Example.com"); err != nil || d.lookups != 1 {
+		t.Fatal("ready", err, d.lookups)
 	}
-	dns.records = nil
+	if st.sealedCalls != 0 {
+		t.Fatal("readiness opened the private key")
+	}
+	d.records = nil
 	now = now.Add(59 * time.Second)
-	if err = resolver.Ready(ctx, app, "example.com"); err != nil || dns.lookups != 1 {
-		t.Fatal("success not cached", err, dns.lookups)
+	if err := resolver.Ready(ctx, app, "example.com"); err != nil || d.lookups != 1 {
+		t.Fatal("success not cached", err, d.lookups)
 	}
 	now = now.Add(2 * time.Second)
-	if err = resolver.Ready(ctx, app, "example.com"); err == nil || dns.lookups != 2 {
-		t.Fatal("stale success served", err, dns.lookups)
+	if err := resolver.Ready(ctx, app, "example.com"); err == nil || d.lookups != 2 {
+		t.Fatal("stale success served", err, d.lookups)
 	}
 	// Failure is cached for 10 seconds only.
-	dns.records = []string{good}
+	d.records = []string{good}
 	now = now.Add(9 * time.Second)
-	if err = resolver.Ready(ctx, app, "example.com"); err == nil || dns.lookups != 2 {
-		t.Fatal("failure not cached", err, dns.lookups)
+	if err := resolver.Ready(ctx, app, "example.com"); err == nil || d.lookups != 2 {
+		t.Fatal("failure not cached", err, d.lookups)
 	}
 	now = now.Add(2 * time.Second)
-	if err = resolver.Ready(ctx, app, "example.com"); err != nil || dns.lookups != 3 {
-		t.Fatal("failure cached too long", err, dns.lookups)
+	if err := resolver.Ready(ctx, app, "example.com"); err != nil || d.lookups != 3 {
+		t.Fatal("failure cached too long", err, d.lookups)
 	}
-	// An inactive sender domain, another app and an unknown domain all fail,
-	// and the last two never reach DNS or the cache.
-	domains.active = false
-	now = now.Add(time.Hour)
-	if err = resolver.Ready(ctx, app, "example.com"); err == nil {
-		t.Fatal("inactive domain ready")
-	}
-	lookups := dns.lookups
-	if resolver.Ready(ctx, "abcdef0123456789abcdef0123456789", "example.com") == nil || resolver.Ready(ctx, app, "other.example") == nil || dns.lookups != lookups {
+	// Another app and an unknown domain are not ready and never reach DNS.
+	lookups := d.lookups
+	if resolver.Ready(ctx, "abcdef0123456789abcdef0123456789", "example.com") == nil || resolver.Ready(ctx, app, "other.example") == nil || d.lookups != lookups {
 		t.Fatal("unknown pair ready or looked up")
 	}
-	if len(resolver.ready) != 1 {
-		t.Fatal("cache grew for unknown pairs", len(resolver.ready))
+}
+
+func TestCachesAreBounded(t *testing.T) {
+	ring := testRing(t)
+	st := &store{}
+	d := &dns{}
+	resolver, _ := New(st, ring, d)
+	for i := 0; i < maxCacheEntries*2; i++ {
+		_ = resolver.Ready(context.Background(), app, fmt.Sprintf("d%d.example", i))
+	}
+	if len(resolver.ready) > maxCacheEntries {
+		t.Fatal("ready cache grew past its bound", len(resolver.ready))
+	}
+}
+
+func TestCheckRecordIsExported(t *testing.T) {
+	material, _ := dkimkey.Generate()
+	if CheckRecord([]string{dkimkey.RecordValue(material.SPKI)}, material.SPKI) != ReasonOK || CheckRecord(nil, material.SPKI) != ReasonNotFound {
+		t.Fatal("CheckRecord")
 	}
 }

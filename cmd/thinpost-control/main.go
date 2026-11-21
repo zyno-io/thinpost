@@ -137,24 +137,11 @@ func run() error {
 		return errors.New("operator identity initialization failed")
 	}
 	repository := &postgres.Repository{DB: db, Generation: config.Generation, WebhookDestinations: config.WebhookDestinations}
-	// The signing resolver is built first: the operator API asks it whether a
-	// domain would be signed, and message preparation uses it below.
-	catalogPath := os.Getenv("THINPOST_CONTROL_SIGNING_CATALOG")
-	var keys *signing.Resolver
-	if catalogPath != "" {
-		entries, err := signing.LoadCatalog(catalogPath)
-		if err != nil {
-			return err
-		}
-		keys, err = signing.New(repository, net.DefaultResolver, entries)
-		if err != nil {
-			return err
-		}
-	}
 	operator := &admin.Handler{Authenticator: auth, Store: repository, WebhookHistory: repository, PolicyHolds: repository, TrackingHolds: repository, AppStatus: repository, Suppressions: repository, Operations: repository, AuthConfig: &config.PublicAuth, DNS: net.DefaultResolver, MX: net.DefaultResolver, ReverseDNS: net.DefaultResolver, WebhookDestinations: config.WebhookDestinations}
-	if keys != nil {
-		operator.SigningReadiness = keys
-	}
+	// Signing keys live in the database, sealed under the object keyring, so
+	// signing (and with it submission, tracking and message preparation) is
+	// available exactly when the keyring is. keys stays nil without it.
+	var keys *signing.Resolver
 	stopCleanup := startIdempotencyCleanup(ctx, repository)
 	defer stopCleanup()
 	stopHoldExpiry := startHoldExpiry(ctx, repository)
@@ -176,6 +163,12 @@ func run() error {
 			return errors.New("object encryption initialization failed")
 		}
 		webhookKeys, objectKeyring = keyring, keyring
+		repository.DKIMKeys = keyring
+		keys, err = signing.New(repository, keyring, net.DefaultResolver)
+		if err != nil {
+			return errors.New("signing initialization failed")
+		}
+		operator.SigningReadiness = keys
 		operator.Webhooks = &webhook.Service{Store: repository, Keys: keyring, Sender: &webhook.Sender{Destinations: config.WebhookDestinations}}
 		repository.Objects = objects
 		operator.ContentReader = &messagebody.Service{Repository: repository, Objects: objects}
@@ -208,7 +201,7 @@ func run() error {
 	}
 	var acceptanceService *acceptance.Service
 	if fingerprintKeys != nil {
-		if objects == nil || bridgeConfig == nil || catalogPath == "" {
+		if objects == nil || bridgeConfig == nil || keys == nil {
 			return errors.New("submission requires storage, signing and edge bridge")
 		}
 		acceptanceService, err = acceptance.NewWithFingerprintKeys(repository, objects, fingerprintKeys, recipients)
@@ -232,7 +225,7 @@ func run() error {
 	var trackingPreparation *preparation.TrackingConfig
 	var trackingHandler http.Handler
 	if config.Tracking != nil {
-		if objects == nil || catalogPath == "" || bridgeConfig == nil {
+		if objects == nil || keys == nil || bridgeConfig == nil {
 			return errors.New("tracking requires encrypted storage, signing and edge bridge")
 		}
 		protected, trackingErr := tracking.NewProtectedStore(objects)
@@ -242,10 +235,7 @@ func run() error {
 		trackingPreparation = &preparation.TrackingConfig{Origin: config.Tracking.Origin, Links: config.Tracking.Links, EventLimit: config.Tracking.EventLimit, Objects: protected}
 		trackingHandler = &tracking.Handler{Origin: config.Tracking.Origin, Links: config.Tracking.Links, Visitor: &tracking.Service{Repository: repository, Objects: protected}, Unsubscribes: repository}
 	}
-	if catalogPath != "" {
-		if objects == nil {
-			return errors.New("message preparation requires object storage")
-		}
+	if keys != nil {
 		preparer := &preparation.Service{Repository: repository, Objects: objects, Keys: keys, Tracking: trackingPreparation}
 		prepareCtx, prepareCancel := context.WithCancel(ctx)
 		prepareDone := make(chan struct{})

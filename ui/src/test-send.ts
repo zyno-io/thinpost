@@ -87,7 +87,7 @@ export function useTestSend(options: TestSendOptions) {
             if (isUnmounted || mine !== seq) return;
             const list = data?.domains;
             if (!Array.isArray(list)) throw new InvalidResponseError();
-            domains.value = list.filter(d => d.active === true && typeof d.name === 'string').map(d => d.name);
+            domains.value = list.filter(d => d.active === true && !!d.active_key && typeof d.name === 'string').map(d => d.name);
         } catch (err) {
             if (isUnmounted || mine !== seq) return;
             domains.value = [];

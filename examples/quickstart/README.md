@@ -28,12 +28,16 @@ Tear everything down, including generated secrets and data, with
 | `https://localhost:8443/email` | Postmark-compatible submission endpoint (`X-Postmark-Server-Token`). Resend, SendGrid and Mailgun paths work too. |
 
 The stack seeds one app, **Quickstart**, with the sender domain
-`quickstart.example` (DKIM selector `mail1`) and the recipient
-`demo@quickstart.example`. Create an API key for the app in the console
-(Applications), publish the domain's ownership TXT in the local zone with
-`docker compose run --rm --no-deps --entrypoint sh pki-init /qs/zone-add.sh <name> <value>`
-(the name may be the relative `_thinpost` or the full `_thinpost.quickstart.example` the console
-shows, with or without a trailing dot),
+`quickstart.example` and the recipient `demo@quickstart.example`. The domain
+has no key yet: Thinpost generates its DKIM key when you add the domain. Create
+an API key for the app in the console (Applications), add `quickstart.example`
+under Sending domains, publish the DKIM record it shows in the local zone with
+`docker compose run --rm --no-deps --entrypoint sh pki-init /qs/zone-add.sh '<name>' '<value>'`
+(the name may be the relative `thinpost1._domainkey` or the full
+`thinpost1._domainkey.quickstart.example` the console shows, with or without a
+trailing dot; keep the single quotes and give the unsplit value, as the script
+splits it into 255-character strings itself and replaces any record already at
+that name),
 verify the domain in the console, then send:
 
 ```sh
@@ -42,7 +46,8 @@ curl -sk https://localhost:8443/email \
   -d '{"From":"hello@quickstart.example","To":"demo@quickstart.example","Subject":"Hi","TextBody":"Hello"}'
 ```
 
-`smoke.sh` does all of that, plus the dev login, and also checks the delivered
+`smoke.sh` does all of that (adding the domain, publishing the returned DKIM record
+in the zone, verifying), plus the dev login, and also checks the delivered
 message's `DKIM-Signature` against the local DNS and reads `delivered` back from
 the operator API. It then sends over SMTP on 587 (STARTTLS) and 465 (implicit
 TLS) with a freshly created SMTP credential, which it revokes again on exit,
@@ -81,7 +86,7 @@ The message appears in Mailpit once delivered.
 | `postgres`, `s3` | PostgreSQL 18 and the MiniStack S3 emulator. |
 | `tools-smtp`, `tools-dns` | Helpers for `smoke.sh` (profile `tools`): `curl` on the Edge's public network for SMTP submission, and DKIM verification through the local DNS. |
 | `mailpit` | The "remote" mail server; offers STARTTLS with a certificate for `mx.quickstart.example`. |
-| `coredns` | Authoritative DNS for `quickstart.example` (MX, SPF, DKIM, ownership TXT). |
+| `coredns` | Authoritative DNS for `quickstart.example` (MX, SPF, DMARC, and the DKIM TXT that `zone-add.sh` adds). |
 | `devidp` | Development-only OpenID Connect issuer, `examples/quickstart/devidp`. Refuses to start without `--insecure-dev-only`; built only by this stack's Dockerfile, never by a release target. |
 | `caddy` | HTTPS front door on one origin: `/idp/*` to `devidp`, everything else to `control`. |
 | `pki-init`, `db-init` | One-shot: generate keys, certificates and the zone; then `bootstrap-database`, `migrate`, `grant-runtime` and open the admission gate (`recovery begin`, `quarantine`, `open`). |
@@ -121,9 +126,10 @@ The message appears in Mailpit once delivered.
   pause container only).
 - **S3 survives restarts.** MiniStack keeps data in memory unless both
   `S3_PERSIST` and `PERSIST_STATE` are set; they are, with named volumes.
-- **Signing catalog needs the app ID at start-up**, so `db-init` seeds the
-  Quickstart app with a fixed ID and non-zero quotas (new apps refuse all
-  submissions until quotas are set) instead of creating it through the API.
+- **`db-init` seeds the Quickstart app** with a fixed ID and non-zero quotas
+  (new apps refuse all submissions until quotas are set) instead of creating it
+  through the API. The DKIM key is not seeded: control generates it when the
+  domain is added, and `smoke.sh` publishes its record in the zone.
 - **The release control image has no shell**, and it needs the Edge journal ID
   in its environment. A static `busybox` copied into the `pki` volume runs
   `run-control.sh`, which only reads generated values and `exec`s the binary.

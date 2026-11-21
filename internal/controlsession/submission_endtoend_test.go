@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
@@ -170,7 +169,7 @@ func (d *e2eDialer) Dial(_ context.Context, _, _ netip.Addr, _, _ string) (net.C
 			}
 			wire := bytes.ReplaceAll(body, []byte("\n"), []byte("\r\n"))
 			results, verifyErr := dkim.VerifyWithOptions(bytes.NewReader(wire), &dkim.VerifyOptions{LookupTXT: func(name string) ([]string, error) {
-				if name != "mail1._domainkey.example.com" {
+				if name != "thinpost1._domainkey.example.com" {
 					return nil, errors.New("unexpected signing domain")
 				}
 				return []string{d.dkimRecord}, nil
@@ -294,7 +293,7 @@ func newSubmissionRig(t *testing.T, opts rigOptions) *subRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.repo = &postgres.Repository{DB: runtimeDB, Generation: generation, Objects: r.objects}
+	r.repo = &postgres.Repository{DB: runtimeDB, Generation: generation, Objects: r.objects, DKIMKeys: keyring}
 	r.gate = &commitGate{Repository: r.repo, entered: make(chan struct{}, 1), release: make(chan struct{})}
 
 	env := map[string]string{"THINPOST_RECIPIENT_POLICY": "unrestricted"}
@@ -313,16 +312,8 @@ func newSubmissionRig(t *testing.T, opts rigOptions) *subRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signingKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	public, err := x509.MarshalPKIXPublicKey(&signingKey.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dkimRecord := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(public)
-	keys, err := signing.New(r.repo, integrationDNS{record: dkimRecord}, []signing.Entry{{AppID: r.app, Domain: "example.com", Selector: "mail1", Signer: signingKey}})
+	dkimRecord := activateTestDKIMKey(t, ctx, r.repo, r.app, "example.com")
+	keys, err := signing.New(r.repo, keyring, integrationDNS{record: dkimRecord})
 	if err != nil {
 		t.Fatal(err)
 	}
