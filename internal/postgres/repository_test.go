@@ -677,7 +677,10 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if _, err := repo.ActiveSigningKey(ctx, app, "signing.example"); !errors.Is(err, dkimkey.ErrNoKey) {
 			t.Fatal("deactivated domain signs", err)
 		}
-		if _, err := db.ExecContext(ctx, `UPDATE sender_domains SET active=true WHERE app_id=$1 AND domain='signing.example'; UPDATE apps SET active=false WHERE id=$1`, app); err != nil {
+		if _, err := db.ExecContext(ctx, `UPDATE sender_domains SET active=true WHERE app_id=$1 AND domain='signing.example'`, app); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE apps SET active=false WHERE id=$1`, app); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := repo.ActiveSigningKey(ctx, app, "signing.example"); !errors.Is(err, dkimkey.ErrNoKey) {
