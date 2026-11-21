@@ -26,24 +26,27 @@ func readyFor(t *testing.T, s *Server, ctx context.Context) *controlv1.Ready {
 	return ready
 }
 
-func TestReadyCarriesAdvertisedSourcesAndBounceDomains(t *testing.T) {
+func TestReadyCarriesAdvertisedSourcesAndHostnames(t *testing.T) {
 	s, _, _, ctx := setup(t, true)
-	s.Advertise([]string{"45.0.1.22", "45.0.0.10"}, []string{"smtp.example", "smtp.hosting.example"}, []string{"bounce.example", "bounce.hosting.example"})
+	s.Advertise([]string{"45.0.1.22", "45.0.0.10"}, []string{"smtp.example", "smtp.hosting.example"})
 	ready := readyFor(t, s, ctx)
-	if !reflect.DeepEqual(ready.SourceAddresses, []string{"45.0.1.22", "45.0.0.10"}) || !reflect.DeepEqual(ready.BounceDomains, []string{"bounce.example", "bounce.hosting.example"}) {
+	if !reflect.DeepEqual(ready.SourceAddresses, []string{"45.0.1.22", "45.0.0.10"}) {
 		t.Fatalf("ready reported %v %v", ready.SourceAddresses, ready.BounceDomains)
+	}
+	if len(ready.BounceDomains) != 0 {
+		t.Fatalf("ready still sends the deprecated bounce_domains: %v", ready.BounceDomains)
 	}
 	if !reflect.DeepEqual(ready.SourceHostnames, []string{"smtp.example", "smtp.hosting.example"}) {
 		t.Fatalf("ready reported hostnames %v", ready.SourceHostnames)
 	}
 }
 
-// A worker that never advertises reports nothing, which control reads as a
-// legacy worker.
-func TestReadyWithoutAdvertiseIsLegacyShaped(t *testing.T) {
+// A worker that never advertises reports nothing, and control sends it no
+// deliveries.
+func TestReadyWithoutAdvertiseReportsNothing(t *testing.T) {
 	s, _, _, ctx := setup(t, true)
 	ready := readyFor(t, s, ctx)
-	if len(ready.SourceAddresses) != 0 || len(ready.BounceDomains) != 0 || len(ready.SourceHostnames) != 0 {
+	if len(ready.SourceAddresses) != 0 || len(ready.SourceHostnames) != 0 {
 		t.Fatal("an unconfigured worker advertised sources")
 	}
 }

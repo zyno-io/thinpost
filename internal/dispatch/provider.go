@@ -104,16 +104,16 @@ func (p *Provider) prepare(ctx context.Context, claim delivery.Claim, caps deliv
 	if claim.ResolvedAddress != "" && (!caps.Has(claim.ResolvedAddress) || claim.SourceAddress != claim.ResolvedAddress) {
 		return nil, nil, errors.New("delivery source is not available on this worker")
 	}
-	sent, ok := caps.Primary()
-	if claim.SourceAddress != "" || claim.HeloName != "" {
-		if claim.SourceAddress == "" || claim.HeloName == "" {
-			return nil, nil, errors.New("delivery source is not available on this worker")
-		}
-		if sent, ok = caps.Source(claim.SourceAddress); !ok || claim.HeloName != sent.Hostname {
-			return nil, nil, errors.New("delivery source is not available on this worker")
-		}
+	// Every delivery names its source and HELO name; the worker refuses one
+	// that doesn't.
+	if claim.SourceAddress == "" || claim.HeloName == "" {
+		return nil, nil, errors.New("delivery source is not available on this worker")
 	}
-	if !ok || claim.BounceDomain == "" || claim.BounceDomain != sent.Hostname {
+	sent, ok := caps.Source(claim.SourceAddress)
+	if !ok || claim.HeloName != sent.Hostname {
+		return nil, nil, errors.New("delivery source is not available on this worker")
+	}
+	if claim.BounceDomain == "" || claim.BounceDomain != sent.Hostname {
 		return nil, nil, errors.New("delivery bounce domain is not available on this worker")
 	}
 	source, err := p.Objects.Get(ctx, claim.SourceKey, 16<<20)

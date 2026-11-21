@@ -523,7 +523,7 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	edge.Advertise([]string{"45.0.1.22"}, []string{"bounce.example.com"}, []string{"bounce.example.com"})
+	edge.Advertise([]string{"45.0.1.22"}, []string{"bounce.example.com"})
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(serverTLS)), grpc.MaxRecvMsgSize(128<<10), grpc.MaxSendMsgSize(128<<10))
 	controlv1.RegisterEdgeControlServer(server, edge)

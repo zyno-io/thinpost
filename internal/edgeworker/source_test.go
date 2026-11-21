@@ -14,21 +14,17 @@ var (
 	testHostnames = []string{"smtp.sender.example", "smtp.hosting.example"}
 )
 
-func TestExecuteUsesPrimaryAndOwnHostnameWhenSourceFieldsAreEmpty(t *testing.T) {
+// A start with neither source field is refused like any other bad source: the
+// worker no longer defaults to its primary address.
+func TestExecuteRefusesStartWithoutSourceFields(t *testing.T) {
 	j, fence, start, mime := setup(t)
+	start.SourceAddress, start.HeloName = "", ""
 	dialer := &fakeDialer{}
 	worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: testSources, SourceHostnames: testHostnames}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	result, err := worker.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)
-	if err != nil || result.Outcome != controlv1.DeliveryOutcome_DELIVERY_OUTCOME_ACCEPTED {
-		t.Fatalf("%+v %v", result, err)
-	}
-	if err = <-dialer.serverDone; err != nil {
-		t.Fatal(err)
-	}
-	if dialer.source.IsValid() || dialer.helo != "smtp.sender.example" {
-		t.Fatalf("legacy delivery used source %v helo %q", dialer.source, dialer.helo)
+	permits := 0
+	result, err := worker.Execute(context.Background(), fence, start, mime, func() bool { return true }, func(context.Context, *controlv1.DeliveryStart) error { permits++; return nil })
+	if err != nil || result.Outcome != controlv1.DeliveryOutcome_DELIVERY_OUTCOME_REJECTED || result.SmtpCode != 0 || permits != 0 || dialer.dials != 0 {
+		t.Fatalf("outcome %v permits %d dials %d err %v", result.GetOutcome(), permits, dialer.dials, err)
 	}
 }
 

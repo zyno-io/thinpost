@@ -366,7 +366,7 @@ func newSubmissionRig(t *testing.T, opts rigOptions) *subRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.edge.Advertise([]string{"45.0.1.22"}, []string{"bounce.example.com"}, []string{"bounce.example.com"})
+	r.edge.Advertise([]string{"45.0.1.22"}, []string{"bounce.example.com"})
 	if err = r.edge.EnableSubmission(587, 465); err != nil {
 		t.Fatal(err)
 	}

@@ -89,10 +89,11 @@ func TestReservedJournalRecordsSMTPAcceptanceOnFullFilesystem(t *testing.T) {
 	mime := []byte("Subject: test\r\n\r\nbody\r\n")
 	digest := sha256.Sum256(mime)
 	start := &controlv1.DeliveryStart{AttemptId: "attempt", DeliveryId: "delivery", Epoch: 1,
+		SourceAddress: testSources[0].String(), HeloName: testHostnames[0],
 		MxName: "mx.example", DestinationIp: "8.8.8.8", EnvelopeFrom: "bounce@example.com",
 		Recipient: "to@example.net", ExpectedSize: uint64(len(mime)), Sha256: digest[:]}
 	dialer := &fillingDialer{dir: dir, limit: fillerLimit}
-	worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example"}
+	worker := &Worker{Journal: j, Dialer: dialer, HeloName: "smtp.sender.example", Sources: testSources, SourceHostnames: testHostnames}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	result, err := worker.Execute(ctx, fence, start, mime, func() bool { return true }, allowStart)

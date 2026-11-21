@@ -151,7 +151,7 @@ If your bounce domain or inbound MX host was a name other than the main IP's HEL
 
 If they were already the same name, as in the current examples, nothing changes.
 
-The edge chart has the matching change: `sourceAddress`, `smtpHostname`, `bounceDomain`, `additionalSources` and `additionalBounceDomains` are replaced by one `addresses` list (see [Helm: Edge](/deploy/helm-edge#sending-addresses)). The new edge accepts bounces at each address's HELO name only, and sends the same list as its `bounce_domains`, so an older control plane keeps working. A control plane older than schema 45 that still has a global bounce domain other than the main IP's HELO name would issue return paths the new edge refuses, so upgrade the control plane first in that case, or change the bounce domain to the HELO name before the edge upgrade.
+The edge chart has the matching change: `sourceAddress`, `smtpHostname`, `bounceDomain`, `additionalSources` and `additionalBounceDomains` are replaced by one `addresses` list (see [Helm: Edge](/deploy/helm-edge#sending-addresses)). The new edge accepts bounces at each address's HELO name only, and no longer sends `bounce_domains` in its readiness. It also requires every delivery to name a source address and HELO name, so it needs a control plane that addresses each delivery from the edge's report (schema 45 or later): an older control plane would send deliveries without them, and this edge would refuse each one. Upgrade the control plane first.
 
 ## Upgrading the edge
 

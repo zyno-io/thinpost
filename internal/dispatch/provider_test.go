@@ -101,7 +101,7 @@ func setup(t *testing.T) (*Provider, *repo, *objects, postgres.ControllerLease) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &repo{claim: delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", EnhancedProtection: true, BounceDomain: primaryHost}}
+	r := &repo{claim: delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", EnhancedProtection: true, SourceAddress: primaryAddr.String(), HeloName: primaryHost, BounceDomain: primaryHost}}
 	o := &objects{source: source, mime: []byte("signed MIME")}
 	return &Provider{Repository: r, Objects: o, Routes: routes{}, Envelopes: envelopes{}, Recipients: allowRecipients(true)}, r, o, postgres.ControllerLease{WorkerID: "worker", Epoch: 4}
 }

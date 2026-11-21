@@ -441,7 +441,7 @@ func TestOldShapeOpenAndReadyInterwork(t *testing.T) {
 	if err = proto.Unmarshal(oldWire, &decoded); err != nil || len(decoded.Capabilities) != 1 {
 		t.Fatalf("unknown field not preserved: %v %v", err, decoded.Capabilities)
 	}
-	newReady := &controlv1.Ready{WorkerId: "worker", Epoch: 4, SessionId: inboundMessageID, ProtocolVersion: edgeprotocol.Version, Capabilities: []string{edgeprotocol.CapInbound}, BounceDomains: []string{"bounce.example"}}
+	newReady := &controlv1.Ready{WorkerId: "worker", Epoch: 4, SessionId: inboundMessageID, ProtocolVersion: edgeprotocol.Version, Capabilities: []string{edgeprotocol.CapInbound}}
 	wire, err = proto.Marshal(newReady)
 	if err != nil {
 		t.Fatal(err)

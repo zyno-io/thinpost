@@ -128,7 +128,7 @@ func run() error {
 		sources = append(sources, l.Address.String())
 		hostnames = append(hostnames, l.Hostname)
 	}
-	edge.Advertise(sources, hostnames, c.BounceDomains())
+	edge.Advertise(sources, hostnames)
 	// Inbound mail for app receiving domains: the routing snapshot and the
 	// message handoff come from the control plane over the existing stream; the
 	// worker holds no spool and logs only fixed counters.
