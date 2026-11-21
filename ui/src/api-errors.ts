@@ -35,6 +35,13 @@ export function apiErrorCode(err: unknown): string | undefined {
     return typeof code === 'string' && /^[a-z_]+$/.test(code) ? code : undefined;
 }
 
+/** Returns the `reason` from a failed call's JSON body (for example `different_key` for a DKIM record check), if it has one. */
+export function apiErrorReason(err: unknown): string | undefined {
+    if (!(err instanceof OpenApiError)) return undefined;
+    const reason = (err.body as { reason?: unknown } | null | undefined)?.reason;
+    return typeof reason === 'string' && /^[a-z_]+$/.test(reason) ? reason : undefined;
+}
+
 /** Returns the HTTP status of a failed API call, if the server responded. */
 export function apiErrorStatus(err: unknown): number | undefined {
     return err instanceof OpenApiError ? err.response?.status : undefined;

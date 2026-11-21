@@ -71,7 +71,7 @@ type SMTPSigningReady struct {
 }
 
 // SMTPSettings is the From policy. SigningReady lists the domain the policy
-// targets; it is null when this deployment has no signing catalog and empty
+// targets; it is null when this deployment has no object keyring (no DKIM keys) and empty
 // when the policy targets no domain.
 type SMTPSettings struct {
 	From         SMTPFromPolicy     `json:"from"`
@@ -319,7 +319,7 @@ func (h *Handler) updateAppSMTPSettings(w http.ResponseWriter, r *http.Request, 
 }
 
 // smtpSettings adds the signing check for the domain the policy targets. It is
-// null without a signing catalog and empty when the policy targets no domain.
+// null without an object keyring and empty when the policy targets no domain.
 func (h *Handler) smtpSettings(ctx context.Context, appID string, policy SMTPFromPolicy) SMTPSettings {
 	settings := SMTPSettings{From: policy}
 	if h.SigningReadiness == nil {

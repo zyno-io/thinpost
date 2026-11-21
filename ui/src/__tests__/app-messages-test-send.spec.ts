@@ -29,10 +29,11 @@ const { default: AppDomains } = await import('@/screens/app-domains.vue');
 const APP_ID = '0123456789abcdef0123456789abcdef';
 const MESSAGE_ID = 'abababababababababababababababab';
 const app = { id: APP_ID, name: 'Billing', active: true, created_at: '2026-10-01T12:00:00Z' };
+const key = { selector: 'thinpost1', dns_name: 'thinpost1._domainkey.example.com', dns_value: 'v=DKIM1; k=rsa; p=AAAA', activated_at: '2026-10-01T13:00:00Z' };
 const domains = [
-    { name: 'mail.example.com', active: true, created_at: '2026-10-01T12:00:00Z', verified_at: '2026-10-01T13:00:00Z' },
+    { name: 'mail.example.com', active: true, created_at: '2026-10-01T12:00:00Z', verified_at: '2026-10-01T13:00:00Z', active_key: key },
     { name: 'pending.example.net', active: false, created_at: '2026-10-01T12:00:00Z' },
-    { name: 'send.example.net', active: true, created_at: '2026-10-01T12:00:00Z', verified_at: '2026-10-01T13:00:00Z' }
+    { name: 'send.example.net', active: true, created_at: '2026-10-01T12:00:00Z', verified_at: '2026-10-01T13:00:00Z', active_key: key }
 ];
 const created = () => ({ data: { id: MESSAGE_ID, accepted_at: '2026-10-02T12:00:00Z' }, response: { status: 201 } });
 
@@ -114,7 +115,9 @@ describe('send test message from the messages tab', () => {
         expect(sendButton().attributes('disabled')).toBeUndefined();
     });
 
-    it('offers only active domains and shows the notes', async () => {
+    it('offers only active domains with a DKIM key and shows the notes', async () => {
+        const noKey = { name: 'nokey.example.org', active: true, created_at: '2026-10-01T12:00:00Z', verified_at: '2026-10-01T13:00:00Z' };
+        api.listAppDomains.mockResolvedValue({ data: { domains: [...domains, noKey] } });
         await mountMessages();
         await sendButton().trigger('click');
         await flushPromises();
@@ -368,7 +371,7 @@ describe('console test tags in the message list', () => {
 });
 
 describe('send test from the sending domains tab', () => {
-    it('offers Send test on verified domains only and preselects the domain', async () => {
+    it('offers Send test on verified domains with a DKIM key only and preselects the domain', async () => {
         api.sendAppTestMessage.mockResolvedValue(created());
         const mounted = await mountAppRoute(`/apps/${APP_ID}/domains`, {
             'app-domains': AppDomains,

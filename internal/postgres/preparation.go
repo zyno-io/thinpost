@@ -249,6 +249,19 @@ func (r *Repository) CommitPreparation(ctx context.Context, claim preparation.Cl
 	if err != nil {
 		return err
 	}
+	// A rotation switch locks the domain row FOR UPDATE, which the share lock
+	// above waits for, so this sees the switch's result: a message signed by a
+	// key that is no longer active is not committed and is prepared again.
+	if claim.SigningKeyID != "" {
+		var keyActive bool
+		err = tx.QueryRowContext(ctx, `SELECT true FROM dkim_keys WHERE id=$1 AND app_id=$2 AND domain=$3 AND state='active'`, claim.SigningKeyID, claim.AppID, claim.SigningDomain).Scan(&keyActive)
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("signing key is no longer active")
+		}
+		if err != nil {
+			return err
+		}
+	}
 	var now time.Time
 	if err = tx.QueryRowContext(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
 		return err

@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -157,10 +156,28 @@ func (s *integrationObjects) Get(_ context.Context, key string, max int64) ([]by
 	return bytes.Clone(data), nil
 }
 
+// activateTestDKIMKey makes and activates the domain's first DKIM key through
+// the operator flow and returns the TXT record that publishes it.
+func activateTestDKIMKey(t *testing.T, ctx context.Context, repo *postgres.Repository, app, domain string) string {
+	t.Helper()
+	challenge, err := repo.CreateDKIMKey(ctx, "operator", app, domain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := repo.PendingDKIMKey(ctx, app, domain, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = repo.ActivateDKIMKey(ctx, "operator", app, domain, ref, false); err != nil {
+		t.Fatal(err)
+	}
+	return challenge.DNSValue
+}
+
 type integrationDNS struct{ record string }
 
 func (d integrationDNS) LookupTXT(_ context.Context, name string) ([]string, error) {
-	if name != "mail1._domainkey.example.com" {
+	if name != "thinpost1._domainkey.example.com" {
 		return nil, fmt.Errorf("unexpected DNS query")
 	}
 	return []string{d.record}, nil
@@ -300,7 +317,7 @@ func (d *integrationSMTPDialer) Dial(_ context.Context, _, address netip.Addr, _
 			}
 			wireMIME := bytes.ReplaceAll(body, []byte("\n"), []byte("\r\n"))
 			results, verifyErr := dkim.VerifyWithOptions(bytes.NewReader(wireMIME), &dkim.VerifyOptions{LookupTXT: func(name string) ([]string, error) {
-				if name != "mail1._domainkey.example.com" {
+				if name != "thinpost1._domainkey.example.com" {
 					return nil, errors.New("unexpected signing domain")
 				}
 				return []string{d.dkimRecord}, nil
@@ -408,7 +425,7 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := &postgres.Repository{DB: runtimeDB, Generation: testGeneration, Objects: objects}
+	repo := &postgres.Repository{DB: runtimeDB, Generation: testGeneration, Objects: objects, DKIMKeys: keyring}
 	policy, err := recipientpolicy.Load(func(key string) string {
 		if key == "THINPOST_RECIPIENT_POLICY" {
 			return "unrestricted"
@@ -433,16 +450,8 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 	if response.Code != 200 {
 		t.Fatalf("submission status %d", response.Code)
 	}
-	signingKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	public, err := x509.MarshalPKIXPublicKey(&signingKey.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dkimRecord := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(public)
-	keys, err := signing.New(repo, integrationDNS{record: dkimRecord}, []signing.Entry{{AppID: app, Domain: "example.com", Selector: "mail1", Signer: signingKey}})
+	dkimRecord := activateTestDKIMKey(t, ctx, repo, app, "example.com")
+	keys, err := signing.New(repo, keyring, integrationDNS{record: dkimRecord})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -984,7 +993,7 @@ func TestDevelopmentMailPipelineWithPostgres(t *testing.T) {
 			t.Fatal(readErr)
 		}
 		results, verifyErr := dkim.VerifyWithOptions(bytes.NewReader(mime), &dkim.VerifyOptions{LookupTXT: func(name string) ([]string, error) {
-			if name != "mail1._domainkey.example.com" {
+			if name != "thinpost1._domainkey.example.com" {
 				return nil, errors.New("unexpected signing domain")
 			}
 			return []string{dkimRecord}, nil

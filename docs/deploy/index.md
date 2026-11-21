@@ -43,7 +43,7 @@ flowchart LR
 
 | Component | Kubernetes object | Zone | Holds |
 | --- | --- | --- | --- |
-| Control plane | Deployment `thinpost-operator` (2 or more replicas) | Trusted | Every secret: database credentials, object keyring, DKIM keys, signing and fingerprint keys, the control client certificate |
+| Control plane | Deployment `thinpost-operator` (2 or more replicas) | Trusted | Every secret: database credentials, the object keyring (which also seals the DKIM keys held in the database), fingerprint keys, the control client certificate |
 | Migration and gate hooks | Helm hook Jobs, ServiceAccount `thinpost-migrate` | Trusted | The schema owner credential, mounted only in the Jobs |
 | Edge worker | Deployment `thinpost-edge-worker` (0 or 1 replica) | Edge | The journal, its control certificate, its public SMTP certificates. No database or object-storage credentials |
 | PostgreSQL | Yours | Trusted | Application state, queues, the admission gate |

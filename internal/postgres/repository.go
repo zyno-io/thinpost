@@ -16,6 +16,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/acceptance"
 	"github.com/zyno-io/thinpost/internal/admin"
 	"github.com/zyno-io/thinpost/internal/delivery"
+	"github.com/zyno-io/thinpost/internal/dkimkey"
 	"github.com/zyno-io/thinpost/internal/objectkey"
 	"github.com/zyno-io/thinpost/internal/submission"
 )
@@ -43,6 +44,10 @@ type Repository struct {
 	// WebhookDestinations is the operator's internal webhook exception list;
 	// nil accepts only public HTTPS endpoints.
 	WebhookDestinations *admin.WebhookDestinations
+
+	// DKIMKeys seals and opens the DKIM private keys (the object encryption
+	// keyring). Without it no key can be created or opened.
+	DKIMKeys dkimkey.Sealer
 }
 
 func (r *Repository) LookupKey(ctx context.Context, digest [32]byte) (submission.App, error) {

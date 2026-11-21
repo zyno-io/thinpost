@@ -93,17 +93,23 @@ KEY="$(jq -r '.secret // empty' <<<"$keyresp")"
 [ -n "$KEY" ] || fail "no API key in: $keyresp"
 echo "issued an API key"
 doms="$(api GET "/api/v1/apps/$APP/domains")" || fail "listing domains failed"; json "domain list" "$doms"
-verified="$(jq -r --arg d "$DOMAIN" '[.domains[] | select(.name==$d and .active)] | length' <<<"$doms")"
+verified="$(jq -r --arg d "$DOMAIN" '[.domains[] | select(.name==$d and .active and .active_key)] | length' <<<"$doms")"
 if [ "$verified" = 0 ]; then
-  chal="$(api POST "/api/v1/apps/$APP/domains" "{\"domain\":\"$DOMAIN\"}")" || fail "requesting the domain challenge failed"; json "domain challenge" "$chal"
+  # Adding the domain makes its DKIM key; publishing the returned record verifies the domain.
+  # Asking again for a domain still waiting for its record returns the same record.
+  chal="$(api POST "/api/v1/apps/$APP/domains" "{\"domain\":\"$DOMAIN\"}")" || fail "requesting the domain's DKIM record failed"; json "domain DKIM record" "$chal"
   name="$(jq -r .dns_name <<<"$chal")" value="$(jq -r .dns_value <<<"$chal")"
-  step "Publishing the ownership TXT ($name) in the local zone"
+  [ -n "$name" ] && [ -n "$value" ] || fail "no DKIM record in: $chal"
+  step "Publishing the DKIM TXT ($name) in the local zone, split into 255-character strings"
   compose run --rm --no-deps -T --entrypoint sh pki-init /qs/zone-add.sh "$name" "$value" || fail "could not update the zone"
-  # CoreDNS reloads the zone within a second or two; until then verify fails.
+  # CoreDNS reloads the zone within a second or two; until then verify answers 409 (not_found).
   verify_domain() { api POST "/api/v1/apps/$APP/domains/$DOMAIN/verify" >/dev/null 2>&1; }
-  retry 60 "domain verification" verify_domain
+  retry 60 "domain verification (the DKIM record to be found)" verify_domain
 fi
-echo "sender domain $DOMAIN verified"
+doms="$(api GET "/api/v1/apps/$APP/domains")" || fail "listing domains failed"; json "domain list" "$doms"
+SELECTOR="$(jq -r --arg d "$DOMAIN" '.domains[] | select(.name==$d and .active) | .active_key.selector // empty' <<<"$doms")"
+[ -n "$SELECTOR" ] || fail "$DOMAIN is not verified with an active DKIM key: $doms"
+echo "sender domain $DOMAIN verified by its DKIM record (selector $SELECTOR)"
 
 step "Sending through the Postmark-compatible API"
 resp="$(curl -sk -X POST "$BASE/email" -H "X-Postmark-Server-Token: $KEY" -H 'Content-Type: application/json' -H 'Accept: application/json' \
@@ -126,8 +132,8 @@ rawfile="$(mktemp)"
 curl -sf "$MAILPIT/api/v1/message/$mp_id/raw" -o "$rawfile" || fail "could not fetch the raw message from Mailpit"
 dkim="$(tr -d '\r' <"$rawfile" | awk 'BEGIN{h=0} /^$/{exit} /^DKIM-Signature:/{h=1} h&&/^[ \t]/{print; next} h&&!/^DKIM-Signature:/{h=0} /^DKIM-Signature:/{print}')"
 [ -n "$dkim" ] || fail "no DKIM-Signature header on the delivered message"
-grep -q "d=$DOMAIN" <<<"$dkim" && grep -q 's=mail1' <<<"$dkim" || fail "unexpected DKIM-Signature: $dkim"
-echo "DKIM-Signature present (d=$DOMAIN s=mail1)"
+grep -q "d=$DOMAIN" <<<"$dkim" && grep -q "s=$SELECTOR" <<<"$dkim" || fail "unexpected DKIM-Signature: $dkim"
+echo "DKIM-Signature present (d=$DOMAIN s=$SELECTOR)"
 
 step "Verifying the DKIM signature cryptographically against the local DNS"
 compose run --rm --no-deps -T --entrypoint dkimverify tools-dns <"$rawfile" || fail "DKIM verification failed"
@@ -203,7 +209,7 @@ for leg in "smtp://$SMTP_HOST:587 587 PLAIN starttls" "smtps://$SMTP_HOST:465 46
   grep -q "^Message-ID: <" <<<"$headers" || fail "no Message-ID on the delivered message (port $2)"
   if grep -q "client-$nonce@client.example.net" <<<"$headers"; then fail "the client's Message-ID was kept (port $2)"; fi
   grep -q "^Message-ID: <[^>]*@$DOMAIN>" <<<"$headers" || fail "the Message-ID is not Thinpost's (port $2): $(grep '^Message-ID' <<<"$headers")"
-  grep -q "d=$DOMAIN" <<<"$headers" || fail "no DKIM-Signature for $DOMAIN on the SMTP message (port $2)"
+  grep -q "d=$DOMAIN" <<<"$headers" && grep -q "s=$SELECTOR" <<<"$headers" || fail "no DKIM-Signature for $DOMAIN with selector $SELECTOR on the SMTP message (port $2)"
   compose run --rm --no-deps -T --entrypoint dkimverify tools-dns <"$rawfile" || fail "DKIM verification of the SMTP message failed (port $2)"
   echo "port $2: Bcc and the client Received header removed, Thinpost Message-ID set, DKIM verified"
 done

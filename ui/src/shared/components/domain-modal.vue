@@ -27,12 +27,13 @@
             <p :id="`${id}-hint`" class="hint" :class="{ invalid: result.error && touched }">
                 {{ result.error && touched ? result.error : 'Use the domain as plain letters and digits. For international names, use the xn-- form.' }}
             </p>
+            <p class="hint">Thinpost makes a DKIM key for this domain. You add its record to your DNS, and Thinpost verifies the domain when it finds it.</p>
         </div>
 
         <template #footer>
             <button type="button" class="btn" @click="emit('close')">Cancel</button>
             <button type="submit" class="btn primary" :disabled="isSubmitting">
-                {{ isSubmitting ? 'Working…' : 'Get TXT record' }}
+                {{ isSubmitting ? 'Working…' : 'Get DKIM record' }}
             </button>
         </template>
     </VfModal>

@@ -28,16 +28,16 @@ docker compose up -d --build --wait
 
 The first start builds the images, which takes several minutes; later starts reuse them and take about two. `--wait` returns once every service is healthy. Compose starts, in dependency order:
 
-1. a one-shot job that generates the development CA, certificates, DKIM key, key rings and the local DNS zone;
+1. a one-shot job that generates the development CA, certificates, key rings and the local DNS zone;
 2. PostgreSQL and an S3-compatible object store;
 3. a one-shot job that prepares the database (create roles, migrate, grant privileges), seeds one app and opens the admission gate;
 4. the control plane and the edge worker;
 5. a small DNS server for the `quickstart.example` zone, Mailpit, the development identity provider and an HTTPS front door.
 
-The stack seeds one app, **Quickstart**, with the sender domain `quickstart.example` (DKIM selector `mail1`) and the allowed recipient `demo@quickstart.example`. It already has sending limits, so it can submit as soon as you have a key.
+The stack seeds one app, **Quickstart**, with the allowed recipient `demo@quickstart.example`. It already has sending limits, so it can submit as soon as you have a key.
 
 ::: tip Prove it in one command
-`examples/quickstart/smoke.sh` runs every step below for you (sign-in, key, domain verification, send) and checks that the delivered message carries a valid `DKIM-Signature` and shows as delivered. It prints `SMOKE PASSED` at the end.
+`examples/quickstart/smoke.sh` runs every step below for you (sign-in, key, adding the domain and publishing its DKIM record, verification, send) and checks that the delivered message carries a valid `DKIM-Signature` and shows as delivered. It prints `SMOKE PASSED` at the end.
 :::
 
 ## 2. Trust the local certificate
@@ -57,14 +57,14 @@ Open `https://localhost:8443` and use the development sign-in button. You land o
 ## 4. Verify the domain and issue a key
 
 1. **Open the app.** Choose **Quickstart**.
-2. **Request the sender domain.** Under **Sending domains**, request `quickstart.example`. The console shows a TXT record name and value that prove you own the domain.
-3. **Publish the record** in the stack's DNS zone, replacing the two placeholders with the values the console shows:
+2. **Add the sender domain.** Under **Sending domains**, add `quickstart.example`. Thinpost generates its DKIM key, and the console shows the TXT record to publish. Publishing it verifies the domain.
+3. **Publish the DKIM record** in the stack's DNS zone, replacing the two placeholders with the values the console shows:
 
    ```sh
-   docker compose run --rm --no-deps --entrypoint sh pki-init /qs/zone-add.sh <name> <value>
+   docker compose run --rm --no-deps --entrypoint sh pki-init /qs/zone-add.sh '<name>' '<value>'
    ```
 
-   The name can be the full name the console shows or just the part before `.quickstart.example`.
+   The name can be the full name the console shows or just the part before `.quickstart.example`. Keep the single quotes (the value has spaces and semicolons) and paste the value as the console shows it, not the split form: the script splits it into 255-character strings itself, like a DNS provider would, and replaces any record already at that name.
 
 4. **Verify.** Choose **Verify** in the console. The domain becomes active.
 5. **Issue a key.** Under **API keys**, issue a key. Copy it now; it is shown once.
@@ -89,7 +89,7 @@ You get back a JSON response with a `MessageID`. That means the message is commi
 
 ## 6. See it arrive
 
-Open `http://localhost:8025`. Within a few seconds the message appears in Mailpit. Open it and look at the headers: you should see a `DKIM-Signature` with `d=quickstart.example` and `s=mail1`.
+Open `http://localhost:8025`. Within a few seconds the message appears in Mailpit. Open it and look at the headers: you should see a `DKIM-Signature` with `d=quickstart.example` and `s=thinpost1`.
 
 Back in the console, open the app's **Messages** tab. The message shows as delivered. The edge sent it to the local Mailpit server, which the quickstart allows as the only destination; nothing is routed off your machine.
 

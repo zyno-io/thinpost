@@ -4,8 +4,6 @@ package admin
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -342,7 +340,40 @@ type Domain struct {
 	Active     bool       `json:"active"`
 	CreatedAt  time.Time  `json:"created_at"`
 	VerifiedAt *time.Time `json:"verified_at,omitempty"`
+	// ActiveKey signs the domain's mail. PendingKey is a key waiting for its
+	// DNS record: the first key of a new domain, or the next key of a
+	// rotation. RetiredKey is the previous key whose record should stay in DNS
+	// for a while. A domain with none of them has no DKIM key yet.
+	ActiveKey  *DKIMKey        `json:"active_key,omitempty"`
+	PendingKey *DKIMKey        `json:"pending_key,omitempty"`
+	RetiredKey *DKIMRetiredKey `json:"retired_key,omitempty"`
 }
+
+// DKIMKey is a key Thinpost generated and the TXT record that publishes it.
+// PublishedAt is set on a pending key once its record has been seen in DNS.
+type DKIMKey struct {
+	Selector    string     `json:"selector"`
+	DNSName     string     `json:"dns_name"`
+	DNSValue    string     `json:"dns_value"`
+	PublishedAt *time.Time `json:"published_at,omitempty"`
+	ActivatedAt *time.Time `json:"activated_at,omitempty"`
+}
+
+// DKIMRetiredKey is a previous key: its private half is gone, and its record
+// stays useful until KeepRecordUntil for mail already queued.
+type DKIMRetiredKey struct {
+	Selector        string    `json:"selector"`
+	KeepRecordUntil time.Time `json:"keep_record_until"`
+}
+
+// DKIMKeyRef names a pending key and its public half (SPKI DER), so the DNS
+// check and the activation refer to the same key.
+type DKIMKeyRef struct {
+	Selector  string
+	PublicKey []byte
+}
+
+// DomainChallenge is the DKIM TXT record to publish for a pending key.
 type DomainChallenge struct {
 	Domain   Domain `json:"domain"`
 	DNSName  string `json:"dns_name"`
@@ -389,8 +420,19 @@ type Store interface {
 	RetryPreparation(context.Context, string, string, string) error
 	ListDomains(context.Context, string) ([]Domain, error)
 	RequestDomain(context.Context, string, string, string) (DomainChallenge, error)
-	DomainChallenge(context.Context, string, string) (Domain, [32]byte, error)
-	VerifyDomain(context.Context, string, string, string, [32]byte) (Domain, error)
+	// CreateDKIMKey makes the domain's next pending key (a first key for a
+	// domain without one, or a rotation); ErrConflict when one is pending.
+	CreateDKIMKey(ctx context.Context, actor, appID, domain string) (DomainChallenge, error)
+	// PendingDKIMKey returns the pending key to check in DNS; an empty
+	// selector means the domain's only pending key. ErrConflict when there is none.
+	PendingDKIMKey(ctx context.Context, appID, domain, selector string) (DKIMKeyRef, error)
+	// ActivateDKIMKey turns a pending key whose record was found in DNS into the
+	// signing key. With no active key it also verifies the domain. With one,
+	// switchActive=false only records that the record was seen, and true retires
+	// (and shreds) the active key.
+	ActivateDKIMKey(ctx context.Context, actor, appID, domain string, key DKIMKeyRef, switchActive bool) (Domain, error)
+	// CancelDKIMKey deletes a pending key; ErrNotFound when it is not pending.
+	CancelDKIMKey(ctx context.Context, actor, appID, domain, selector string) error
 }
 type Handler struct {
 	Authenticator Authenticator
@@ -414,7 +456,7 @@ type Handler struct {
 	// test-send route answers 503.
 	TestMessages TestMessageSubmitter
 	// SigningReadiness reports whether mail from a domain would be DKIM-signed
-	// now; nil when this deployment has no signing catalog.
+	// now; nil when this deployment has no object keyring (no DKIM keys).
 	SigningReadiness SigningReadiness
 	// Runtime is the serving replica's startup configuration.
 	Runtime *RuntimeInfo
@@ -646,58 +688,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if len(path) == 8 && path[5] == "domains" && path[7] == "verify" {
-		if r.Method != http.MethodPost {
-			method(w, "POST")
+	if len(path) >= 8 && len(path) <= 10 && path[5] == "domains" {
+		if h.domainKeyRoute(w, r, principal.Subject, appID, path[6:]) {
 			return
 		}
-		if r.URL.RawQuery != "" || r.ContentLength > 0 || len(r.TransferEncoding) > 0 {
-			fail(w, http.StatusBadRequest)
-			return
-		}
-		domain, ok := NormalizeDomain(path[6])
-		if !ok {
-			fail(w, http.StatusBadRequest)
-			return
-		}
-		current, digest, err := h.Store.DomainChallenge(r.Context(), appID, domain)
-		if err != nil {
-			storeError(w, err)
-			return
-		}
-		if current.Active {
-			respond(w, http.StatusOK, current)
-			return
-		}
-		if h.DNS == nil {
-			fail(w, http.StatusServiceUnavailable)
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		records, err := h.DNS.LookupTXT(ctx, "_thinpost."+domain)
-		cancel()
-		if err != nil {
-			fail(w, http.StatusServiceUnavailable)
-			return
-		}
-		matched := false
-		for _, record := range records {
-			hash := sha256.Sum256([]byte(record))
-			if subtle.ConstantTimeCompare(hash[:], digest[:]) == 1 {
-				matched = true
-			}
-		}
-		if !matched {
-			fail(w, http.StatusConflict)
-			return
-		}
-		verified, err := h.Store.VerifyDomain(r.Context(), principal.Subject, appID, domain, digest)
-		if err != nil {
-			storeError(w, err)
-			return
-		}
-		respond(w, http.StatusOK, verified)
-		return
 	}
 	if len(path) == 10 && path[5] == "messages" && opaqueID(path[6]) && path[7] == "deliveries" && opaqueID(path[8]) && path[9] == "retry-policy-hold" {
 		if r.Method != http.MethodPost {

@@ -30,7 +30,7 @@ An administrator adds a receiving domain in the console (app, **Inbound**, **Add
 1. Publish the TXT record and verify the domain.
 2. Only then publish the MX record. Until the domain is verified the edge refuses mail for it with `550`, so senders get it back. (The one exception is a bounce address, `b+<token>@…`, which the edge accepts at any domain and checks against the message it belongs to.)
 
-Verification looks up the TXT record through the control plane's resolver, like sender domains, with no DNSSEC validation. It shares the `_thinpost` TXT name with [sender-domain](/guide/domains) verification, and one domain can carry both challenges. Asking again for a pending domain replaces the challenge.
+Verification looks up the TXT record through the control plane's resolver, with no DNSSEC validation. The `_thinpost` TXT name belongs to receiving-domain verification alone: [sender domains](/guide/domains) are verified by their DKIM record instead, so a domain can be both a sender domain and a receiving domain without the two sharing a challenge. Asking again for a pending domain replaces the challenge.
 
 The mail host the MX record names is the HELO name of the sending worker's main IP, as the worker reports it (see [Sending IPs](/guide/sending-ips)). Nothing is set up in control for it. The console shows the name only when public DNS confirms it both ways: the address's reverse DNS names it, and it points at the address. Until the worker has connected, or while DNS does not confirm the name, the console shows no MX record and the MX check is unavailable, and says why.
 

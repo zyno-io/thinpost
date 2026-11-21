@@ -153,6 +153,20 @@ If they were already the same name, as in the current examples, nothing changes.
 
 The edge chart has the matching change: `sourceAddress`, `smtpHostname`, `bounceDomain`, `additionalSources` and `additionalBounceDomains` are replaced by one `addresses` list (see [Helm: Edge](/deploy/helm-edge#sending-addresses)). The new edge accepts bounces at each address's HELO name only, and no longer sends `bounce_domains` in its readiness. It also requires every delivery to name a source address and HELO name, so it needs a control plane that addresses each delivery from the edge's report (schema 45 or later): an older control plane would send deliveries without them, and this edge would refuse each one. Upgrade the control plane first.
 
+## DKIM keys moved into the database
+
+Schema 46 moves DKIM keys out of the signing catalog and into the database. Control now generates an RSA-2048 key for each sender domain and seals it with the object-encryption keyring. Publishing the key's TXT record verifies the domain (see [Sender domains](/guide/domains)). This is a breaking change for existing deployments, and the release does **not** import catalog keys:
+
+- **Domains already verified have no key.** They stay verified, but mail from them is refused until a key exists and its record is in DNS. SMTP submission answers `451 4.3.5` and the client keeps the message queued. The HTTP API still accepts the message, but it cannot be prepared and shows as `preparation_failed` after its 12 attempts (retry it once the key is active, see [Recovery](/operations/recovery)).
+- **To fix a domain,** in the console open the app, **Sending domains**, choose **Create DKIM key** for the domain, publish the TXT record it shows (`thinpost1._domainkey.<domain>`), then choose **Verify**. Do this for every sender domain right after the upgrade; mail from a domain starts signing as soon as its key is verified. The new records use their own `thinpostN` selectors, so the old catalog records can stay in DNS while mail already prepared with those keys is still retried.
+- **The old catalog and key files are not read.** `THINPOST_CONTROL_SIGNING_CATALOG` is ignored if still set, and the chart no longer mounts `thinpost-signing-catalog` or `thinpost-dkim`. Remove the variable, the ConfigMap and the Secret when convenient. Keep the old private keys until you have confirmed mail signs with the new ones; old selectors' DNS records can stay for the usual retry window so mail already prepared still verifies.
+- **Domains still waiting for the old `_thinpost` challenge** lose it. They get a DKIM record instead; open the domain and create a key. Receiving-domain (inbound) verification keeps its own `_thinpost` TXT name.
+- **Signing now needs the object-encryption keyring** (`THINPOST_OBJECT_KEYRING_FILE`), which every deployment with object storage already has. Keep every keyring version that sealed a DKIM key for as long as that key is in use: a replica missing a version cannot open those keys and refuses to sign. See [Rotation](/operations/rotation#dkim-keys).
+
+API change: `POST .../domains/{domain}/verify` on a domain that is already verified and has no rotation under way now answers 409 (it used to answer 200). `POST .../domains` answers 503 on a deployment without object storage.
+
+The migration creates an empty table and drops the unused `sender_domains.verification_hash` column, which are catalog-only changes. It rolls forward only, like the others.
+
 ## Upgrading the edge
 
 The edge release is independent. Its Deployment uses `Recreate`, so an upgrade stops the old pod and starts a new one, and sending pauses briefly. Bounce senders retry. The control plane reconnects and the edge replays any results it has not had acknowledged.

@@ -610,6 +610,16 @@ paths:
         default: { $ref: '#/components/responses/Error' }
     post:
       operationId: requestAppDomain
+      description: >-
+        Adds a sender domain and generates its first DKIM key. Publishing the
+        returned TXT record at dns_name verifies the domain: verifyAppDomain
+        finds the record and activates the domain and the key. Asking again for a
+        domain with a pending key returns that pending record (201): the first
+        key's, or, during a rotation, the rotation's. 409 when the domain has an
+        active key and no pending one (use createAppDomainDkimKey to rotate).
+        503 when the deployment has no object storage (DKIM keys are sealed with
+        its encryption keyring). Audited as domain.dkim_key.created when a key is
+        made.
       requestBody:
         required: true
         content:
@@ -622,16 +632,10 @@ paths:
                 domain: { type: string, description: ASCII DNS domain; use punycode for IDNs. }
       responses:
         '201':
-          description: Publish this TXT challenge; a pending challenge can be reissued
+          description: The DKIM TXT record to publish
           content:
             application/json:
-              schema:
-                type: object
-                required: [domain, dns_name, dns_value]
-                properties:
-                  domain: { $ref: '#/components/schemas/Domain' }
-                  dns_name: { type: string }
-                  dns_value: { type: string }
+              schema: { $ref: '#/components/schemas/DomainChallenge' }
         default: { $ref: '#/components/responses/Error' }
   /apps/{appId}/domains/{domain}/verify:
     parameters:
@@ -642,12 +646,99 @@ paths:
         schema: { type: string }
     post:
       operationId: verifyAppDomain
+      description: >-
+        Looks up the pending key's TXT record in DNS. A domain's first key becomes
+        active and verifies the domain (audited as domain.verified). During a
+        rotation the pending key is only marked as published, ready for
+        activateAppDomainDkimKey; the active key keeps signing. 409 means the
+        record is not usable, with a reason: not_found, multiple_records,
+        different_key, testing_mode (t=y) or unsupported. 409 without a reason
+        means there is no pending key, which includes a domain that is already
+        verified and has no rotation under way (this used to answer 200). 503 when
+        the DNS lookup failed.
       responses:
         '200':
-          description: TXT challenge observed and domain activated
+          description: The record was found
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Domain' }
+        '409':
+          description: No pending key, or its record is not usable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DkimConflict' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/domains/{domain}/dkim-keys:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: domain
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: createAppDomainDkimKey
+      description: >-
+        Creates the domain's next pending DKIM key: the first key of a domain
+        verified before keys existed, or the start of a rotation. 409 when a key
+        is already pending. The old key keeps signing until the new one is
+        activated.
+      responses:
+        '201':
+          description: The DKIM TXT record to publish
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainChallenge' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/domains/{domain}/dkim-keys/{selector}/activate:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: domain
+        in: path
+        required: true
+        schema: { type: string }
+      - name: selector
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: activateAppDomainDkimKey
+      description: >-
+        Rechecks DNS now and switches signing to this pending key. In one
+        transaction the active key is retired and its private key deleted from the database, and
+        its record should stay in DNS until keep_record_until on the domain's
+        retired_key (at least 7 days, and at least the retry window plus 2 days).
+        409 with a reason as for verifyAppDomain. Audited as
+        domain.dkim_key.activated when the domain had no active key (its first key,
+        which also verifies the domain, audited as domain.verified unless the domain
+        was already verified), and as domain.dkim_key.switched when it replaced one.
+      responses:
+        '200':
+          description: Signing now uses the new key
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Domain' }
+        '409':
+          description: The key is not pending, or its record is not usable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DkimConflict' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/domains/{domain}/dkim-keys/{selector}:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: domain
+        in: path
+        required: true
+        schema: { type: string }
+      - name: selector
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      operationId: cancelAppDomainDkimKey
+      description: Deletes a pending key (404 when the key is not pending). Active and retired keys are never deleted. Audited as domain.dkim_key.cancelled.
+      responses:
+        '204': { description: The pending key was removed }
         default: { $ref: '#/components/responses/Error' }
   /apps/{appId}/inbound-limits:
     parameters:
@@ -727,7 +818,7 @@ paths:
                 required: [domain, dns_name, dns_value, mx_host_status]
                 properties:
                   domain: { $ref: '#/components/schemas/InboundDomain' }
-                  dns_name: { type: string, description: Shared with the sender-domain challenge (_thinpost.<domain>). }
+                  dns_name: { type: string, description: The _thinpost.<domain> TXT name, used only by receiving-domain verification. }
                   dns_value: { type: string, description: 'thinpost-inbound-verification=...' }
                   mx_host: { type: string, description: Absent unless mx_host_status is ok. }
                   mx_host_status: { $ref: '#/components/schemas/HostNameStatus' }
@@ -2034,12 +2125,55 @@ components:
           enum: [blocked_destination, resolution_failed, connection_failed, tls_failed, timeout]
     Domain:
       type: object
+      description: >-
+        active_key signs the domain's mail. pending_key waits for its DNS record
+        (the first key of an unverified domain, or the next key of a rotation).
+        retired_key is the previous key, whose record should stay in DNS until its
+        keep_record_until. A verified domain with none of them has no key yet and
+        cannot send until one is created.
       required: [name, active, created_at]
       properties:
         name: { type: string }
-        active: { type: boolean, description: Ownership TXT was observed; DKIM and deliverability may still be unconfigured. }
+        active: { type: boolean, description: The domain's DKIM record was found, so the domain is verified. Deliverability may still need SPF and DMARC. }
         created_at: { type: string, format: date-time }
         verified_at: { type: string, format: date-time }
+        active_key:
+          $ref: '#/components/schemas/DkimKey'
+        pending_key:
+          $ref: '#/components/schemas/DkimKey'
+        retired_key:
+          $ref: '#/components/schemas/DkimRetiredKey'
+    DkimKey:
+      type: object
+      required: [selector, dns_name, dns_value]
+      properties:
+        selector: { type: string, description: 'thinpost1, thinpost2, ... unique per domain across apps. A retired key''s selector is never reused; a cancelled pending key''s may be.' }
+        dns_name: { type: string, description: The TXT record name, <selector>._domainkey.<domain>. }
+        dns_value: { type: string, description: 'The TXT value: v=DKIM1; k=rsa; p=<public key>. Providers that cap a TXT string at 255 characters need it split into several strings of at most 255 characters.' }
+        published_at: { type: string, format: date-time, description: A pending key's record has been seen in DNS; it can be switched to. }
+        activated_at: { type: string, format: date-time }
+    DkimRetiredKey:
+      type: object
+      required: [selector, keep_record_until]
+      properties:
+        selector: { type: string }
+        keep_record_until: { type: string, format: date-time }
+    DomainChallenge:
+      type: object
+      required: [domain, dns_name, dns_value]
+      properties:
+        domain: { $ref: '#/components/schemas/Domain' }
+        dns_name: { type: string }
+        dns_value: { type: string }
+    DkimConflict:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        reason:
+          type: string
+          enum: [not_found, multiple_records, different_key, testing_mode, unsupported]
+          description: Why the DNS record cannot be used. Absent when there is no pending key.
     InboundDomain:
       type: object
       required: [name, state, created_at]
