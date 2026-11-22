@@ -75,7 +75,7 @@ func overrideProvider(t *testing.T, override bool, destination string) (*dispatc
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &overrideRepo{claim: delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", SourceAddress: "45.0.1.22", HeloName: "mx.example", BounceDomain: "mx.example", RecipientPolicyOverride: override}}
+	r := &overrideRepo{claim: delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", PreparedFormat: 1, SourceAddress: "45.0.1.22", HeloName: "mx.example", BounceDomain: "mx.example", RecipientPolicyOverride: override}}
 	routes := &mailroute.Resolver{DNS: overrideDNS{address: netip.MustParseAddr(destination)}, Filter: policy}
 	return &dispatch.Provider{Repository: r, Objects: overrideObjects{source: source}, Routes: routes, Envelopes: overrideEnvelopes{}, Recipients: denyAll{}}, r
 }

@@ -9,13 +9,17 @@ import (
 	"errors"
 
 	"github.com/zyno-io/thinpost/internal/admin"
+	"github.com/zyno-io/thinpost/internal/edgeprotocol"
+	"github.com/zyno-io/thinpost/internal/prepared"
 	"github.com/zyno-io/thinpost/internal/submission"
 	"github.com/zyno-io/thinpost/internal/webhook/format"
 )
 
 const (
 	maxSourceSize = 16 << 20
-	maxFinalSize  = 16 << 20
+	// maxFinalSize covers a full object (at most edgeprotocol.MaxMIMEBytes) and a
+	// recipe object (at most MaxMIMEBytes plus prepared.MaxOverhead).
+	maxFinalSize = int64(edgeprotocol.MaxMIMEBytes + prepared.MaxOverhead)
 )
 
 // Repository authorizes a content read and returns the object reference and
@@ -153,7 +157,9 @@ func (s *Service) ReadAttachment(ctx context.Context, actor, appID, messageID st
 }
 
 // ReadDeliveryHeaders returns the header fields of the signed per-recipient
-// MIME object in stored order. Only the header block is parsed and returned.
+// message in stored order. Only the header block is parsed and returned. A
+// delivery's object is either the complete message or a recipe, which holds the
+// exact header block; both give the same fields.
 func (s *Service) ReadDeliveryHeaders(ctx context.Context, actor, appID, messageID, deliveryID string) ([]admin.HeaderField, error) {
 	if !s.ready() {
 		return nil, errStorage
@@ -165,6 +171,13 @@ func (s *Service) ReadDeliveryHeaders(ctx context.Context, actor, appID, message
 	data, err := s.Objects.Get(ctx, key, maxFinalSize)
 	if err != nil {
 		return nil, errStorage
+	}
+	if prepared.IsRecipe(data) {
+		recipe, decodeErr := prepared.Decode(data)
+		if decodeErr != nil || recipe.DeliveryID() != deliveryID {
+			return nil, errStorage
+		}
+		data = recipe.Header()
 	}
 	headers, err := ParseHeaders(data)
 	if err != nil {

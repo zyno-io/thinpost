@@ -3,9 +3,12 @@ package preparation
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -18,6 +21,7 @@ import (
 	"github.com/emersion/go-msgauth/dkim"
 	"github.com/zyno-io/thinpost/internal/edgeprotocol"
 	"github.com/zyno-io/thinpost/internal/oplog"
+	"github.com/zyno-io/thinpost/internal/prepared"
 	"github.com/zyno-io/thinpost/internal/rawmime"
 	"github.com/zyno-io/thinpost/internal/submission"
 	"github.com/zyno-io/thinpost/internal/tracking"
@@ -67,11 +71,11 @@ func rawSource(t *testing.T, objects *fakeObjects, raw string, mutate func(*subm
 	}
 }
 
-func TestRawPreparationStoresIdenticalObjectsPerRecipient(t *testing.T) {
+func TestRawPreparationStoresARecipePerRecipient(t *testing.T) {
 	service, repo, objects, _ := setup(t)
 	rawSource(t, objects, rawMessage, nil)
 	// Tracking on the app side must not touch a raw message, and with one-click
-	// off nothing is added or removed, so every recipient's object is identical.
+	// off nothing is added or removed, so every recipient's message is identical.
 	service.Tracking = &TrackingConfig{Origin: "https://tracking.example.com", Links: preparationLinkKeys(t), EventLimit: 10, Objects: &fakeTrackingObjects{}}
 	if err := service.PrepareNext(context.Background()); err != nil {
 		t.Fatal(err)
@@ -79,16 +83,31 @@ func TestRawPreparationStoresIdenticalObjectsPerRecipient(t *testing.T) {
 	if repo.commits != 1 || len(repo.deliveries) != 3 || len(objects.final) != 3 {
 		t.Fatalf("%d commits, %d deliveries", repo.commits, len(repo.deliveries))
 	}
-	var first []byte
+	source, err := submission.DecodeSource(objects.source, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first, firstHeader []byte
 	for i, d := range repo.deliveries {
-		if d.RecipientIndex != i || d.Tracking != nil {
-			t.Fatal("index or tracking", i)
+		if d.RecipientIndex != i || d.Tracking != nil || d.Format != prepared.FormatRecipe {
+			t.Fatal("index, tracking or format", i, d.Format)
 		}
-		data := objects.final[d.ObjectKey]
+		object := objects.final[d.ObjectKey]
+		if !prepared.IsRecipe(object) {
+			t.Fatal("not a recipe object")
+		}
+		recipe, err := prepared.Decode(object)
+		if err != nil || recipe.DeliveryID() != d.ID || recipe.BaseSHA256() != source.RawHeader.RawSHA256 {
+			t.Fatalf("recipe: %v", err)
+		}
+		data, err := recipe.Assemble(source.Raw, source.RawHeader.RawSHA256)
+		if err != nil || !bytes.HasPrefix(data, recipe.Header()) || !bytes.HasSuffix(data, []byte("\r\n\r\nraw body\r\n")) {
+			t.Fatalf("assembled message: %v", err)
+		}
 		if first == nil {
-			first = data
-		} else if !bytes.Equal(first, data) {
-			t.Fatal("per-recipient objects differ")
+			first, firstHeader = data, recipe.Header()
+		} else if !bytes.Equal(first, data) || !bytes.Equal(firstHeader, recipe.Header()) {
+			t.Fatal("per-recipient messages differ")
 		}
 	}
 	if repo.deliveries[0].ObjectKey == repo.deliveries[1].ObjectKey || repo.deliveries[0].ID == repo.deliveries[1].ID {
@@ -107,6 +126,82 @@ func TestRawPreparationStoresIdenticalObjectsPerRecipient(t *testing.T) {
 	}
 }
 
+// An attachment is stored once, in the source: each recipient's object holds
+// only its headers.
+func TestRawPreparationRecipeIsMuchSmallerThanTheMessage(t *testing.T) {
+	service, repo, objects, keys := setup(t)
+	attachment := make([]byte, 1<<20)
+	if _, err := rand.Read(attachment); err != nil {
+		t.Fatal(err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(attachment)
+	var body strings.Builder
+	for len(encoded) > 76 {
+		body.WriteString(encoded[:76] + "\r\n")
+		encoded = encoded[76:]
+	}
+	body.WriteString(encoded + "\r\n")
+	raw := "From: Alice <a@example.com>\r\nTo: b@example.net\r\nCc: c@example.net\r\nSubject: report\r\nMIME-Version: 1.0\r\nContent-Type: application/octet-stream\r\nContent-Transfer-Encoding: base64\r\n\r\n" + body.String()
+	rawSource(t, objects, raw, nil)
+	if err := service.PrepareNext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var stored int
+	for _, d := range repo.deliveries {
+		object := objects.final[d.ObjectKey]
+		if len(object) > 8<<10 {
+			t.Fatalf("a recipe object is %d bytes", len(object))
+		}
+		stored += len(object)
+		if message := objects.message(t, d.ObjectKey); len(message) < 1<<20 || !bytes.Contains(message, []byte(raw[len(raw)-200:])) {
+			t.Fatal("the assembled message lacks the attachment")
+		}
+	}
+	if stored > 3*(8<<10) || len(objects.source) < 1<<20 {
+		t.Fatal(stored, len(objects.source))
+	}
+	// DKIM verifies over the assembled bytes, body hash included.
+	der, err := x509.MarshalPKIXPublicKey(&keys.key.Signer.(*rsa.PrivateKey).PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(der)
+	vs, err := dkim.VerifyWithOptions(bytes.NewReader(objects.message(t, repo.deliveries[2].ObjectKey)), &dkim.VerifyOptions{
+		LookupTXT: func(string) ([]string, error) { return []string{record}, nil },
+	})
+	if err != nil || len(vs) != 1 || vs[0].Err != nil {
+		t.Fatalf("%v %+v", err, vs)
+	}
+}
+
+func TestRecipeObjectSelfCheck(t *testing.T) {
+	raw := []byte("From: a@example.com\nSubject: x\n\nbody\nmore\n")
+	scan, err := rawmime.Scan(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed := append([]byte("DKIM-Signature: v=1\r\nFrom: a@example.com\r\n\r\n"), "body\r\nmore\r\n"...)
+	const id = "0123456789abcdef0123456789abcdef"
+	sum := sha256.Sum256(raw)
+	baseSHA := hex.EncodeToString(sum[:])
+	good := rawmime.Prepared{Message: signed, HeaderLen: len(signed) - len("body\r\nmore\r\n")}
+	if _, err = recipeObject(id, baseSHA, raw, scan.BodyStart, good); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		raw    []byte
+		signed rawmime.Prepared
+	}{
+		"the source is not the one signed": {[]byte("From: a@example.com\nSubject: x\n\nBODY\nmore\n"), good},
+		"the body differs":                 {raw, rawmime.Prepared{Message: append(append([]byte{}, signed[:good.HeaderLen]...), "body\r\nmoreX\r\n"...), HeaderLen: good.HeaderLen}},
+		"the header length is wrong":       {raw, rawmime.Prepared{Message: signed, HeaderLen: good.HeaderLen - 2}},
+	} {
+		if _, err = recipeObject(id, baseSHA, tc.raw, scan.BodyStart, tc.signed); err == nil {
+			t.Errorf("%s: stored", name)
+		}
+	}
+}
+
 func TestRawPreparationDKIMVerifies(t *testing.T) {
 	service, repo, objects, keys := setup(t)
 	rawSource(t, objects, rawMessage, nil)
@@ -118,7 +213,7 @@ func TestRawPreparationDKIMVerifies(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(der)
-	vs, err := dkim.VerifyWithOptions(bytes.NewReader(objects.final[repo.deliveries[0].ObjectKey]), &dkim.VerifyOptions{
+	vs, err := dkim.VerifyWithOptions(bytes.NewReader(objects.message(t, repo.deliveries[0].ObjectKey)), &dkim.VerifyOptions{
 		LookupTXT: func(domain string) ([]string, error) {
 			if domain != "mail._domainkey.example.com" {
 				return nil, errors.New("unexpected lookup")
@@ -174,7 +269,7 @@ func TestRawPreparationDate(t *testing.T) {
 			if err := service.PrepareNext(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			final := string(objects.final[repo.deliveries[0].ObjectKey])
+			final := string(objects.message(t, repo.deliveries[0].ObjectKey))
 			if got := strings.Count(final, "\r\nDate: "); got != 1 || !strings.Contains(final, "\r\nDate: "+tc.want+"\r\n") {
 				t.Fatalf("Date: want %q in\n%s", tc.want, final)
 			}
@@ -200,7 +295,7 @@ func TestRawPreparationRewrittenFrom(t *testing.T) {
 	if err := service.PrepareNext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	final := string(objects.final[repo.deliveries[0].ObjectKey])
+	final := string(objects.message(t, repo.deliveries[0].ObjectKey))
 	if !strings.Contains(final, "\r\nFrom: <noreply@example.com>\r\n") || strings.Contains(final, "x@example.org") {
 		t.Fatalf("From not rewritten:\n%s", final)
 	}
@@ -253,7 +348,7 @@ func TestPreparationAddsTraceField(t *testing.T) {
 			if err := service.PrepareNext(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			got := objects.final[repo.deliveries[0].ObjectKey]
+			got := objects.message(t, repo.deliveries[0].ObjectKey)
 			want := "Received: by mx.example.net (Thinpost)\r\n\twith " + tc.with + " id " + repo.claim.MessageID + ";\r\n\t" + repo.claim.AcceptedAt.UTC().Format(time.RFC1123Z) + "\r\n"
 			if !bytes.Contains(got, []byte(want)) || bytes.Count(got, []byte("Received:")) != 1 {
 				t.Fatalf("want %q in\n%s", want, got)
@@ -270,7 +365,7 @@ func TestPreparationAddsTraceField(t *testing.T) {
 		if err := service.PrepareNext(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if repo.commits != 1 || bytes.Contains(objects.final[repo.deliveries[0].ObjectKey], []byte("Received:")) {
+		if repo.commits != 1 || bytes.Contains(objects.message(t, repo.deliveries[0].ObjectKey), []byte("Received:")) {
 			t.Fatal("expected a committed message without a trace")
 		}
 	})
@@ -280,7 +375,7 @@ func TestPreparationAddsTraceField(t *testing.T) {
 		if err := service.PrepareNext(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(objects.final[repo.deliveries[0].ObjectKey], []byte("Received:")) {
+		if bytes.Contains(objects.message(t, repo.deliveries[0].ObjectKey), []byte("Received:")) {
 			t.Fatal("unexpected trace")
 		}
 	})
@@ -327,7 +422,7 @@ func TestRawOneClickGivesEachRecipientItsOwnLinkAndReplacesTheClients(t *testing
 	}
 	record := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(der)
 	for _, delivery := range repo.deliveries {
-		final := objects.final[delivery.ObjectKey]
+		final := objects.message(t, delivery.ObjectKey)
 		parsed, err := mail.ReadMessage(bytes.NewReader(final))
 		if err != nil {
 			t.Fatal(err)
@@ -378,7 +473,7 @@ func TestRawOneClickGivesEachRecipientItsOwnLinkAndReplacesTheClients(t *testing
 	}
 	// Each copy differs, so each is its own object; the body is the client's.
 	for _, delivery := range repo.deliveries {
-		if !bytes.HasSuffix(objects.final[delivery.ObjectKey], []byte("\r\n\r\nraw body\r\n")) {
+		if !bytes.HasSuffix(objects.message(t, delivery.ObjectKey), []byte("\r\n\r\nraw body\r\n")) {
 			t.Fatal("the body changed")
 		}
 	}
@@ -394,7 +489,7 @@ func TestRawOneClickAddsHeadersToAMessageWithoutThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, delivery := range repo.deliveries {
-		parsed, err := mail.ReadMessage(bytes.NewReader(objects.final[delivery.ObjectKey]))
+		parsed, err := mail.ReadMessage(bytes.NewReader(objects.message(t, delivery.ObjectKey)))
 		if err != nil || len(parsed.Header["List-Unsubscribe"]) != 1 || delivery.Forward != nil {
 			t.Fatal("expected one added header and no forward", err)
 		}
@@ -410,7 +505,7 @@ func TestRawOneClickUsesTheDeploymentOriginEvenWithATrackingDomain(t *testing.T)
 		t.Fatal(err)
 	}
 	for _, delivery := range repo.deliveries {
-		final := objects.final[delivery.ObjectKey]
+		final := objects.message(t, delivery.ObjectKey)
 		if bytes.Contains(final, []byte("links.example.com")) || !bytes.Contains(final, []byte("<https://tracking.example.com/t/u/v3/")) {
 			t.Fatal("the unsubscribe link left the deployment origin")
 		}
@@ -461,7 +556,7 @@ func TestRawOneClickIsSkippedWhenTheMessageCannotCarryTheHeaders(t *testing.T) {
 		t.Fatal("not committed")
 	}
 	for _, delivery := range repo.deliveries {
-		final := objects.final[delivery.ObjectKey]
+		final := objects.message(t, delivery.ObjectKey)
 		if len(final) > edgeprotocol.MaxMIMEBytes || !bytes.Contains(final, []byte("List-Unsubscribe: <mailto:u@example.com>\r\n")) || bytes.Contains(final, []byte("tracking.example.com")) || delivery.Forward != nil {
 			t.Fatal("the client's headers were not kept, or Thinpost's were added, or a forward was recorded", len(final), edgeprotocol.MaxMIMEBytes, bytes.Contains(final, []byte("List-Unsubscribe: <mailto:u@example.com>\r\n")), bytes.Contains(final, []byte("tracking.example.com")), delivery.Forward)
 		}

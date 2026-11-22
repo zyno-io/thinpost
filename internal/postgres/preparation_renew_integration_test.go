@@ -71,7 +71,7 @@ func TestRenewPreparationWithPostgres(t *testing.T) {
 	}
 	claim.SigningDomain = "example.com"
 	delivery := f.id()
-	if err = f.repo.CommitPreparation(ctx, claim, []preparation.Delivery{{ID: delivery, RecipientIndex: 0, ObjectKey: fixtureObjectKey("final", delivery)}}); err != nil {
+	if err = f.repo.CommitPreparation(ctx, claim, []preparation.Delivery{{Format: 1, ID: delivery, RecipientIndex: 0, ObjectKey: fixtureObjectKey("final", delivery)}}); err != nil {
 		t.Fatal(err)
 	}
 	if err = f.repo.RenewPreparation(ctx, claim, time.Minute); !errors.Is(err, preparation.ErrLostLease) {
@@ -95,7 +95,7 @@ func TestRenewPreparationWithPostgres(t *testing.T) {
 	}
 	claim.SigningDomain = "example.com"
 	late := f.id()
-	if err = f.repo.CommitPreparation(ctx, claim, []preparation.Delivery{{ID: late, RecipientIndex: 0, ObjectKey: fixtureObjectKey("final", late)}}); !errors.Is(err, preparation.ErrLostLease) {
+	if err = f.repo.CommitPreparation(ctx, claim, []preparation.Delivery{{Format: 1, ID: late, RecipientIndex: 0, ObjectKey: fixtureObjectKey("final", late)}}); !errors.Is(err, preparation.ErrLostLease) {
 		t.Fatal("expired claim committed", err)
 	}
 }

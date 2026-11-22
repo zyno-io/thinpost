@@ -24,7 +24,7 @@ func prepareWithLink(t testing.TB, raw, link string) ([]byte, PrepareInput) {
 		t.Fatal(err)
 	}
 	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a1", 16), Date: acceptedAt, Selector: "sel", Signer: testKey(t), ListUnsubscribe: link}
-	out, err := Prepare([]byte(raw), in)
+	out, err := prepareBytes([]byte(raw), in)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

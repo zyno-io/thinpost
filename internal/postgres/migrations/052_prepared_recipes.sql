@@ -1,0 +1,30 @@
+-- Schema 52: record how each delivery's final object is stored.
+--
+-- SMTP deliveries used to store a full signed copy of the message per
+-- recipient. They now store a small "recipe" (internal/prepared): the exact
+-- signed header block plus byte splices over the message's stored source,
+-- which control rebuilds at dispatch and checks by size and SHA-256 before
+-- sending. prepared_format says which form a delivery's object has:
+--   1  a complete signed MIME message (HTTP deliveries, and every delivery
+--      prepared before this release)
+--   2  a recipe over the message's raw (version 3) source
+-- Existing rows get 1 and their objects are not rewritten, so they send
+-- exactly as before. Dispatch fails closed when a row's format and its
+-- object's prefix disagree.
+--
+-- Deploy review (lock and rollout): the pre hook closes the gate before this
+-- runs, and pods of the previous schema generation are fenced by the closed
+-- gate, so none of them can claim a recipe it cannot read; no drain is needed.
+-- ADD COLUMN with a constant DEFAULT is catalog-only on PostgreSQL 11 and
+-- later (no rewrite, no table scan). The CHECK is added NOT VALID so it scans
+-- nothing; it is enforced for every later INSERT and UPDATE, and the column
+-- default already satisfies it for existing rows. Both statements take a brief
+-- ACCESS EXCLUSIVE lock on deliveries.
+-- Runtime grants: the runtime role already holds table-level SELECT, INSERT
+-- and UPDATE on deliveries, which cover the new column; the collector and
+-- retirement roles get nothing (the object collector reads only object keys).
+-- No routine or extension is installed.
+-- Recovery: the recovery chain stops at 28, so this is applied by the normal
+-- deploy after "recovery open". Roll forward only.
+ALTER TABLE deliveries ADD COLUMN prepared_format smallint NOT NULL DEFAULT 1;
+ALTER TABLE deliveries ADD CONSTRAINT deliveries_prepared_format CHECK (prepared_format IN (1,2)) NOT VALID;

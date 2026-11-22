@@ -470,7 +470,7 @@ func TestPreparationCommitRequiresTheSigningKeyToBeActive(t *testing.T) {
 	}
 	f.activate(app, "example.com", true)
 	id := strings.Repeat("9", 32)
-	deliveries := []preparation.Delivery{{ID: id, RecipientIndex: 0, ObjectKey: fixtureObjectKey("final", id)}}
+	deliveries := []preparation.Delivery{{Format: 1, ID: id, RecipientIndex: 0, ObjectKey: fixtureObjectKey("final", id)}}
 	err = f.repo.CommitPreparation(f.ctx, claim, deliveries)
 	if err == nil || errors.Is(err, preparation.ErrLostLease) {
 		t.Fatal("a message signed with a retired key was committed, or reported a lost lease instead of a retryable failure", err)

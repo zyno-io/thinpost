@@ -13,7 +13,7 @@ import (
 // when it is one of the worker's own names.
 func TestCustomBounceDomain(t *testing.T) {
 	const custom = "bounces.customer.example"
-	base := delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", EnhancedProtection: true,
+	base := delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", PreparedFormat: 1, EnhancedProtection: true,
 		SourceAddress: primaryAddr.String(), HeloName: primaryHost, BounceDomain: custom, BounceTarget: primaryHost}
 	anyDomain := func(c delivery.EdgeCapabilities) delivery.EdgeCapabilities { c.AnyBounceDomain = true; return c }
 	for name, tc := range map[string]struct {
@@ -60,7 +60,7 @@ func renamed(c delivery.EdgeCapabilities, index int, name string) delivery.EdgeC
 }
 
 func pinnedCustom() delivery.Claim {
-	return delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", EnhancedProtection: true,
+	return delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", PreparedFormat: 1, EnhancedProtection: true,
 		SourceAddress: hostingAddr.String(), ResolvedAddress: hostingAddr.String(), HeloName: hostingHost,
 		BounceDomain: "bounces.customer.example", BounceTarget: hostingHost}
 }

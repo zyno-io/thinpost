@@ -38,7 +38,7 @@ func reportedCaps(addresses ...netip.Addr) delivery.EdgeCapabilities {
 // the report; this is the assertion behind it, and the only guard for an old
 // worker that would sign off on fields it does not know.
 func TestSourceFieldsAreSetOnlyForAddressesTheWorkerReported(t *testing.T) {
-	base := delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", EnhancedProtection: true}
+	base := delivery.Claim{DeliveryID: "delivery", SourceKey: "source", FinalKey: "final", PreparedFormat: 1, EnhancedProtection: true}
 	pinned := base
 	pinned.SourceAddress, pinned.HeloName, pinned.BounceDomain, pinned.SourceName, pinned.ResolvedAddress = hostingAddr.String(), hostingHost, hostingHost, "hosting", hostingAddr.String()
 	unpinned := base

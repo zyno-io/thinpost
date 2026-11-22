@@ -75,7 +75,7 @@ func prepared(t testing.TB, raw string, mailFrom string) ([]byte, PrepareInput) 
 		t.Fatalf("DecideFrom: %v", err)
 	}
 	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a1", 16), Date: acceptedAt, Selector: "sel", Signer: testKey(t)}
-	out, err := Prepare([]byte(raw), in)
+	out, err := prepareBytes([]byte(raw), in)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -83,3 +83,9 @@ func prepared(t testing.TB, raw string, mailFrom string) ([]byte, PrepareInput) 
 }
 
 func readFixture(name string) ([]byte, error) { return os.ReadFile("testdata/" + name) }
+
+// prepareBytes is Prepare returning only the message.
+func prepareBytes(raw []byte, in PrepareInput) ([]byte, error) {
+	p, err := Prepare(raw, in)
+	return p.Message, err
+}

@@ -26,12 +26,14 @@ func TestFormats(t *testing.T) {
 	PreparationFailed(app, msg, "mime_build")
 	PreparationLeaseLost(app, msg)
 	Delivery(app, msg, del, OutcomeRouteRejected, 550, "hosting")
+	PreparedInvalid(app, msg, del)
 	want := []string{
 		"message app=" + app + " message=" + msg + " status=accepted",
 		"message app=" + app + " message=" + msg + " status=prepared",
 		"message app=" + app + " message=" + msg + " status=preparation_failed reason=mime_build",
 		"message app=" + app + " message=" + msg + " status=preparation_lease_lost",
 		"delivery app=" + app + " message=" + msg + " delivery=" + del + " status=route_rejected smtp=550 ip=hosting",
+		"prepared app=" + app + " message=" + msg + " delivery=" + del + " status=invalid",
 	}
 	if strings.Join(*lines, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("got\n%s", strings.Join(*lines, "\n"))

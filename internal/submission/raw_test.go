@@ -246,3 +246,33 @@ func TestRawSourceRefusesNonPlainRecipients(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRawHeaderTrackingFieldsAreReaderFirst(t *testing.T) {
+	h := rawHeader()
+	data, err := EncodeRawSource(h, []byte(rawMsg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Unset fields are not written, so a source written without them encodes to
+	// the same bytes as before the fields existed.
+	if bytes.Contains(data, []byte("track_")) {
+		t.Fatal("unset tracking fields were written")
+	}
+	src, err := DecodeSource(data, false)
+	if err != nil || src.RawHeader.TrackOpens || src.RawHeader.TrackClicks {
+		t.Fatalf("%+v %v", src.RawHeader, err)
+	}
+	again, err := EncodeRawSource(src.RawHeader, src.Raw)
+	if err != nil || !bytes.Equal(again, data) {
+		t.Fatal("re-encoding changed the object")
+	}
+	// A source that carries them is read.
+	h.TrackOpens, h.TrackClicks = true, true
+	data, err = EncodeRawSource(h, []byte(rawMsg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src, err = DecodeSource(data, false); err != nil || !src.RawHeader.TrackOpens || !src.RawHeader.TrackClicks {
+		t.Fatalf("%+v %v", src.RawHeader, err)
+	}
+}

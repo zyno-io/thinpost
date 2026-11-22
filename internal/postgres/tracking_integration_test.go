@@ -274,7 +274,7 @@ func TestTrackingPostgresAtomicReferencesAndBoundedEvents(t *testing.T) {
 	}
 	links := []tracking.Mapping{{Token: "000102030405060708090a0b0c0d0e0f", Kind: "open"}, {Token: "101112131415161718191a1b1c1d1e1f", Kind: "click", Destination: "https://example.net/private?patient=fixture"}, {Token: "202122232425262728292a2b2c2d2e2f", Kind: "click", Destination: "https://example.net/other"}}
 	placeholder := tracking.Reference{ID: id(8), Hash: [32]byte{1}, Kind: "open"}
-	deliveries := []preparation.Delivery{{ID: deliveryID, RecipientIndex: 0, ObjectKey: finalKey, Tracking: &preparation.Tracking{ObjectKey: trackingKey, ExpiresAt: time.Now().Add(30 * 24 * time.Hour), PostSendValiditySeconds: 86400, EventLimit: 3, Links: []tracking.Reference{placeholder}}}}
+	deliveries := []preparation.Delivery{{Format: 1, ID: deliveryID, RecipientIndex: 0, ObjectKey: finalKey, Tracking: &preparation.Tracking{ObjectKey: trackingKey, ExpiresAt: time.Now().Add(30 * 24 * time.Hour), PostSendValiditySeconds: 86400, EventLimit: 3, Links: []tracking.Reference{placeholder}}}}
 	if err = repo.CommitPreparation(ctx, claim, deliveries); err == nil {
 		t.Fatal("missing encrypted mapping was committed")
 	}

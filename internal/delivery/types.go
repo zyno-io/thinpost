@@ -45,14 +45,17 @@ const TrackingMinimumRemaining = 2 * MaxSMTPNetworkDuration
 const TrackingClockMargin = 5 * time.Minute
 
 type Claim struct {
-	AttemptID          string
-	DeliveryID         string
-	MessageID          string
-	AppID              string
-	WorkerID           string
-	Epoch              uint64
-	SourceKey          string
-	FinalKey           string
+	AttemptID  string
+	DeliveryID string
+	MessageID  string
+	AppID      string
+	WorkerID   string
+	Epoch      uint64
+	SourceKey  string
+	FinalKey   string
+	// PreparedFormat is the stored format of the final object (1 full MIME
+	// message, 2 recipe), as recorded when the delivery was prepared.
+	PreparedFormat     int
 	RecipientIndex     int
 	RouteAttempt       int
 	EnhancedProtection bool

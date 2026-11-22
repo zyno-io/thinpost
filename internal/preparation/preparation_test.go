@@ -25,6 +25,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/edgeprotocol"
 	"github.com/zyno-io/thinpost/internal/message"
 	"github.com/zyno-io/thinpost/internal/oplog"
+	"github.com/zyno-io/thinpost/internal/prepared"
 	"github.com/zyno-io/thinpost/internal/submission"
 	"github.com/zyno-io/thinpost/internal/tracking"
 	"github.com/zyno-io/thinpost/internal/unsubforward"
@@ -276,8 +277,11 @@ func TestPrepareStoresSignedPerRecipientObjectsBeforeQueueCommit(t *testing.T) {
 		if delivery.RecipientIndex != i {
 			t.Fatal("recipient index lost")
 		}
+		if delivery.Format != prepared.FormatFull {
+			t.Fatal("HTTP deliveries stay complete objects")
+		}
 		data := objects.final[delivery.ObjectKey]
-		if !bytes.HasPrefix(data, []byte("DKIM-Signature:")) {
+		if !bytes.HasPrefix(data, []byte("DKIM-Signature:")) || prepared.IsRecipe(data) {
 			t.Fatal("unsigned object")
 		}
 		parsed, err := mail.ReadMessage(bytes.NewReader(data))
@@ -892,4 +896,32 @@ func TestOneClickIsSkippedWhenTheMessageCannotCarryTheHeaders(t *testing.T) {
 	if skipped != 1 {
 		t.Fatal("expected one constant log line", lines)
 	}
+}
+
+// message returns the message a stored final object stands for: a complete
+// message as is, a recipe assembled against the stored raw source.
+func (o *fakeObjects) message(t *testing.T, key string) []byte {
+	t.Helper()
+	data, ok := o.final[key]
+	if !ok {
+		t.Fatalf("no final object %s", key)
+	}
+	if !prepared.IsRecipe(data) {
+		return data
+	}
+	recipe, err := prepared.Decode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, protected := range []bool{true, false} {
+		if source, err := submission.DecodeSource(o.source, protected); err == nil {
+			out, err := recipe.Assemble(source.Raw, source.RawHeader.RawSHA256)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return out
+		}
+	}
+	t.Fatal("source does not decode")
+	return nil
 }

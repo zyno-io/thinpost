@@ -36,7 +36,7 @@ func testObjectCollection(t *testing.T, db *sql.DB, repo, collector *Repository,
 	if _, err := db.ExecContext(ctx, `INSERT INTO messages(id,app_id,object_key,enhanced_protection,state) VALUES ($1,$2,$3,false,'prepared')`, message, app, sourceKey); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO deliveries(id,message_id,recipient_index,final_object_key) VALUES ($1,$2,0,$3)`, delivery, message, finalKey); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO deliveries(id,message_id,recipient_index,final_object_key,prepared_format) VALUES ($1,$2,0,$3,2)`, delivery, message, finalKey); err != nil {
 		t.Fatal(err)
 	}
 	inboundKey := key("inbound", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeea7", old)
