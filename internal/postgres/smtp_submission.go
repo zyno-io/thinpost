@@ -65,7 +65,8 @@ func (r *Repository) TouchSMTPCredential(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
-// SMTPPolicy reads the app's From policy and which of the candidate domains are
+// SMTPPolicy reads the app's From policy (and its tracking defaults, which ride
+// in the Policy) and which of the candidate domains are
 // active sender domains of the app. The policy's own target domain (the
 // rewrite domain, or the domain of the fixed address) is always included in the
 // lookup, so the caller need not know it in advance. Candidates are lowercase.
@@ -86,6 +87,9 @@ func (r *Repository) SMTPPolicy(ctx context.Context, appID string, candidates []
 		return rawmime.Policy{}, nil, err
 	}
 	result := rawmime.Policy{Mode: rawmime.FromMode(policy.Mode), OnlyUnauthorized: policy.OnlyUnauthorized}
+	if err = tx.QueryRowContext(ctx, `SELECT default_track_opens,default_track_clicks FROM apps WHERE id=$1`, appID).Scan(&result.DefaultTrackOpens, &result.DefaultTrackClicks); err != nil {
+		return rawmime.Policy{}, nil, err
+	}
 	lookup := append([]string(nil), candidates...)
 	if policy.Domain != nil {
 		result.Domain = *policy.Domain

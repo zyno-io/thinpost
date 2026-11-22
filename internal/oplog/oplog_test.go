@@ -122,3 +122,18 @@ func TestUnsubscribeForwardLine(t *testing.T) {
 		t.Fatalf("got\n%s", strings.Join(*lines, "\n"))
 	}
 }
+
+func TestTrackingSkipped(t *testing.T) {
+	lines := capture(t)
+	TrackingSkipped(app, msg, "too_many_links")
+	TrackingSkipped(app, msg, "anything <script> else")
+	TrackingSkipped("bad", msg, "no_html")
+	want := []string{
+		"tracking app=" + app + " message=" + msg + " status=skipped reason=too_many_links",
+		"tracking app=" + app + " message=" + msg + " status=skipped reason=other",
+		"tracking app=invalid message=" + msg + " status=skipped reason=no_html",
+	}
+	if strings.Join(*lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got\n%s", strings.Join(*lines, "\n"))
+	}
+}

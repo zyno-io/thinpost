@@ -41,6 +41,82 @@ type PrepareInput struct {
 	// two fields are written at the end of the header block, and any client DKIM
 	// signature whose h= names either field is dropped.
 	ListUnsubscribe string
+	// Body replaces parts of the source body: each splice swaps raw[Start:End]
+	// for its Data (CRLF-only), verbatim. The splices are in order, disjoint,
+	// within the body and do not divide a CRLF of the source. Tracking
+	// (internal/rawtracking) is the only producer. Any body change drops every
+	// client DKIM signature: the body hash they carry no longer matches.
+	Body []Splice
+	// TopHTML, with Body, replaces the top-level Content-Type and
+	// Content-Transfer-Encoding fields of a single-part text/html message
+	// (HTMLPart.Replace returns it). The old fields are removed with their
+	// folded lines; a missing Content-Transfer-Encoding is added after the new
+	// Content-Type.
+	TopHTML *TopLevelHTML
+}
+
+// bodyChanged reports a message whose body bytes differ from the source's.
+func (in *PrepareInput) bodyChanged() bool { return len(in.Body) > 0 || in.TopHTML != nil }
+
+// bodyLen is the length of the prepared body: the source body with every line
+// ending CRLF and the splices applied.
+func (in *PrepareInput) bodyLen(raw []byte) int {
+	n := in.Scan.Size - in.Scan.BodyStart + in.Scan.BareLF
+	for _, p := range in.Body {
+		n += len(p.Data) - (p.End - p.Start) - bareLFs(raw, p.Start, p.End)
+	}
+	return n
+}
+
+// bareLFs counts the LFs of raw[from:to] that the CRLF normalizer widens: those
+// whose preceding byte in raw is not a CR.
+func bareLFs(raw []byte, from, to int) int {
+	n := 0
+	for i := from; i < to; i++ {
+		if raw[i] == '\n' && (i == 0 || raw[i-1] != '\r') {
+			n++
+		}
+	}
+	return n
+}
+
+// checkBody validates Body and TopHTML against raw.
+func (in *PrepareInput) checkBody(raw []byte) error {
+	if len(in.Body) > preparedrecipe.MaxSplices {
+		return ErrInvalid
+	}
+	pos := in.Scan.BodyStart
+	for _, p := range in.Body {
+		if p.Start < pos || p.Start > p.End || p.End > len(raw) || len(p.Data) > MaxRawBytes*3 {
+			return ErrInvalid
+		}
+		// A splice edge between a CR and an LF of the source would leave a bare
+		// CR or LF in the output.
+		for _, at := range [2]int{p.Start, p.End} {
+			if at > 0 && at < len(raw) && raw[at-1] == '\r' && raw[at] == '\n' {
+				return ErrInvalid
+			}
+		}
+		for i, c := range p.Data {
+			if c == '\n' && (i == 0 || p.Data[i-1] != '\r') || c == '\r' && (i+1 >= len(p.Data) || p.Data[i+1] != '\n') {
+				return ErrInvalid
+			}
+		}
+		pos = p.End
+	}
+	if t := in.TopHTML; t != nil {
+		for _, v := range [2]string{t.ContentType, t.TransferEncoding} {
+			if v == "" || len(v) > 200 {
+				return ErrInvalid
+			}
+			for i := 0; i < len(v); i++ {
+				if v[i] < ' ' || v[i] >= 0x7f {
+					return ErrInvalid
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // unsubscribePostField is the RFC 8058 field written beside List-Unsubscribe.
@@ -53,6 +129,9 @@ type generated struct {
 	received  []byte // the trace field, empty for none
 	// unsubscribe is both one-click fields, empty when the input has none.
 	unsubscribe []byte
+	// topCT and topCTE are the replacement top-level fields of a single-part
+	// HTML message, empty without TopHTML.
+	topCT, topCTE []byte
 }
 
 func (in *PrepareInput) check(raw []byte) (generated, error) {
@@ -79,6 +158,13 @@ func (in *PrepareInput) check(raw []byte) (generated, error) {
 			return generated{}, ErrInvalid
 		}
 		g.unsubscribe = []byte("List-Unsubscribe: " + v + "\r\n" + unsubscribePostField)
+	}
+	if err := in.checkBody(raw); err != nil {
+		return generated{}, err
+	}
+	if t := in.TopHTML; t != nil {
+		g.topCT = []byte("Content-Type: " + t.ContentType + "\r\n")
+		g.topCTE = []byte("Content-Transfer-Encoding: " + t.TransferEncoding + "\r\n")
 	}
 	g.messageID = []byte("Message-ID: " + providerid.MessageIDHeader(in.MessageID, in.From.Domain) + "\r\n")
 	if len(g.messageID) > maxMessageIDLine {
@@ -183,7 +269,7 @@ func assemble(raw []byte, in *PrepareInput, g generated, slack int) ([]byte, int
 	if err := writeHeaders(&count, raw, in, g); err != nil {
 		return nil, 0, err
 	}
-	out := make([]byte, slack+count.n+2+len(raw)-in.Scan.BodyStart+in.Scan.BareLF)
+	out := make([]byte, slack+count.n+2+in.bodyLen(raw))
 	k := sink{buf: out, n: slack}
 	if err := writeHeaders(&k, raw, in, g); err != nil {
 		return nil, 0, err
@@ -197,7 +283,8 @@ func assemble(raw []byte, in *PrepareInput, g generated, slack int) ([]byte, int
 	k.crlf()
 	// The body goes through preparedrecipe.AppendBody, the one CRLF normalizer, into
 	// the space already allocated: it never grows out.
-	built, err := preparedrecipe.AppendBody(out[:k.n], raw, in.Scan.BodyStart, nil, nil)
+	splices, data := in.recipeSplices()
+	built, err := preparedrecipe.AppendBody(out[:k.n], raw, in.Scan.BodyStart, splices, data)
 	if err != nil || len(built) != len(out) || &built[0] != &out[0] {
 		return nil, 0, ErrInvalid // the scan does not match the bytes
 	}
@@ -208,11 +295,27 @@ func assemble(raw []byte, in *PrepareInput, g generated, slack int) ([]byte, int
 	return out, count.n, nil
 }
 
+// recipeSplices is Body in the recipe's form: the splice list and the
+// concatenated data.
+func (in *PrepareInput) recipeSplices() ([]preparedrecipe.Splice, []byte) {
+	if len(in.Body) == 0 {
+		return nil, nil
+	}
+	out := make([]preparedrecipe.Splice, len(in.Body))
+	var data []byte
+	for i, p := range in.Body {
+		out[i] = preparedrecipe.Splice{Start: p.Start, End: p.End, Len: len(p.Data)}
+		data = append(data, p.Data...)
+	}
+	return out, data
+}
+
 // writeHeaders runs the header surgery of the plan, section 5.5.
 func writeHeaders(k *sink, raw []byte, in *PrepareInput, g generated) error {
 	head := raw[:in.Scan.HeaderEnd]
 	rewrite := in.From.Field != ""
 	firstFrom, firstID := -1, -1
+	topCT, topCTE := 0, 0
 	// Dropping any client DKIM-Signature changes the DKIM-Signature field set,
 	// so every signature whose h= names dkim-signature is invalidated with it.
 	dropsSignature := false
@@ -227,10 +330,19 @@ func writeHeaders(k *sink, raw []byte, in *PrepareInput, g generated) error {
 		if firstFrom < 0 && nameIs(head, f, "From") {
 			firstFrom = f.start
 		}
+		if nameIs(head, f, "Content-Type") {
+			topCT++
+		}
+		if nameIs(head, f, "Content-Transfer-Encoding") {
+			topCTE++
+		}
 		if firstID < 0 && nameIs(head, f, "Message-ID") {
 			firstID = f.start
 		}
 		pos = f.end
+	}
+	if in.TopHTML != nil && (topCT > 1 || topCTE > 1) {
+		return ErrInvalid // HTMLParts never offers such a message
 	}
 	k.write(g.received)
 	inserted := func() {
@@ -263,10 +375,21 @@ func writeHeaders(k *sink, raw []byte, in *PrepareInput, g generated) error {
 			if f.start == firstID {
 				inserted()
 			}
+		case in.TopHTML != nil && nameIs(head, f, "Content-Type"):
+			k.write(g.topCT)
+			if topCTE == 0 {
+				k.write(g.topCTE)
+			}
+		case in.TopHTML != nil && nameIs(head, f, "Content-Transfer-Encoding"):
+			k.write(g.topCTE)
 		case dropped(head, f, in, dropsSignature):
 		default:
 			k.writeField(head, f)
 		}
+	}
+	if in.TopHTML != nil && topCT == 0 {
+		k.write(g.topCT)
+		k.write(g.topCTE)
 	}
 	k.write(g.unsubscribe)
 	return nil
@@ -301,11 +424,12 @@ var alwaysDropped = [...]string{
 
 // dropSignature reports a DKIM-Signature that cannot survive the surgery: the
 // From was rewritten, its h= names a field preparation removes, replaces or
-// inserts, or its h= cannot be read. With dropsSignature set (some client
+// inserts, or its h= cannot be read, or the body changed (its bh= no longer
+// matches, so every client signature goes). With dropsSignature set (some client
 // signature is dropped), a signature whose h= names DKIM-Signature goes too,
 // because the set of DKIM-Signature fields it covered has changed.
 func dropSignature(head []byte, f field, in *PrepareInput, dropsSignature bool) bool {
-	if in.From.Rewritten {
+	if in.From.Rewritten || in.bodyChanged() {
 		return true
 	}
 	value := head[f.value:f.end]

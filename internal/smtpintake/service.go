@@ -184,6 +184,12 @@ func (s *Service) submit(ctx context.Context, fence submission.Fence, m Message,
 		}
 		return Result{Outcome: MessageInvalid}
 	}
+	// The per-message tracking choice is judged here, not in Scan, because Scan
+	// runs again on stored sources.
+	trackOpens, trackClicks, err := scanned.TrackingChoice()
+	if err != nil {
+		return Result{Outcome: MessageInvalid}
+	}
 	keys, ok := RecipientKeys(m.Rcpts)
 	if !ok || len(keys) == 0 || len(keys) > submission.MaxEnvelopeRecipients {
 		return Result{Outcome: MessageInvalid}
@@ -249,11 +255,15 @@ func (s *Service) submit(ctx context.Context, fence submission.Fence, m Message,
 	req := acceptance.RawRequest{
 		Raw: m.Body, Scan: scanned, MailFrom: m.MailFrom, Recipients: recipients, Kinds: make([]string, len(kinds)),
 		From: decision, EnhancedProtection: scanned.Enhanced, Hold: scanned.Hold, Replay: kind, ReplayDigest: replayDigest,
+		TrackOpens: trackOpens, TrackClicks: trackClicks,
 	}
 	for i, k := range kinds {
 		req.Kinds[i] = string(k)
 	}
-	app := submission.App{ID: id, SMTPCredentialID: m.CredentialID, SMTPCredentialDigest: digest}
+	app := submission.App{
+		ID: id, SMTPCredentialID: m.CredentialID, SMTPCredentialDigest: digest,
+		DefaultTrackOpens: policy.DefaultTrackOpens, DefaultTrackClicks: policy.DefaultTrackClicks,
+	}
 	receipt, err := s.Acceptance.AcceptRaw(ctx, app, fence, req)
 	if err != nil {
 		return Result{Outcome: outcomeOf(err)}

@@ -14,6 +14,10 @@
                             <code>tracking_settings</code>, Mailgun <code>o:tracking-opens</code> and <code>o:tracking-clicks</code>, or the Resend headers
                             <code>X-Thinpost-Track-Opens</code> and <code>X-Thinpost-Track-Clicks</code>.
                         </li>
+                        <li>
+                            Mail sent over SMTP uses these defaults too. A message can turn them on or off with an X-Thinpost-Track-Opens or
+                            X-Thinpost-Track-Clicks header set to true or false. Plain-text mail, signed or encrypted mail and attachments are never changed.
+                        </li>
                         <li>A default never causes a message to be rejected. If a message is too large or has too many links to track, click tracking is dropped first, then open tracking. A message's own choices always stand.</li>
                         <li>A change only affects messages submitted afterwards. Messages already submitted keep their settings.</li>
                         <li>Defaults have no effect while tracking isn't available for this Thinpost installation.</li>

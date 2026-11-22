@@ -13,6 +13,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/objectkey"
 	"github.com/zyno-io/thinpost/internal/oplog"
 	"github.com/zyno-io/thinpost/internal/rawmime"
+	"github.com/zyno-io/thinpost/internal/rawtracking"
 	"github.com/zyno-io/thinpost/internal/receivedtrace"
 	"github.com/zyno-io/thinpost/internal/submission"
 )
@@ -54,9 +55,13 @@ type RawRequest struct {
 	EnhancedProtection bool
 	// Hold stores the message on hold (X-Thinpost-Hold). The replay digests
 	// cover the raw bytes, hold header included, so a replay has the same choice.
-	Hold         bool
-	Replay       ReplayKind
-	ReplayDigest [32]byte // meaningful only when Replay != ReplayNone
+	Hold bool
+	// TrackOpens and TrackClicks are the message's own X-Thinpost-Track-Opens and
+	// -Clicks choices (smtpintake validated them with Scanned.TrackingChoice); nil
+	// is absent, so the app's default applies.
+	TrackOpens, TrackClicks *bool
+	Replay                  ReplayKind
+	ReplayDigest            [32]byte // meaningful only when Replay != ReplayNone
 }
 
 // SMTPRepository is an optional Repository capability for SMTP submissions,
@@ -126,11 +131,14 @@ func (s *Service) AcceptRaw(ctx context.Context, app submission.App, fence submi
 	if err != nil {
 		return submission.Receipt{}, err
 	}
-	for _, link := range []string{"", unsubscribe} {
-		size, err := rawmime.PreparedSize(req.Raw, rawmime.PrepareInput{
+	sizeWith := func(link string, tracked rawtracking.Result) (rawmime.Size, error) {
+		return rawmime.PreparedSize(req.Raw, rawmime.PrepareInput{
 			Scan: req.Scan, From: req.From, MessageID: sizingMessageID, Date: time.Unix(0, 0).UTC(), Selector: sizingSelector, Signer: signer, Received: trace,
-			ListUnsubscribe: link,
+			ListUnsubscribe: link, Body: tracked.Body, TopHTML: tracked.TopHTML,
 		})
+	}
+	for _, link := range []string{"", unsubscribe} {
+		size, err := sizeWith(link, rawtracking.Result{})
 		if err != nil {
 			if errors.Is(err, rawmime.ErrTooLarge) {
 				return submission.Receipt{}, submission.ErrMessageTooLarge
@@ -141,11 +149,27 @@ func (s *Service) AcceptRaw(ctx context.Context, app submission.App, fence submi
 			return submission.Receipt{}, submission.ErrMessageTooLarge
 		}
 	}
+	// Tracking: never a reason to refuse. A tracked message must fit as well, in
+	// both one-click shapes; if it does not, tracking is withdrawn (clicks first)
+	// and the untracked message, which fits, is what is stored.
+	tracked, err := s.resolveRawTracking(req, app, func(r rawtracking.Result) (bool, error) {
+		for _, link := range []string{"", unsubscribe} {
+			size, err := sizeWith(link, r)
+			if err != nil || !size.Fits() {
+				return false, nil
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		return submission.Receipt{}, submission.ErrInvalidMessage
+	}
 	// Step 5: the version 3 source. from and from_field are set only when the
 	// From is rewritten or inserted; original_from only with them.
 	header := submission.RawHeader{
 		MailFrom: req.MailFrom, Recipients: req.Recipients, Kinds: req.Kinds,
 		StripSender: req.From.StripSender, SenderDomain: req.From.Domain, EnhancedProtection: req.EnhancedProtection,
+		TrackOpens: tracked.Opens, TrackClicks: tracked.Clicks,
 	}
 	if req.From.Rewritten {
 		header.From, header.FromField, header.FromRewritten, header.OriginalFrom = req.From.Value, req.From.Field, true, req.From.Original
@@ -189,6 +213,9 @@ func (s *Service) AcceptRaw(ctx context.Context, app submission.App, fence submi
 		oplog.Message(app.ID, receipt.ID, oplog.StatusAccepted)
 		if req.Hold {
 			oplog.Message(app.ID, receipt.ID, oplog.StatusHeld)
+		}
+		if tracked.Report {
+			oplog.TrackingSkipped(app.ID, receipt.ID, string(tracked.Skip))
 		}
 	}
 	return receipt, nil

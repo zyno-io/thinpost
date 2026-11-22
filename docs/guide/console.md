@@ -50,6 +50,8 @@ The tab has three panels. The wording is meant for the developers and support st
 - **Credentials.** A table of the app's credentials with status, created time, last used (at most a minute stale) and username. **Create credential** asks for a name, then shows the username and password once in a dialog. The password is held only in memory and is never written to browser storage or the URL, and closing the dialog without copying it asks first. **Revoke** asks for confirmation. An app can have 10 active credentials.
 - **From address.** What happens to the From address of mail sent over SMTP: accept only addresses on the app's verified sender domains, move other addresses onto a chosen domain (the original address is kept in the name part, as in `scanner=office.example.net@example.com`, so senders stay distinguishable), or always send from one address. Examples show the effect, the form checks the address before saving, and a warning appears when mail from the chosen domain would not be DKIM-signed yet. A change applies to mail sent from then on.
 
+Mail sent over SMTP uses the app's [tracking defaults](/guide/tracking#per-app-defaults-and-per-message-choices) and one-click unsubscribe setting too (see [Tracking and unsubscribe](/guide/smtp#tracking-and-unsubscribe)): a device that should not be tracked belongs in an app of its own with those switched off.
+
 A message sent over SMTP shows an **SMTP** badge in the list and, on its detail page, the credential's name and, when the From policy replaced the sender's address, an **Original From** line.
 
 ### App limits

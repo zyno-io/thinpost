@@ -22,6 +22,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/oplog"
 	"github.com/zyno-io/thinpost/internal/prepared"
 	"github.com/zyno-io/thinpost/internal/rawmime"
+	"github.com/zyno-io/thinpost/internal/rawtracking"
 	"github.com/zyno-io/thinpost/internal/receivedtrace"
 	"github.com/zyno-io/thinpost/internal/submission"
 	"github.com/zyno-io/thinpost/internal/tracking"
@@ -485,15 +486,24 @@ func (s *Service) commit(ctx context.Context, hb *heartbeat, claim Claim, delive
 	return nil
 }
 
-// prepareRaw prepares a version 3 (raw MIME) source. Tracking never applies to a
-// raw message yet. Each delivery's final object is a recipe (internal/prepared):
-// the signed header block and no body, which control rebuilds from the stored
-// source at dispatch. Without one-click unsubscribe the message is prepared and
-// signed once and every recipient's recipe carries the same header bytes,
-// because the recipients are in the SMTP envelope only. With it, each delivery
-// gets its own List-Unsubscribe link (replacing any the client wrote), so each
-// is prepared, signed and stored separately. Every recipe is assembled against
-// the source and compared with the signed bytes before it is stored.
+// prepareRaw prepares a version 3 (raw MIME) source. Each delivery's final
+// object is a recipe (internal/prepared): the signed header block, plus byte
+// splices over the stored source for what differs per recipient, which control
+// rebuilds at dispatch. Without one-click unsubscribe or tracking the message is
+// prepared and signed once and every recipient's recipe carries the same header
+// bytes, because the recipients are in the SMTP envelope only. With either,
+// each delivery gets its own List-Unsubscribe link (replacing any the client
+// wrote) and its own tracking tokens and rewritten HTML part(s), so each is
+// prepared, signed and stored separately. Every recipe is assembled against the
+// source and compared with the signed bytes before it is stored.
+//
+// Tracking comes from the decision acceptance stored (RawHeader.TrackOpens and
+// TrackClicks). It is never a reason to fail the message: unlike an HTTP
+// request, where the caller explicitly asked for tracked HTML and a missing
+// tracking runtime fails visibly so the app notices, an SMTP client cannot be
+// told anything after the fact, so what cannot be honored is sent with less
+// tracking and a constant oplog line (internal/rawtracking decides, once per
+// message, which kinds apply, so every recipient's message has the same size).
 func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submission.Source, key SigningKey, trace []byte, reason *string) ([]Delivery, error) {
 	h := payload.RawHeader
 	*reason = "source_invalid"
@@ -523,20 +533,16 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 		Signer:    key.Signer,
 		Received:  trace,
 	}
-	var shared rawmime.Prepared
+	*reason = "internal"
+	kinds, origin, err := s.rawTrackingKinds(claim, payload, scanned, input, oneClick)
+	if err != nil {
+		return nil, err
+	}
 	var forward *Forward
 	if oneClick {
 		forward = forwardFor(unsubforward.OriginalOf(payload))
-	} else {
-		*reason = "mime_build"
-		if shared, err = rawmime.Prepare(payload.Raw, input); err != nil {
-			// rawmime errors are constant, but never wrap anything built from input.
-			return nil, errors.New("build signed MIME failed")
-		}
-		if len(shared.Message) > edgeprotocol.MaxMIMEBytes {
-			return nil, errors.New("signed MIME exceeds delivery limit")
-		}
 	}
+	var shared rawmime.Prepared // prepared once, when no recipient differs
 	deliveries := make([]Delivery, 0, len(h.Recipients))
 	for index := range h.Recipients {
 		*reason = "internal"
@@ -544,8 +550,35 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 		if err != nil {
 			return nil, err
 		}
-		final := shared
-		if oneClick {
+		perDelivery := input
+		var preparedTracking *Tracking
+		var replacements []rawmime.Splice
+		if kinds.Opens || kinds.Clicks {
+			// Tokens are per recipient: plan again with real link keys, and put
+			// the mapping object before the signed message that links to it.
+			*reason = "mime_build"
+			plan, planErr := rawtracking.Plan(payload.Raw, scanned, rawtracking.Options{Opens: kinds.Opens, Clicks: kinds.Clicks, Origin: origin, Links: s.Tracking.Links})
+			if planErr != nil || plan.Opens != kinds.Opens || plan.Clicks != kinds.Clicks {
+				return nil, errors.New("tracking HTML preparation failed")
+			}
+			if len(plan.Mappings) > 0 {
+				mappingKey, keyErr := tracking.NewMappingKey(id, time.Now())
+				if keyErr != nil {
+					return nil, errors.New("tracking object key could not be created")
+				}
+				*reason = "object_write"
+				refs, putErr := s.Tracking.Objects.Put(ctx, mappingKey, plan.Mappings)
+				if putErr != nil {
+					return nil, errors.New("tracking object could not be stored")
+				}
+				preparedTracking = &Tracking{ObjectKey: mappingKey, Indefinite: true, EventLimit: s.Tracking.EventLimit, Links: refs}
+				perDelivery.Body, perDelivery.TopHTML, replacements = plan.Body, plan.TopHTML, plan.Body
+			}
+		}
+		differs := preparedTracking != nil
+		var final rawmime.Prepared
+		switch {
+		case oneClick:
 			link, linkErr := s.Tracking.Links.UnsubscribeLink(s.Tracking.Origin, id)
 			if linkErr != nil {
 				return nil, errors.New("unsubscribe link could not be signed")
@@ -555,9 +588,9 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 				return nil, errors.New("unsubscribe link is not a valid header value")
 			}
 			*reason = "mime_build"
-			perDelivery := input
-			perDelivery.ListUnsubscribe = value
-			if final, err = rawmime.Prepare(payload.Raw, perDelivery); err != nil {
+			withLink := perDelivery
+			withLink.ListUnsubscribe = value
+			if final, err = rawmime.Prepare(payload.Raw, withLink); err != nil {
 				return nil, errors.New("build signed MIME failed")
 			}
 			if len(final.Message) > edgeprotocol.MaxMIMEBytes {
@@ -566,17 +599,32 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 				// client's own headers and no forward, rather than fail it.
 				oneClick, forward = false, nil
 				oplog.OneClickSkipped(claim.AppID, claim.MessageID)
-				if shared, err = rawmime.Prepare(payload.Raw, input); err != nil {
+				differs = true // no longer shared with the deliveries before it
+				final = rawmime.Prepared{}
+			}
+		}
+		if final.Message == nil {
+			*reason = "mime_build"
+			switch {
+			case differs:
+				if final, err = rawmime.Prepare(payload.Raw, perDelivery); err != nil {
 					return nil, errors.New("build signed MIME failed")
 				}
-				if len(shared.Message) > edgeprotocol.MaxMIMEBytes {
-					return nil, errors.New("signed MIME exceeds delivery limit")
+			default:
+				if shared.Message == nil {
+					if shared, err = rawmime.Prepare(payload.Raw, input); err != nil {
+						// rawmime errors are constant, but never wrap anything built from input.
+						return nil, errors.New("build signed MIME failed")
+					}
 				}
 				final = shared
 			}
 		}
+		if len(final.Message) > edgeprotocol.MaxMIMEBytes {
+			return nil, errors.New("signed MIME exceeds delivery limit")
+		}
 		*reason = "mime_build"
-		object, err := recipeObject(id, h.RawSHA256, payload.Raw, scanned.BodyStart, final)
+		object, err := recipeObject(id, h.RawSHA256, payload.Raw, scanned.BodyStart, final, replacements)
 		if err != nil {
 			return nil, err
 		}
@@ -588,16 +636,66 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 		if err = s.Objects.PutMIME(ctx, objectKey, object); err != nil {
 			return nil, fmt.Errorf("store signed MIME: %w", err)
 		}
-		deliveries = append(deliveries, Delivery{ID: id, RecipientIndex: index, ObjectKey: objectKey, Forward: forward, Format: prepared.FormatRecipe})
+		deliveries = append(deliveries, Delivery{ID: id, RecipientIndex: index, ObjectKey: objectKey, Tracking: preparedTracking, Forward: forward, Format: prepared.FormatRecipe})
 	}
 	return deliveries, nil
 }
 
+// trackingReady reports whether the deployment can seal links and store mapping
+// objects.
+func (s *Service) trackingReady() bool {
+	return s.Tracking != nil && s.Tracking.Objects != nil && s.Tracking.Links != nil && s.Tracking.EventLimit >= 1 && s.Tracking.EventLimit <= 1000
+}
+
+// rawTrackingKinds fixes which kinds of tracking the message gets, once for all
+// its recipients: the kinds acceptance stored, withdrawn (clicks first) when the
+// runtime is missing, nothing in the message can carry them, or the tracked
+// message, with the real origin and one-click link, does not fit. It logs a
+// constant when it withdraws something. The origin is the custom tracking
+// domain's when the app has one; one-click unsubscribe stays on the deployment
+// origin.
+func (s *Service) rawTrackingKinds(claim Claim, payload submission.Source, scanned *rawmime.Scanned, input rawmime.PrepareInput, oneClick bool) (kinds rawtracking.Result, origin string, err error) {
+	h := payload.RawHeader
+	if !h.TrackOpens && !h.TrackClicks {
+		return rawtracking.Result{}, "", nil
+	}
+	if !s.trackingReady() {
+		oplog.TrackingSkipped(claim.AppID, claim.MessageID, string(rawtracking.ReasonNotConfigured))
+		return rawtracking.Result{}, "", nil
+	}
+	origin = s.Tracking.originFor(claim)
+	link := ""
+	if oneClick {
+		unsub, linkErr := s.Tracking.Links.UnsubscribeLink(s.Tracking.Origin, strings.Repeat("a", 32))
+		if linkErr != nil {
+			return rawtracking.Result{}, "", errors.New("unsubscribe link could not be signed")
+		}
+		link = "<" + unsub + ">"
+	}
+	// Link length depends on the origin and the destination only, so the sizing
+	// pass's keys and tokens stand in for every recipient's.
+	res, why, err := rawtracking.Choose(payload.Raw, scanned, rawtracking.Options{Opens: h.TrackOpens, Clicks: h.TrackClicks, Origin: origin, Links: s.Tracking.Links},
+		func(r rawtracking.Result) (bool, error) {
+			sized := input
+			sized.Body, sized.TopHTML, sized.ListUnsubscribe = r.Body, r.TopHTML, link
+			size, sizeErr := rawmime.PreparedSize(payload.Raw, sized)
+			return sizeErr == nil && size.Total <= edgeprotocol.MaxMIMEBytes, nil
+		})
+	if err != nil {
+		return rawtracking.Result{}, "", errors.New("tracking sizing failed")
+	}
+	if why != rawtracking.ReasonNone {
+		oplog.TrackingSkipped(claim.AppID, claim.MessageID, string(why))
+	}
+	return res, origin, nil
+}
+
 // recipeObject builds a delivery's recipe object and proves it: the object is
 // decoded again and assembled against the source, and must give back exactly
-// the signed bytes. Errors are constant.
-func recipeObject(id, baseSHA string, raw []byte, bodyStart int, signed rawmime.Prepared) ([]byte, error) {
-	recipe, err := prepared.New(id, baseSHA, bodyStart, signed.Message, signed.HeaderLen, nil)
+// the signed bytes. replacements are the splices the signed body carries. Errors
+// are constant.
+func recipeObject(id, baseSHA string, raw []byte, bodyStart int, signed rawmime.Prepared, replacements []rawmime.Splice) ([]byte, error) {
+	recipe, err := prepared.New(id, baseSHA, bodyStart, signed.Message, signed.HeaderLen, replacements)
 	if err != nil {
 		return nil, errors.New("build prepared recipe failed")
 	}

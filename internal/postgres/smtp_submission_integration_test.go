@@ -119,6 +119,11 @@ func TestSMTPPolicyReadsPolicyAndVerifiedDomains(t *testing.T) {
 	if err != nil || policy != want || strings.Join(verified, ",") != "mail.example.com" {
 		t.Fatal("target domains are looked up without being asked for", policy, verified, err)
 	}
+	// The app's tracking defaults ride along.
+	f.exec(`UPDATE apps SET default_track_opens=true,default_track_clicks=false WHERE id=$1`, f.app)
+	if policy, _, err = f.repo.SMTPPolicy(f.ctx, f.app, nil); err != nil || !policy.DefaultTrackOpens || policy.DefaultTrackClicks {
+		t.Fatal("tracking defaults", policy, err)
+	}
 	if _, _, err = f.repo.SMTPPolicy(f.ctx, strings.Repeat("9", 32), nil); !errors.Is(err, submission.ErrInvalidMessage) {
 		t.Fatal("unknown app", err)
 	}
