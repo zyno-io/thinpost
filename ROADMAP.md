@@ -17,13 +17,14 @@ This is a statement of direction, not a commitment or a schedule. Items are grou
 - Further hardening and testing of outbound destination restrictions, including DNS rebinding and mixed address families.
 - Readiness checks and alerts for the edge journal and worker.
 - SMTP submission follow-ups: SMTPUTF8 (non-ASCII addresses and headers), downconverting 8-bit bodies for destinations without 8BITMIME, and an optional per-credential allowlist of client networks.
+- More than one edge worker: first a warm standby that can take over the journal and sending addresses, then several active edges that each own their sending addresses and journal, with deliveries routed by sending address.
 
 ## Credentials, keys and certificates
 
 - Coordinated rollover and revocation for the private CA that secures the control channel, and verified certificate renewal.
 - A maintenance command to re-seal the SMTP retry-protection secret under a newer object keyring version, so old versions can be retired.
 - Lifecycle management for shared key rings: the idempotency fingerprint key, the bounce key ring and the object-encryption key ring, including inventory of old key versions.
-- Automated DKIM key provisioning and rotation, with sender-domain readiness checks for DKIM, SPF and DMARC and DNSSEC policy.
+- Scheduled DKIM key rotation (Thinpost generates keys and rotates them on request today), and sender-domain readiness checks for SPF, DMARC and DNSSEC policy.
 - Sender-domain removal.
 - Optional DNS-provider automation for domain onboarding.
 
@@ -33,7 +34,7 @@ This is a statement of direction, not a commitment or a schedule. Items are grou
 - Closer parity with each provider's errors, batch behavior, retries and idempotency where practical.
 - Native API follow-ups: a batch send route, and app, key and domain administration through the native API. Sending one message is available as `POST /app/v1/messages`.
 - More SDK languages and versions in the contract test suite.
-- Suppression events as webhooks, DSN-based hard-bounce suppression and mailto unsubscribe.
+- Suppression events as webhooks, DSN-based hard-bounce suppression, and mailto unsubscribe, including passing a one-click unsubscribe on to a sender's own `mailto:` link (only `https` one-click links are passed on today).
 - Search over received mail.
 
 ## Webhooks
@@ -46,6 +47,7 @@ This is a statement of direction, not a commitment or a schedule. Items are grou
 - Defined encryption, access, retention and deletion policy for message bodies, attachments and event data, including trimming inbound metadata after content expires.
 - Production-grade key rotation for the object-encryption key ring.
 - Lifecycle management for idempotency records and stored objects.
+- Storing HTTP API messages once with small per-recipient header objects, as SMTP mail already is, so attachments are not copied for every recipient.
 
 ## Operations and observability
 
