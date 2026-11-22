@@ -254,7 +254,10 @@ func run() error {
 		trackingHandler = &tracking.Handler{Links: config.Tracking.Links, Visitor: &tracking.Service{Repository: repository, Objects: protected}, Unsubscribes: repository}
 	}
 	if keys != nil {
-		preparer := &preparation.Service{Repository: repository, Objects: objects, Keys: keys, Tracking: trackingPreparation}
+		preparer := &preparation.Service{Repository: repository, Objects: objects, Keys: keys, Tracking: trackingPreparation, Hostname: func(ctx context.Context) (string, error) {
+			identity, err := repository.EdgeIdentity(ctx)
+			return identity.MainHostname, err
+		}}
 		prepareCtx, prepareCancel := context.WithCancel(ctx)
 		prepareDone := make(chan struct{})
 		go func() {

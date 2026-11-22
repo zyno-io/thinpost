@@ -19,6 +19,7 @@ import (
 
 	"github.com/emersion/go-msgauth/dkim"
 	"github.com/zyno-io/thinpost/internal/providerid"
+	"github.com/zyno-io/thinpost/internal/receivedtrace"
 	"github.com/zyno-io/thinpost/internal/submission"
 )
 
@@ -37,6 +38,10 @@ type Options struct {
 	// false (version 1) the copy has only the recipient's own To header and the
 	// message cannot carry Cc or Bcc.
 	ListRecipients bool
+	// Received is Thinpost's trace field (receivedtrace.Field), placed right
+	// after the DKIM-Signature, as in rawmime.Prepare. It is added after signing
+	// and is not covered by it. Empty adds none.
+	Received []byte
 }
 
 // MaxRecipientHeaderBytes bounds the folded To and Cc headers together. Header
@@ -55,6 +60,9 @@ func Build(input submission.Message, options Options) ([]byte, error) {
 		return nil, err
 	}
 	if options.Date.IsZero() || options.Signer == nil || !validToken(options.ID) || !validDomain(options.SigningDomain) || !validToken(options.Selector) {
+		return nil, errors.New("invalid message signing options")
+	}
+	if len(options.Received) > 0 && !receivedtrace.Valid(options.Received) {
 		return nil, errors.New("invalid message signing options")
 	}
 	from, err := mail.ParseAddress(input.From)
@@ -201,7 +209,24 @@ func Build(input submission.Message, options Options) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sign message: %w", err)
 	}
-	return signed.Bytes(), nil
+	if len(options.Received) == 0 {
+		return signed.Bytes(), nil
+	}
+	// The signer writes its own field first; the trace goes after its last fold.
+	sig := signed.Bytes()
+	end := 0
+	for end < len(sig) {
+		i := bytes.Index(sig[end:], []byte("\r\n"))
+		if i < 0 {
+			return nil, errors.New("sign message: unexpected signature layout")
+		}
+		end += i + 2
+		if end < len(sig) && sig[end] != ' ' && sig[end] != '\t' {
+			break
+		}
+	}
+	out := make([]byte, 0, len(options.Received)+len(sig))
+	return append(append(append(out, sig[:end]...), options.Received...), sig[end:]...), nil
 }
 
 // writeAttachments emits mixed -> alternative -> related as needed. Inline

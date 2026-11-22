@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/objectkey"
 	"github.com/zyno-io/thinpost/internal/oplog"
 	"github.com/zyno-io/thinpost/internal/rawmime"
+	"github.com/zyno-io/thinpost/internal/receivedtrace"
 	"github.com/zyno-io/thinpost/internal/submission"
 	"github.com/zyno-io/thinpost/internal/tracking"
 )
@@ -157,6 +159,10 @@ type Service struct {
 	Objects    Objects
 	Keys       Keys
 	Tracking   *TrackingConfig
+	// Hostname returns the public host name Thinpost puts in the Received trace
+	// field: the HELO name of the main sending IP. Nil, an empty name or a name
+	// that is not a plain DNS name adds no trace field.
+	Hostname func(context.Context) (string, error)
 	// LeaseTTL, RenewInterval and MaxPreparation default to DefaultLeaseTTL,
 	// LeaseTTL/4 and DefaultMaxPreparation. They are fields for tests.
 	LeaseTTL       time.Duration
@@ -305,11 +311,16 @@ func (s *Service) PrepareNext(ctx context.Context) (resultErr error) {
 	}
 	claim.SigningDomain = key.Domain
 	claim.SigningKeyID = key.KeyID
+	with := receivedtrace.WithHTTP
+	if payload.Version == submission.RawSourceVersion {
+		with = receivedtrace.WithSMTP // only SMTP submission stores a raw source
+	}
+	trace, _ := s.trace(work, claim, with)
 	if payload.Version == submission.RawSourceVersion {
 		if payload.RawHeader.SenderDomain != claim.SenderDomain {
 			return errors.New("signing domain does not match the recorded sender domain")
 		}
-		deliveries, err := s.prepareRaw(work, claim, payload, key, &reason)
+		deliveries, err := s.prepareRaw(work, claim, payload, key, trace, &reason)
 		if err != nil {
 			return err
 		}
@@ -375,7 +386,7 @@ func (s *Service) PrepareNext(ctx context.Context) (resultErr error) {
 			}
 		}
 		reason = "mime_build"
-		final, err := message.Build(preparedMessage, message.Options{Recipient: recipient, ID: claim.MessageID, Date: claim.date(), SigningDomain: key.Domain, Selector: key.Selector, Signer: key.Signer, ListRecipients: payload.ListsRecipients()})
+		final, err := message.Build(preparedMessage, message.Options{Recipient: recipient, ID: claim.MessageID, Date: claim.date(), SigningDomain: key.Domain, Selector: key.Selector, Signer: key.Signer, ListRecipients: payload.ListsRecipients(), Received: trace})
 		if err != nil {
 			// message.Build errors are constant; never wrap anything that could quote input.
 			return errors.New("build signed MIME failed")
@@ -416,7 +427,7 @@ func (s *Service) commit(ctx context.Context, hb *heartbeat, claim Claim, delive
 // and signed once; every recipient's delivery points at an identical object,
 // because the recipients are in the SMTP envelope only. Tracking and one-click
 // unsubscribe never apply: the raw message is the client's own.
-func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submission.Source, key SigningKey, reason *string) ([]Delivery, error) {
+func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submission.Source, key SigningKey, trace []byte, reason *string) ([]Delivery, error) {
 	h := payload.RawHeader
 	*reason = "source_invalid"
 	scanned, err := rawmime.Scan(payload.Raw)
@@ -437,6 +448,7 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 		Date:      claim.date(),
 		Selector:  key.Selector,
 		Signer:    key.Signer,
+		Received:  trace,
 	})
 	if err != nil {
 		// rawmime errors are constant, but never wrap anything built from input.
@@ -474,4 +486,25 @@ func randomID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(id[:]), nil
+}
+
+// trace renders the message's Received field from stored facts only: the
+// message ID, the acceptance time and the deployment's public host name. It
+// never reads or records anything about the client. It returns nil when no
+// usable host name is known (or the lookup fails), and the message goes without one.
+func (s *Service) trace(ctx context.Context, claim Claim, with string) ([]byte, error) {
+	if s.Hostname == nil {
+		return nil, nil
+	}
+	host, err := s.Hostname(ctx)
+	if err != nil {
+		// A cosmetic header never fails preparation. Log a constant only.
+		log.Print("received trace host name unavailable; preparing without a Received header")
+		return nil, nil
+	}
+	field, err := receivedtrace.Field(host, with, claim.MessageID, claim.AcceptedAt)
+	if err != nil {
+		return nil, nil
+	}
+	return field, nil
 }

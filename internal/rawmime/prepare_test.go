@@ -2,8 +2,11 @@ package rawmime
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"strings"
@@ -625,5 +628,106 @@ func TestPrepareKeepsClientDateAndStripsHold(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(rest), "x-thinpost-hold") {
 		t.Fatalf("hold header leaked: %q", rest)
+	}
+}
+
+const traceField = "Received: by mx.example.net (Thinpost)\r\n\twith ESMTPSA id " + "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" + ";\r\n\tFri, 20 Nov 2026 12:00:00 +0000\r\n"
+
+// The trace field leads the message, the client's Received fields are still
+// removed, the signature verifies, h= does not name Received, and sizing
+// matches.
+func TestPrepareAddsTraceField(t *testing.T) {
+	raw := "Received: from client.internal.example ([10.1.2.3])\r\n\tby relay.internal.example; Mon, 01 Jan 2024 00:00:00 +0000\r\nFrom: al@example.com\r\nTo: b@example.net\r\nSubject: x\r\n\r\nbody\r\n"
+	s := mustScan(t, raw)
+	d, err := DecideFrom(s, "", Policy{Mode: FromOff}, verifiedSet("example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a1", 16), Date: acceptedAt, Selector: "sel", Signer: testKey(t), Received: []byte(traceField)}
+	out, err := Prepare([]byte(raw), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, rest, _ := splitPrepared(t, out)
+	if !strings.HasPrefix(rest, traceField) {
+		t.Fatalf("trace not first after the signature: %q", rest)
+	}
+	if strings.Count(string(out), "Received:") != 1 || strings.Contains(string(out), "internal.example") || strings.Contains(string(out), "10.1.2.3") {
+		t.Fatalf("client trace survived:\n%s", out)
+	}
+	if strings.Contains(strings.ToLower(sig), "received") {
+		t.Fatalf("Received is signed: %q", sig)
+	}
+	size, err := PreparedSize([]byte(raw), in)
+	if err != nil || size.Total != len(out) {
+		t.Fatalf("%+v %d %v", size, len(out), err)
+	}
+	vs, err := dkim.VerifyWithOptions(bytes.NewReader(out), &dkim.VerifyOptions{LookupTXT: func(string) ([]string, error) { return []string{txtRecord(t)}, nil }})
+	if err != nil || len(vs) != 1 || vs[0].Err != nil {
+		t.Fatalf("%v %+v", err, vs)
+	}
+	// Same input, same line.
+	again, _ := Prepare([]byte(raw), in)
+	_, rest2, _ := splitPrepared(t, again)
+	if !strings.HasPrefix(rest2, traceField) {
+		t.Fatal("not deterministic")
+	}
+}
+
+// A client signature that survives preparation still verifies with the trace
+// field prepended and the client's own Received removed.
+func TestPrepareTraceKeepsClientSignatureValid(t *testing.T) {
+	clientKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsigned := "Received: from laptop.corp.example ([10.9.8.7])\r\n\tby smtp.corp.example; Mon, 01 Jan 2024 00:00:00 +0000\r\nFrom: Alice <alice@example.com>\r\nTo: bob@example.net\r\nSubject: signed\r\nDate: Mon, 16 Nov 2026 08:00:00 +0000\r\n\r\nbody\r\n"
+	var signed bytes.Buffer
+	err = dkim.Sign(&signed, strings.NewReader(unsigned), &dkim.SignOptions{Domain: "example.com", Selector: "client", Signer: clientKey, Hash: crypto.SHA256,
+		HeaderCanonicalization: dkim.CanonicalizationRelaxed, BodyCanonicalization: dkim.CanonicalizationRelaxed, HeaderKeys: []string{"From", "To", "Subject", "Date"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := signed.String()
+	s := mustScan(t, raw)
+	d, err := DecideFrom(s, "", Policy{Mode: FromOff}, verifiedSet("example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a1", 16), Date: acceptedAt, Selector: "sel", Signer: testKey(t), Received: []byte(traceField)}
+	out, err := Prepare([]byte(raw), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(out), "Received:") != 1 || strings.Contains(string(out), "corp.example") || !strings.Contains(string(out), traceField) {
+		t.Fatalf("trace or client Received wrong:\n%s", out)
+	}
+	clientDER, _ := x509.MarshalPKIXPublicKey(&clientKey.PublicKey)
+	clientRecord := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(clientDER)
+	vs, err := dkim.VerifyWithOptions(bytes.NewReader(out), &dkim.VerifyOptions{LookupTXT: func(name string) ([]string, error) {
+		if name == "client._domainkey.example.com" {
+			return []string{clientRecord}, nil
+		}
+		return []string{txtRecord(t)}, nil
+	}})
+	if err != nil || len(vs) != 2 {
+		t.Fatalf("%v %+v", err, vs)
+	}
+	for _, v := range vs {
+		if v.Err != nil {
+			t.Fatalf("signature for %s failed: %v", v.Domain, v.Err)
+		}
+	}
+}
+
+func TestPrepareRejectsMalformedTrace(t *testing.T) {
+	raw := "From: al@example.com\r\nTo: b@example.net\r\n\r\nb"
+	s := mustScan(t, raw)
+	d, _ := DecideFrom(s, "", Policy{Mode: FromOff}, verifiedSet("example.com"))
+	for _, bad := range []string{"X: y\r\n", "Received: a\r\nX: y\r\n", "Received: a\n", "Received: a", "Received: a\r\n\r\n", "Received: a\rb\r\n"} {
+		in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a1", 16), Date: acceptedAt, Selector: "sel", Signer: testKey(t), Received: []byte(bad)}
+		if _, err := Prepare([]byte(raw), in); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
 	}
 }
