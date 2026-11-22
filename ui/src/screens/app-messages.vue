@@ -121,7 +121,7 @@
                                         :title="row.senderDomain"
                                         type="button"
                                         :aria-label="`Search messages from sender domain ${row.senderDomain}`"
-                                        @click="applyDomainSearch('sender_domain', row.senderDomain)"
+                                        @click="applySearch('sender_domain', row.senderDomain)"
                                     >
                                         {{ row.senderDomain }}
                                     </button>
@@ -130,14 +130,23 @@
                                 <td class="to">
                                     <template v-if="firstRecipient(row)">
                                         <span class="addr" :title="recipientTitle(row)">
-                                            <span class="local">{{ firstRecipient(row)!.local }}</span>
+                                            <button
+                                                v-if="firstRecipient(row)!.domain"
+                                                class="link-btn domain-filter local"
+                                                type="button"
+                                                :aria-label="`Search messages to ${firstRecipient(row)!.address}`"
+                                                @click="applySearch('recipient', firstRecipient(row)!.address)"
+                                            >
+                                                {{ firstRecipient(row)!.local }}
+                                            </button>
+                                            <span v-else class="local">{{ firstRecipient(row)!.local }}</span>
                                             <template v-if="firstRecipient(row)!.domain">
                                                 <span class="at">@</span>
                                                 <button
                                                     class="link-btn domain-filter"
                                                     type="button"
                                                     :aria-label="`Search messages to recipient domain ${firstRecipient(row)!.domain}`"
-                                                    @click="applyDomainSearch('recipient_domain', firstRecipient(row)!.domain!)"
+                                                    @click="applySearch('recipient_domain', firstRecipient(row)!.domain!)"
                                                 >
                                                     {{ firstRecipient(row)!.domain }}
                                                 </button>
@@ -387,9 +396,9 @@ function submitSearch() {
     });
 }
 
-function applyDomainSearch(field: 'sender_domain' | 'recipient_domain', domain: string) {
+function applySearch(field: 'recipient' | 'sender_domain' | 'recipient_domain', value: string) {
     clearTimeout(timer);
-    draft.q = domain;
+    draft.q = value;
     draft.field = field;
     applyDraft();
     void nextTick(() => {
@@ -398,13 +407,13 @@ function applyDomainSearch(field: 'sender_domain' | 'recipient_domain', domain: 
     });
 }
 
-function splitAddress(address: string): { local: string; domain: string | null } {
+function splitAddress(address: string): { address: string; local: string; domain: string | null } {
     const at = address.lastIndexOf('@');
-    if (at <= 0 || at === address.length - 1) return { local: address, domain: null };
-    return { local: address.slice(0, at), domain: address.slice(at + 1) };
+    if (at <= 0 || at === address.length - 1) return { address, local: address, domain: null };
+    return { address, local: address.slice(0, at), domain: address.slice(at + 1) };
 }
 
-function firstRecipient(row: MessageRow): { local: string; domain: string | null } | null {
+function firstRecipient(row: MessageRow): { address: string; local: string; domain: string | null } | null {
     const first = toRecipients(row)[0];
     return first === undefined ? null : splitAddress(first);
 }
