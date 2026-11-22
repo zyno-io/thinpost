@@ -119,17 +119,27 @@ func (s *Service) AcceptRaw(ctx context.Context, app submission.App, fence submi
 	if err != nil {
 		return submission.Receipt{}, err
 	}
-	size, err := rawmime.PreparedSize(req.Raw, rawmime.PrepareInput{
-		Scan: req.Scan, From: req.From, MessageID: sizingMessageID, Date: time.Unix(0, 0).UTC(), Selector: sizingSelector, Signer: signer, Received: trace,
-	})
+	// The message must fit as written and with Thinpost's one-click headers in
+	// place of its own: the app can switch one-click on or off between now and
+	// preparation. Each is measured exactly, at the longest link possible.
+	unsubscribe, err := sizingUnsubscribeLink()
 	if err != nil {
-		if errors.Is(err, rawmime.ErrTooLarge) {
+		return submission.Receipt{}, err
+	}
+	for _, link := range []string{"", unsubscribe} {
+		size, err := rawmime.PreparedSize(req.Raw, rawmime.PrepareInput{
+			Scan: req.Scan, From: req.From, MessageID: sizingMessageID, Date: time.Unix(0, 0).UTC(), Selector: sizingSelector, Signer: signer, Received: trace,
+			ListUnsubscribe: link,
+		})
+		if err != nil {
+			if errors.Is(err, rawmime.ErrTooLarge) {
+				return submission.Receipt{}, submission.ErrMessageTooLarge
+			}
+			return submission.Receipt{}, submission.ErrInvalidMessage
+		}
+		if !size.Fits() {
 			return submission.Receipt{}, submission.ErrMessageTooLarge
 		}
-		return submission.Receipt{}, submission.ErrInvalidMessage
-	}
-	if !size.Fits() {
-		return submission.Receipt{}, submission.ErrMessageTooLarge
 	}
 	// Step 5: the version 3 source. from and from_field are set only when the
 	// From is rewritten or inserted; original_from only with them.

@@ -263,11 +263,9 @@ func (s *Service) Accept(ctx context.Context, app submission.App, req submission
 			return submission.Receipt{}, submission.ErrUnavailable
 		}
 	}
-	// An app with Thinpost-managed one-click unsubscribe cannot also supply
-	// its own List-Unsubscribe headers: the two would conflict.
-	if app.ListUnsubscribe && (req.Message.ListUnsubscribe != "" || req.Message.ListUnsubscribePost) {
-		return submission.Receipt{}, submission.ErrInvalidMessage
-	}
+	// An app with Thinpost-managed one-click unsubscribe may still pass its own
+	// List-Unsubscribe headers: preparation replaces them with Thinpost's, and
+	// forwards a recipient's unsubscribe to the app's own link when it can.
 	for _, recipient := range req.Message.Envelope() {
 		if !req.Overrides.RecipientPolicy && !s.recipients.Allows(recipient) {
 			return submission.Receipt{}, submission.ErrInvalidMessage

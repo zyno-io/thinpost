@@ -213,6 +213,9 @@ func (r *Repository) CommitPreparation(ctx context.Context, claim preparation.Cl
 		if err != nil || object.Kind != "final" || object.ID != delivery.ID || delivery.RecipientIndex != i {
 			return errors.New("invalid prepared delivery")
 		}
+		if delivery.Forward != nil {
+			deliveries[i].Forward = checkedForward(delivery.Forward)
+		}
 		if delivery.Tracking != nil {
 			object, err = objectkey.Parse(delivery.Tracking.ObjectKey)
 			validLifetime := delivery.Tracking.Indefinite && delivery.Tracking.ExpiresAt.IsZero() && delivery.Tracking.PostSendValiditySeconds == 0 || !delivery.Tracking.Indefinite && !delivery.Tracking.ExpiresAt.IsZero() && delivery.Tracking.PostSendValiditySeconds >= 1 && delivery.Tracking.PostSendValiditySeconds <= 365*24*60*60
@@ -298,6 +301,11 @@ func (r *Repository) CommitPreparation(ctx context.Context, claim preparation.Cl
 	for _, delivery := range deliveries {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO deliveries(id,message_id,recipient_index,final_object_key) VALUES ($1,$2,$3,$4)`, delivery.ID, claim.MessageID, delivery.RecipientIndex, delivery.ObjectKey); err != nil {
 			return err
+		}
+		if delivery.Forward != nil {
+			if err = insertForward(ctx, tx, delivery.ID, delivery.Forward); err != nil {
+				return err
+			}
 		}
 		if delivery.Tracking != nil {
 			var expires, validity any

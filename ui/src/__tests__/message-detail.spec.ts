@@ -1346,6 +1346,46 @@ describe('message detail recipient feedback', () => {
         expect(wrapper!.find(`tr[data-delivery="${'b'.repeat(32)}"] [data-field="feedback"]`).exists()).toBe(false);
     });
 
+    it.each([
+        [{ state: 'delivered', host: 'unsub.example.com', attempts: 1 }, "Also unsubscribed at the sender's own link: done", 'unsub.example.com'],
+        [{ state: 'queued', host: 'unsub.example.com', attempts: 2, reason: 'timeout' }, "Also unsubscribed at the sender's own link: in progress", 'unsub.example.com'],
+        [{ state: 'failed', host: 'unsub.example.com', attempts: 8, reason: 'http_status' }, "Also unsubscribed at the sender's own link: failed", 'unsub.example.com'],
+        [{ state: 'not_forwarded', reason: 'mailto_only', attempts: 0 }, "Also unsubscribed at the sender's own link: not available (mailto link)", 'mailto'],
+        [{ state: 'not_forwarded', reason: 'no_one_click_post', attempts: 0 }, "Also unsubscribed at the sender's own link: not available (no one-click support)", 'one-click']
+    ])('shows what became of the sender\'s own unsubscribe link next to the unsubscribe: %j', async (forward, text, titlePart) => {
+        api.getAppMessage.mockResolvedValue({
+            data: {
+                message: summary,
+                deliveries: [
+                    { ...deliveries[0], feedback: [{ kind: 'unsubscribe', channel: 'one_click', received_at: '2026-10-03T08:00:00Z' }], unsubscribe_forward: forward },
+                    deliveries[1]
+                ]
+            }
+        });
+        await mountAt(`/apps/${APP_ID}/messages/${MESSAGE_ID}`);
+        const note = wrapper!.find(`tr[data-delivery="${'a'.repeat(32)}"] [data-field="unsubscribe-forward"]`);
+        expect(note.text()).toBe(text);
+        expect(note.attributes('title')).toContain(titlePart);
+        expect(wrapper!.find(`tr[data-delivery="${'b'.repeat(32)}"] [data-field="unsubscribe-forward"]`).exists()).toBe(false);
+    });
+
+    it('drops an unknown or malformed forward state instead of echoing it, and never shows a link', async () => {
+        api.getAppMessage.mockResolvedValue({
+            data: {
+                message: summary,
+                deliveries: [
+                    { ...deliveries[0], unsubscribe_forward: { state: 'bogus', host: 'x.example' } },
+                    { ...deliveries[1], unsubscribe_forward: { state: 'delivered', host: 'https://evil.example/path?t=secret', attempts: 1 } }
+                ]
+            }
+        });
+        await mountAt(`/apps/${APP_ID}/messages/${MESSAGE_ID}`);
+        expect(wrapper!.find(`tr[data-delivery="${'a'.repeat(32)}"] [data-field="unsubscribe-forward"]`).exists()).toBe(false);
+        const note = wrapper!.find(`tr[data-delivery="${'b'.repeat(32)}"] [data-field="unsubscribe-forward"]`);
+        expect(note.text()).toBe("Also unsubscribed at the sender's own link: done");
+        expect(note.attributes('title')).not.toContain('secret');
+    });
+
     it('tags a complained delivery with its time', async () => {
         api.getAppMessage.mockResolvedValue({
             data: { message: summary, deliveries: [{ ...deliveries[0], feedback: [{ kind: 'spam_complaint', channel: 'arf', received_at: '2026-10-03T08:00:00Z' }] }, deliveries[1]] }

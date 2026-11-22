@@ -64,9 +64,6 @@ func (s *Service) AcceptBatch(ctx context.Context, app submission.App, req submi
 		if message.Validate() != nil || (req.Adapter == "resend" && len(message.Envelope()) > 50) {
 			return submission.BatchReceipt{}, submission.ErrInvalidMessage
 		}
-		if app.ListUnsubscribe && (message.ListUnsubscribe != "" || message.ListUnsubscribePost) {
-			return submission.BatchReceipt{}, submission.ErrInvalidMessage
-		}
 		recipients += len(message.Envelope())
 		if req.Adapter == "sendgrid" && recipients > 1000 {
 			return submission.BatchReceipt{}, submission.ErrInvalidMessage

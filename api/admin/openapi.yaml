@@ -474,8 +474,12 @@ paths:
         Audited as app.list_unsubscribe.updated (an identical value changes and
         audits nothing). While enabled, preparation adds an RFC 8058
         List-Unsubscribe and List-Unsubscribe-Post header with a signed
-        one-click URL on the tracking origin to every message, and a request that
-        carries its own List-Unsubscribe headers is rejected (400). Enabling
+        one-click URL on the tracking origin to every message, API and SMTP
+        alike, each recipient getting their own link. A message that carries its
+        own List-Unsubscribe headers is accepted and they are replaced with
+        Thinpost's; when the recipient unsubscribes, Thinpost also sends a one-click
+        POST to the message's own https link if it had one and a
+        List-Unsubscribe-Post header (see UnsubscribeForward). Enabling
         returns 409 when the serving replica has no tracking runtime (keys and
         origin) or its tracking origin is not ASCII (a non-ASCII host cannot appear
         in a List-Unsubscribe header); disabling is always allowed.
@@ -3071,6 +3075,8 @@ components:
           type: array
           description: Recipient feedback recorded for this delivery (for example a one-click unsubscribe), oldest first. Kind, channel and time only.
           items: { $ref: '#/components/schemas/DeliveryFeedback' }
+        unsubscribe_forward:
+          $ref: '#/components/schemas/UnsubscribeForward'
         message_id_header:
           type: string
           pattern: '^<[0-9a-f]{32}@[a-z0-9.-]{1,253}>$'
@@ -3079,6 +3085,33 @@ components:
             schema 38 or later (the message ID and the lowercased sender domain); per delivery for earlier messages. Absent
             when the sender domain was not recorded. Not audited, even for Enhanced Protection: it is a random ID plus the
             sender domain.
+    UnsubscribeForward:
+      type: object
+      description: >-
+        Present after the recipient unsubscribed from a message that had its own List-Unsubscribe headers, which Thinpost
+        replaced with its own one-click link. Thinpost also calls the sender's own link (an RFC 8058 one-click POST) when
+        the original had an https link and a List-Unsubscribe-Post header; this says what became of that call. It never
+        contains the link, only its host. The recipient's unsubscribe is recorded whatever the outcome.
+      required: [state, attempts]
+      properties:
+        state:
+          type: string
+          enum: [queued, delivered, failed, not_forwarded]
+          description: >-
+            queued: waiting for an attempt or retrying (up to 8 attempts over about 22 hours). delivered: the sender's
+            endpoint answered 2xx. failed: gave up. not_forwarded: the original could not be called (see reason).
+        reason:
+          type: string
+          enum: [mailto_only, no_one_click_post, unusable_link, blocked_destination, resolution_failed, connection_failed, tls_failed, timeout, http_status, rejected, invalid_link, target_changed, source_unavailable, app_deleted, unknown]
+          description: >-
+            For not_forwarded: mailto_only (only a mailto link, which is not called), no_one_click_post (an https link
+            without List-Unsubscribe-Post) or unusable_link (malformed, or not a plain public https address on port 443).
+            For queued or failed: the last failure (target_changed: the stored message no longer gives the same link host; source_unavailable: it could not be read; app_deleted: the app was deleted). Absent when delivered.
+        host:
+          type: string
+          description: The DNS name of the sender's link. Absent for not_forwarded.
+        attempts: { type: integer, minimum: 0 }
+        finished_at: { type: string, format: date-time, description: When it was delivered or given up on. }
     DeliveryFeedback:
       type: object
       required: [kind, channel, received_at]

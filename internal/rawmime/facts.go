@@ -47,6 +47,16 @@ type Scanned struct {
 	Enhanced      bool                // X-Thinpost-Enhanced-Protection: true
 	Hold          bool                // X-Thinpost-Hold: true
 	To, Cc        map[string]struct{} // mailbox keys
+
+	// ListUnsubscribe is set when the message carries a List-Unsubscribe or a
+	// List-Unsubscribe-Post field. UnsubscribeFields and UnsubscribePostFields
+	// count them. UnsubscribeValue and UnsubscribePostValue are the unfolded
+	// value of the field when there is exactly one of that name, else "". They
+	// are facts only: a malformed value is never an error here, because
+	// preparation replaces the fields when the app has one-click on.
+	ListUnsubscribe                          bool
+	UnsubscribeFields, UnsubscribePostFields int
+	UnsubscribeValue, UnsubscribePostValue   string
 }
 
 // collect reads the header block, validates the field syntax and fills the facts.
@@ -84,6 +94,14 @@ func (s *Scanned) collect(head []byte) error {
 			}
 		case nameIs(head, f, "Date"):
 			s.HasDate = true
+		case nameIs(head, f, "List-Unsubscribe"):
+			s.ListUnsubscribe = true
+			s.UnsubscribeFields++
+			s.UnsubscribeValue = unfoldValue(head, f)
+		case nameIs(head, f, "List-Unsubscribe-Post"):
+			s.ListUnsubscribe = true
+			s.UnsubscribePostFields++
+			s.UnsubscribePostValue = unfoldValue(head, f)
 		case nameIs(head, f, "X-Thinpost-Require-TLS"):
 			s.RequireTLS = true
 		case nameIs(head, f, "X-Thinpost-Enhanced-Protection"):
@@ -95,6 +113,12 @@ func (s *Scanned) collect(head []byte) error {
 	})
 	if err != nil {
 		return err
+	}
+	if s.UnsubscribeFields != 1 {
+		s.UnsubscribeValue = ""
+	}
+	if s.UnsubscribePostFields != 1 {
+		s.UnsubscribePostValue = ""
 	}
 	if s.Enhanced, err = flag(enhanced); err != nil {
 		return err

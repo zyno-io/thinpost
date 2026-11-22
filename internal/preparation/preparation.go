@@ -23,6 +23,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/receivedtrace"
 	"github.com/zyno-io/thinpost/internal/submission"
 	"github.com/zyno-io/thinpost/internal/tracking"
+	"github.com/zyno-io/thinpost/internal/unsubforward"
 )
 
 var ErrNoWork = errors.New("no submission to prepare")
@@ -71,6 +72,35 @@ type Delivery struct {
 	RecipientIndex int
 	ObjectKey      string
 	Tracking       *Tracking
+	// Forward is set when the message had its own List-Unsubscribe headers that
+	// Thinpost's one-click headers replaced (see Forward).
+	Forward *Forward
+}
+
+// Forward records what to do with the sender's own unsubscribe link when the
+// recipient unsubscribes through Thinpost's link. Host is set when the original
+// headers allow an RFC 8058 POST (the link itself is not copied: the worker
+// reads it from the stored source and checks its host against this one);
+// otherwise Reason says why not (an unsubforward.Reason* value).
+type Forward struct {
+	Host, Reason string
+}
+
+// forwardFor decides the Forward of a message whose own List-Unsubscribe headers
+// are being replaced. It is nil for a message without them. It cannot fail: any
+// original it cannot use is recorded as unusable, and preparation goes on.
+func forwardFor(original unsubforward.Original, err error) *Forward {
+	if err != nil {
+		return &Forward{Reason: unsubforward.ReasonUnusable}
+	}
+	if !original.Present() {
+		return nil
+	}
+	target, reason := unsubforward.Decide(original)
+	if reason != "" {
+		return &Forward{Reason: reason}
+	}
+	return &Forward{Host: target.Host}
 }
 
 // Tracking references a pre-uploaded encrypted mapping object. New signed links
@@ -332,18 +362,21 @@ func (s *Service) PrepareNext(ctx context.Context) (resultErr error) {
 			return errors.New("tracking preparation is not configured")
 		}
 	}
-	// Thinpost-managed one-click unsubscribe applies only when the source does
-	// not carry the app's own headers. A flag with no tracking runtime fails
-	// visibly (a hold) rather than silently dropping the header.
-	oneClick := claim.ListUnsubscribe && payload.Message.ListUnsubscribe == "" && !payload.Message.ListUnsubscribePost
+	// Thinpost-managed one-click unsubscribe replaces any List-Unsubscribe
+	// headers the source carries. A flag with no tracking runtime fails visibly
+	// (a hold) rather than silently dropping the header.
+	oneClick := claim.ListUnsubscribe
 	if oneClick {
 		reason = "internal"
-		if s.Tracking == nil || s.Tracking.Links == nil || s.Tracking.Origin == "" {
-			return errors.New("one-click unsubscribe is not configured")
+		if err = s.checkOneClick(); err != nil {
+			return err
 		}
-		if tracking.ValidateUnsubscribeOrigin(s.Tracking.Origin) != nil {
-			return errors.New("one-click unsubscribe origin is invalid")
-		}
+	}
+	// The sender's own link, to call when the recipient unsubscribes. Decided
+	// once from the stored value; only meaningful when it is being replaced.
+	var forward *Forward
+	if oneClick {
+		forward = forwardFor(unsubforward.OriginalOf(payload))
 	}
 	trackingOrigin := ""
 	if s.Tracking != nil {
@@ -386,10 +419,23 @@ func (s *Service) PrepareNext(ctx context.Context) (resultErr error) {
 			}
 		}
 		reason = "mime_build"
-		final, err := message.Build(preparedMessage, message.Options{Recipient: recipient, ID: claim.MessageID, Date: claim.date(), SigningDomain: key.Domain, Selector: key.Selector, Signer: key.Signer, ListRecipients: payload.ListsRecipients(), Received: trace})
+		options := message.Options{Recipient: recipient, ID: claim.MessageID, Date: claim.date(), SigningDomain: key.Domain, Selector: key.Selector, Signer: key.Signer, ListRecipients: payload.ListsRecipients(), Received: trace}
+		final, err := message.Build(preparedMessage, options)
 		if err != nil {
 			// message.Build errors are constant; never wrap anything that could quote input.
 			return errors.New("build signed MIME failed")
+		}
+		if oneClick && len(final) > edgeprotocol.MaxMIMEBytes {
+			// A message accepted before one-click was sized in (or whose app
+			// turned it on since) can be too big to carry Thinpost's headers.
+			// Send it without them rather than fail it: the app's own headers,
+			// if any, stay, and nothing is forwarded.
+			oneClick, forward = false, nil
+			oplog.OneClickSkipped(claim.AppID, claim.MessageID)
+			preparedMessage.ListUnsubscribe, preparedMessage.ListUnsubscribePost = payload.Message.ListUnsubscribe, payload.Message.ListUnsubscribePost
+			if final, err = message.Build(preparedMessage, options); err != nil {
+				return errors.New("build signed MIME failed")
+			}
 		}
 		// Do not commit a delivery that the Edge protocol must reject. This is
 		// also a guard for older stored submissions and future transformers.
@@ -404,9 +450,20 @@ func (s *Service) PrepareNext(ctx context.Context) (resultErr error) {
 		if err = s.Objects.PutMIME(work, objectKey, final); err != nil {
 			return fmt.Errorf("store signed MIME: %w", err)
 		}
-		deliveries = append(deliveries, Delivery{ID: id, RecipientIndex: index, ObjectKey: objectKey, Tracking: preparedTracking})
+		deliveries = append(deliveries, Delivery{ID: id, RecipientIndex: index, ObjectKey: objectKey, Tracking: preparedTracking, Forward: forward})
 	}
 	return s.commit(ctx, hb, claim, deliveries, &reason)
+}
+
+// checkOneClick fails when the deployment cannot sign Thinpost's one-click link.
+func (s *Service) checkOneClick() error {
+	if s.Tracking == nil || s.Tracking.Links == nil || s.Tracking.Origin == "" {
+		return errors.New("one-click unsubscribe is not configured")
+	}
+	if tracking.ValidateUnsubscribeOrigin(s.Tracking.Origin) != nil {
+		return errors.New("one-click unsubscribe origin is invalid")
+	}
+	return nil
 }
 
 // commit stops the heartbeat and queues the prepared deliveries.
@@ -423,10 +480,12 @@ func (s *Service) commit(ctx context.Context, hb *heartbeat, claim Claim, delive
 	return nil
 }
 
-// prepareRaw prepares a version 3 (raw MIME) source. The message is prepared
-// and signed once; every recipient's delivery points at an identical object,
-// because the recipients are in the SMTP envelope only. Tracking and one-click
-// unsubscribe never apply: the raw message is the client's own.
+// prepareRaw prepares a version 3 (raw MIME) source. Tracking never applies to a
+// raw message yet. Without one-click unsubscribe the message is prepared and
+// signed once and every recipient's delivery points at an identical object,
+// because the recipients are in the SMTP envelope only. With it, each delivery
+// gets its own List-Unsubscribe link (replacing any the client wrote), so each
+// is prepared, signed and stored separately.
 func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submission.Source, key SigningKey, trace []byte, reason *string) ([]Delivery, error) {
 	h := payload.RawHeader
 	*reason = "source_invalid"
@@ -437,8 +496,14 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 	if h.FromField == "" && (scanned.From == nil || addressDomain(scanned.From.Address) != h.SenderDomain) {
 		return nil, errors.New("invalid source object")
 	}
-	*reason = "mime_build"
-	final, err := rawmime.Prepare(payload.Raw, rawmime.PrepareInput{
+	oneClick := claim.ListUnsubscribe
+	if oneClick {
+		*reason = "internal"
+		if err = s.checkOneClick(); err != nil {
+			return nil, err
+		}
+	}
+	input := rawmime.PrepareInput{
 		Scan: scanned,
 		From: rawmime.FromDecision{
 			Value: h.From, Field: h.FromField, Domain: h.SenderDomain, Rewritten: h.FromRewritten,
@@ -449,13 +514,20 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 		Selector:  key.Selector,
 		Signer:    key.Signer,
 		Received:  trace,
-	})
-	if err != nil {
-		// rawmime errors are constant, but never wrap anything built from input.
-		return nil, errors.New("build signed MIME failed")
 	}
-	if len(final) > edgeprotocol.MaxMIMEBytes {
-		return nil, errors.New("signed MIME exceeds delivery limit")
+	var shared []byte
+	var forward *Forward
+	if oneClick {
+		forward = forwardFor(unsubforward.OriginalOf(payload))
+	} else {
+		*reason = "mime_build"
+		if shared, err = rawmime.Prepare(payload.Raw, input); err != nil {
+			// rawmime errors are constant, but never wrap anything built from input.
+			return nil, errors.New("build signed MIME failed")
+		}
+		if len(shared) > edgeprotocol.MaxMIMEBytes {
+			return nil, errors.New("signed MIME exceeds delivery limit")
+		}
 	}
 	deliveries := make([]Delivery, 0, len(h.Recipients))
 	for index := range h.Recipients {
@@ -463,6 +535,37 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 		id, err := randomID()
 		if err != nil {
 			return nil, err
+		}
+		final := shared
+		if oneClick {
+			link, linkErr := s.Tracking.Links.UnsubscribeLink(s.Tracking.Origin, id)
+			if linkErr != nil {
+				return nil, errors.New("unsubscribe link could not be signed")
+			}
+			value := "<" + link + ">"
+			if submission.ValidateListUnsubscribe(value, true) != nil {
+				return nil, errors.New("unsubscribe link is not a valid header value")
+			}
+			*reason = "mime_build"
+			perDelivery := input
+			perDelivery.ListUnsubscribe = value
+			if final, err = rawmime.Prepare(payload.Raw, perDelivery); err != nil {
+				return nil, errors.New("build signed MIME failed")
+			}
+			if len(final) > edgeprotocol.MaxMIMEBytes {
+				// Too big to carry Thinpost's headers (a source accepted before
+				// they were sized in): send it as the client wrote it, with the
+				// client's own headers and no forward, rather than fail it.
+				oneClick, forward = false, nil
+				oplog.OneClickSkipped(claim.AppID, claim.MessageID)
+				if shared, err = rawmime.Prepare(payload.Raw, input); err != nil {
+					return nil, errors.New("build signed MIME failed")
+				}
+				if len(shared) > edgeprotocol.MaxMIMEBytes {
+					return nil, errors.New("signed MIME exceeds delivery limit")
+				}
+				final = shared
+			}
 		}
 		objectKey, err := objectkey.New("final", id, time.Now())
 		if err != nil {
@@ -472,7 +575,7 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 		if err = s.Objects.PutMIME(ctx, objectKey, final); err != nil {
 			return nil, fmt.Errorf("store signed MIME: %w", err)
 		}
-		deliveries = append(deliveries, Delivery{ID: id, RecipientIndex: index, ObjectKey: objectKey})
+		deliveries = append(deliveries, Delivery{ID: id, RecipientIndex: index, ObjectKey: objectKey, Forward: forward})
 	}
 	return deliveries, nil
 }

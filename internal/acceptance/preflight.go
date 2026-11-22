@@ -28,17 +28,40 @@ var preflightTrackingKeys = tracking.NewSizingLinkKeys()
 // escaping, and a link payload has a fixed size per destination.
 // The independent preparation limit remains authoritative for stored messages
 // produced by older versions and for future implementation changes.
+//
+// With one-click on, preparation replaces the message's own List-Unsubscribe
+// headers with its own, but the app can switch one-click off before the message
+// is prepared, and then the message's own headers go out. So a message with its
+// own headers must fit both ways.
 func preflight(m submission.Message, listUnsubscribe bool) error {
+	if listUnsubscribe && (m.ListUnsubscribe != "" || m.ListUnsubscribePost) {
+		if err := preflightMessage(m, false); err != nil {
+			return err
+		}
+	}
+	return preflightMessage(m, listUnsubscribe)
+}
+
+// sizingUnsubscribeLink is the longest one-click link preparation can write:
+// the longest permitted origin, and a v2 payload that is fixed-size for a
+// delivery ID. It is the value of the List-Unsubscribe header, in angle brackets.
+func sizingUnsubscribeLink() (string, error) {
+	origin := "https://" + strings.Repeat("a", tracking.MaxOriginBytes-len("https://"))
+	link, err := preflightTrackingKeys.UnsubscribeLink(origin, strings.Repeat("a", 32))
+	if err != nil {
+		return "", submission.ErrInvalidMessage
+	}
+	return "<" + link + ">", nil
+}
+
+func preflightMessage(m submission.Message, listUnsubscribe bool) error {
 	prepared := m
 	if listUnsubscribe {
-		// Preparation adds a signed one-click header per delivery. Measure the
-		// longest one: the longest permitted origin; the v2 payload is fixed-size for a delivery ID.
-		origin := "https://" + strings.Repeat("a", tracking.MaxOriginBytes-len("https://"))
-		link, err := preflightTrackingKeys.UnsubscribeLink(origin, strings.Repeat("a", 32))
+		value, err := sizingUnsubscribeLink()
 		if err != nil {
-			return submission.ErrInvalidMessage
+			return err
 		}
-		prepared.ListUnsubscribe, prepared.ListUnsubscribePost = "<"+link+">", true
+		prepared.ListUnsubscribe, prepared.ListUnsubscribePost = value, true
 	}
 	if m.Tracking != nil {
 		origin := "https://" + strings.Repeat("a", tracking.MaxOriginBytes-len("https://"))
