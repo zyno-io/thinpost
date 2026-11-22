@@ -163,6 +163,31 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 	t.Run("submission burst is shared across replicas", func(t *testing.T) {
 		testSubmissionBurst(t, ctx, db, repo)
 	})
+	t.Run("a new app starts with working default limits", func(t *testing.T) {
+		app, err := repo.CreateApp(ctx, "operator", "Defaults")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rate, err := repo.GetSubmissionRate(ctx, app.ID); err != nil || rate.PerMinute != 60 || rate.Burst != 100 {
+			t.Fatal("submission rate default", rate, err)
+		}
+		if quota, err := repo.GetRecipientQuota(ctx, app.ID); err != nil || quota.DailyLimit != 10000 {
+			t.Fatal("recipient quota default", quota, err)
+		}
+		if quota, err := repo.GetPendingQuota(ctx, app.ID); err != nil || quota.Limit != 1000 {
+			t.Fatal("pending quota default", quota, err)
+		}
+		if quota, err := repo.GetTrackingQuota(ctx, app.ID); err != nil || quota.DailyLimit != 100000 {
+			t.Fatal("tracking quota default", quota, err)
+		}
+		var tokens int64
+		if err := db.QueryRowContext(ctx, `SELECT submission_tokens FROM apps WHERE id=$1`, app.ID).Scan(&tokens); err != nil || tokens != 100*submissionTokenUnit {
+			t.Fatal("bucket starts full", tokens, err)
+		}
+		if err := repo.ReserveOperatorSubmission(ctx, app.ID, 100, true); err != nil {
+			t.Fatal("a new app could not submit immediately", err)
+		}
+	})
 	t.Run("object reference lock fences collection and missing objects roll back", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
@@ -318,8 +343,11 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		record := withMetadata(acceptance.Record{AppID: id, KeyID: key.ID, ObjectKey: fixtureObjectKey("submissions", "ffffffffffffffffffffffffffffff02"), From: "sender@example.com", Adapter: "resend", IdempotencyKey: "same", RequestHash: sha256.Sum256([]byte("quota")), RecipientCount: 2})
+		if _, err = repo.SetRecipientQuota(ctx, "operator", id, 0); err != nil {
+			t.Fatal(err)
+		}
 		if _, err = repo.Commit(ctx, record); !errors.Is(err, submission.ErrQuotaExceeded) {
-			t.Fatal("new app quota should be closed", err)
+			t.Fatal("a zero recipient quota should block", err)
 		}
 		quota, err := repo.SetRecipientQuota(ctx, "operator", id, 5)
 		if err != nil || quota.DailyLimit != 5 || quota.Used != 0 {
@@ -423,8 +451,11 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		record := withMetadata(acceptance.Record{AppID: appID, KeyID: key.ID, ObjectKey: fixtureObjectKey("submissions", "ffffffffffffffffffffffffffffff21"), From: "sender@example.com", Adapter: "resend", IdempotencyKey: "same", RequestHash: sha256.Sum256([]byte("pending")), RecipientCount: 1})
+		if _, err = repo.SetPendingQuota(ctx, "operator", appID, 0); err != nil {
+			t.Fatal(err)
+		}
 		if _, err = repo.Commit(ctx, record); !errors.Is(err, submission.ErrBacklogExceeded) {
-			t.Fatal("new app backlog should be closed", err)
+			t.Fatal("a zero pending limit should block", err)
 		}
 		daily, err := repo.GetRecipientQuota(ctx, appID)
 		if err != nil || daily.Used != 0 {
@@ -517,7 +548,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 			t.Fatal("lowered quota did not hold new work", err)
 		}
 		var audits int
-		if err = db.QueryRowContext(ctx, `SELECT count(*) FROM audit_events WHERE app_id=$1 AND action='app.pending_quota.updated'`, appID).Scan(&audits); err != nil || audits != 2 {
+		if err = db.QueryRowContext(ctx, `SELECT count(*) FROM audit_events WHERE app_id=$1 AND action='app.pending_quota.updated'`, appID).Scan(&audits); err != nil || audits != 3 {
 			t.Fatal("pending quota updates were not audited", err)
 		}
 		if _, err = db.ExecContext(ctx, `CREATE FUNCTION fail_pending_quota_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'audit unavailable'; END $$; CREATE TRIGGER fail_pending_quota_audit BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION fail_pending_quota_audit()`); err != nil {

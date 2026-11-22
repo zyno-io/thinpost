@@ -184,7 +184,10 @@ func TestLookupOperatorApp(t *testing.T) {
 
 func TestOperatorReservationUsesTheSubmissionRate(t *testing.T) {
 	f := newHoldFixture(t)
-	// The default is disabled, exactly as for keys.
+	// A zero rate blocks, exactly as for keys.
+	if _, err := f.repo.SetSubmissionRate(f.ctx, "fixture", f.app, 0, 0); err != nil {
+		t.Fatal(err)
+	}
 	if err := f.repo.ReserveOperatorSubmission(f.ctx, f.app, 1, true); !errors.Is(err, submission.ErrRateLimited) {
 		t.Fatalf("disabled rate: %v", err)
 	}

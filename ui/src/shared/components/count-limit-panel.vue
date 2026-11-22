@@ -18,7 +18,7 @@
                         <ul>
                             <li>Every To, Cc and Bcc address counts, including suppressed recipients. Recipients are counted when a message is accepted.</li>
                             <li>Changing the limit does not reset today's count. Raising it takes effect for the rest of the day.</li>
-                            <li>A limit of zero rejects every new message. New apps start at zero.</li>
+                            <li>A limit of zero rejects every new message. New apps start at 10,000 recipients per day and 1,000 pending messages.</li>
                             <li>A paused app rejects all new messages, whatever its limit.</li>
                         </ul>
                     </template>
@@ -30,7 +30,7 @@
                         <ul>
                             <li>A message counts as pending from when it is accepted until it finishes delivery. A held message counts until it is cancelled or expires.</li>
                             <li>The pending count is a snapshot and approximate. It is a lower bound when the panel says “or more”.</li>
-                            <li>A limit of zero rejects every new message. New apps start at zero.</li>
+                            <li>A limit of zero rejects every new message. New apps start at 10,000 recipients per day and 1,000 pending messages.</li>
                             <li>A paused app rejects all new messages, whatever its limit.</li>
                         </ul>
                     </template>
@@ -65,7 +65,7 @@
                 <div v-if="isBlocked(current)" class="notice warning">
                     <i class="fa-solid fa-ban" aria-hidden="true" />
                     <p class="notice-body">
-                        <strong>New messages are blocked.</strong> Every message is rejected until a limit is set. New apps start blocked.
+                        <strong>New messages are blocked.</strong> Every message is rejected until a limit is set. New apps start at 10,000 recipients per day and 1,000 pending messages.
                     </p>
                 </div>
 

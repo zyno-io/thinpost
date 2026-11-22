@@ -59,7 +59,7 @@
                 <div v-if="isDisabled(rate)" class="notice warning">
                     <i class="fa-solid fa-ban" aria-hidden="true" />
                     <p class="notice-body">
-                        <strong>New messages are blocked.</strong> Every message is rejected until a limit is set. New apps start blocked.
+                        <strong>New messages are blocked.</strong> Every message is rejected until a limit is set. New apps start at 60 messages per minute with a burst of 100.
                     </p>
                 </div>
 

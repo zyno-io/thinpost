@@ -93,7 +93,7 @@ JSON bodies are rejected when they contain unknown fields, trailing data, invali
 
 Every To, Cc and Bcc address is its own delivery, in that order. Duplicates across lists are kept as separate deliveries. Each copy carries a `To` header listing every To address, a `Cc` header when there are Cc addresses, and never a `Bcc` header. The daily recipient quota, the recipient allowlist and the [suppression list](/guide/suppressions) apply to Cc and Bcc recipients as they do to To.
 
-A new app cannot submit until an administrator sets its daily recipient limit, pending-message limit and upload rate. A request over a limit is answered 429 (see each provider page for the exact shape).
+A new app starts with 60 messages per minute (burst of 100), 10,000 recipients per day and 1,000 pending messages; an administrator can change them, and a limit of zero blocks all new messages. A request over a limit is answered 429 (see each provider page for the exact shape).
 
 ### Custom headers
 

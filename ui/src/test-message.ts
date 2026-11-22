@@ -87,7 +87,7 @@ export function describeTestRefusal(err: unknown): ApiErrorDescription {
             return {
                 kind: 'unavailable',
                 status,
-                message: `This app is over its sending limit, or has none set. A new app can't send until a limit is set. Set one in the Sending limit panel on the API keys tab, then try again.${NOT_SENT}`
+                message: `This app is over its sending limit, or its limit is set to zero. Check the Sending limit panel on the API keys tab, then try again.${NOT_SENT}`
             };
         case 'recipient_quota_exceeded':
             return {

@@ -249,8 +249,8 @@ func TestTrackingPostgresAtomicReferencesAndBoundedEvents(t *testing.T) {
 	}
 	repo := &Repository{DB: db, Generation: generation, Objects: encrypted}
 	quota, err := repo.GetTrackingQuota(ctx, app)
-	if err != nil || quota.DailyLimit != 0 || quota.Used != 0 || quota.Suppressed != 0 {
-		t.Fatal("new tracking quota not closed", quota, err)
+	if err != nil || quota.DailyLimit != 100000 || quota.Used != 0 || quota.Suppressed != 0 {
+		t.Fatal("new tracking quota not at its default", quota, err)
 	}
 	quota, err = repo.SetTrackingQuota(ctx, "operator", app, 4)
 	if err != nil || quota.DailyLimit != 4 {
@@ -406,7 +406,7 @@ func TestTrackingPostgresAtomicReferencesAndBoundedEvents(t *testing.T) {
 		t.Fatal("app quota was not shared across links or failure spent budget", quota, err)
 	}
 	otherQuota, err := repo.GetTrackingQuota(ctx, other)
-	if err != nil || otherQuota.DailyLimit != 0 || otherQuota.Used != 0 || otherQuota.Suppressed != 0 {
+	if err != nil || otherQuota.DailyLimit != 100000 || otherQuota.Used != 0 || otherQuota.Suppressed != 0 {
 		t.Fatal("tracking quota affected another app", otherQuota, err)
 	}
 	if err = owner.QueryRowContext(ctx, `SELECT count(*) FROM tracking_events WHERE link_id IN ($1,$2)`, refs[1].ID, refs[2].ID).Scan(&events); err != nil || events != 1 {

@@ -93,7 +93,7 @@ Errors are `{"error": "<code>"}`. Generic failures carry the HTTP status text (`
 | 408 | `Request Timeout` | The body was not received in time. |
 | 409 | `idempotency_conflict` | The `Idempotency-Key` was used with a different request. |
 | 422 | `message_rejected` | Acceptance refused the message: for example a `from` domain that is not an active verified sender domain of the app, a recipient the operator's recipient policy does not allow, or a `List-Unsubscribe` header on an app with Thinpost-managed unsubscribe. |
-| 429 | `recipient_quota_exceeded`, `submission_rate_exceeded`, `pending_limit_exceeded` | A limit is reached. A new app has a submission rate of zero, which refuses everything with `submission_rate_exceeded` until an administrator sets one. |
+| 429 | `recipient_quota_exceeded`, `submission_rate_exceeded`, `pending_limit_exceeded` | A limit is reached. A new app starts with 60 messages per minute (burst of 100), 10,000 recipients per day and 1,000 pending messages. A limit of zero refuses every new message with that limit's code until an administrator raises it. |
 | 503 | `Service Unavailable` | Submission, authentication, the database or object storage is unavailable, or the admission gate is closed. A busy request budget adds `Retry-After: 5`. |
 
 A `422` is a refusal of this message, not of your key. Retrying it unchanged gets the same answer. A `429` or `503` can succeed later.

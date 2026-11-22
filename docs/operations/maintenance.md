@@ -122,4 +122,4 @@ The flags attest that you fenced the workers and isolated the database; the comm
 
 `grant-runtime` and `retry-policy inspect` require exactly the current schema, so they cannot run before step 3. Control images that need a newer schema refuse to start until that deploy runs.
 
-A historical `tracking_abandoned` outcome blocks one of the chained migrations and needs separate investigation. Do not delete or relabel evidence to make the migration pass. Defaults added by newer migrations, such as per-app tracking and submission budgets, start at zero, and legacy tracking mappings have no assumed post-send lifetime. Review them before reopening admission.
+A historical `tracking_abandoned` outcome blocks one of the chained migrations and needs separate investigation. Do not delete or relabel evidence to make the migration pass. Defaults added by newer migrations, such as per-app tracking and submission budgets, start at zero in a database restored through this chain until schema 50 changes the defaults for new apps (existing apps keep their zero), and legacy tracking mappings have no assumed post-send lifetime. Review them before reopening admission.

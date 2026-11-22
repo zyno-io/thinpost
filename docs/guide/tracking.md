@@ -137,7 +137,7 @@ For a valid link, analytics are best effort and bounded to one second of depende
 Two limits bound what is stored and sent:
 
 - a **per-link event cap** (`THINPOST_TRACKING_EVENT_LIMIT`), and
-- a **per-app daily event budget** in UTC, which defaults to **zero**. Set it with `PUT /api/v1/apps/{appId}/tracking-quota` or in the console.
+- a **per-app daily event budget** in UTC, which defaults to **100,000** events for a new app (zero records nothing). Set it with `PUT /api/v1/apps/{appId}/tracking-quota` or in the console.
 
 Beyond either limit, links keep resolving and an aggregate "not recorded" counter increases. Opens and clicks that are recorded appear in the message detail and as `opened` and `clicked` webhook events, which carry an opaque `tracking_link_id` and never the destination. Provider-format click events are not emulated yet. The console shows recorded events after the caps, so it can undercount. It shows no destinations, unique opens or rates.
 
