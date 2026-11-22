@@ -46,6 +46,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/signing"
 	"github.com/zyno-io/thinpost/internal/smtpintake"
 	"github.com/zyno-io/thinpost/internal/submission"
+	"github.com/zyno-io/thinpost/internal/tracking"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/test/bufconn"
@@ -220,6 +221,9 @@ type subRig struct {
 	failures chan error
 	started  chan *controlv1.DeliveryStart
 
+	// tracking is the visit handler of a rig made with rigOptions.tracking.
+	tracking *tracking.Handler
+
 	start func(controller string, sub Submission) (stop func())
 }
 
@@ -228,6 +232,9 @@ type rigOptions struct {
 	allowlist []string
 	// withoutIntake runs a control that does not offer submission/1.
 	withoutIntake bool
+	// tracking turns on the tracking runtime: link keys, the mapping store and
+	// the app defaults, as a deployment with THINPOST_TRACKING_ORIGIN has.
+	tracking bool
 }
 
 func newSubmissionRig(t *testing.T, opts rigOptions) *subRig {
@@ -318,6 +325,19 @@ func newSubmissionRig(t *testing.T, opts rigOptions) *subRig {
 		t.Fatal(err)
 	}
 	r.preparer = &preparation.Service{Repository: r.repo, Objects: r.objects, Keys: keys}
+	if opts.tracking {
+		linkKeys, linkErr := tracking.NewLinkKeys([]byte("0123456789abcdef0123456789abcdef"), nil)
+		if linkErr != nil {
+			t.Fatal(linkErr)
+		}
+		protected, storeErr := tracking.NewProtectedStore(r.objects)
+		if storeErr != nil {
+			t.Fatal(storeErr)
+		}
+		acceptor.ApplyTrackingDefaults = true
+		r.preparer.Tracking = &preparation.TrackingConfig{Origin: "https://tracking.example.com", Links: linkKeys, EventLimit: 10, Objects: protected}
+		r.tracking = &tracking.Handler{Links: linkKeys, Visitor: &tracking.Service{Repository: r.repo, Objects: protected}}
+	}
 	intake := &smtpintake.Service{Repository: r.repo, Acceptance: acceptor, Signing: keys, Replay: &smtpintake.ReplaySecret{Store: r.repo, Keys: keyring}}
 	r.lossy = &lossySubmission{inner: intake}
 	issued, err := r.repo.IssueSMTPCredential(ctx, "operator", r.app, "printer")

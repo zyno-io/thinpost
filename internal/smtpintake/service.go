@@ -211,6 +211,14 @@ func (s *Service) submit(ctx context.Context, fence submission.Fence, m Message,
 	if !active {
 		return Result{Outcome: AppPaused}
 	}
+	// The per-message tracking choice is judged for fresh submissions only: a
+	// retry of a message an older pod accepted must still get its original
+	// answer. It is judged here, not in Scan, because Scan runs again on stored
+	// sources.
+	trackOpens, trackClicks, err := scanned.TrackingChoice()
+	if err != nil {
+		return Result{Outcome: MessageInvalid}
+	}
 	// 5. Enhanced Protection. AUTH requires TLS, so the second check is a guard.
 	if scanned.RequireTLS {
 		return Result{Outcome: MessageInvalid}
@@ -249,11 +257,15 @@ func (s *Service) submit(ctx context.Context, fence submission.Fence, m Message,
 	req := acceptance.RawRequest{
 		Raw: m.Body, Scan: scanned, MailFrom: m.MailFrom, Recipients: recipients, Kinds: make([]string, len(kinds)),
 		From: decision, EnhancedProtection: scanned.Enhanced, Hold: scanned.Hold, Replay: kind, ReplayDigest: replayDigest,
+		TrackOpens: trackOpens, TrackClicks: trackClicks,
 	}
 	for i, k := range kinds {
 		req.Kinds[i] = string(k)
 	}
-	app := submission.App{ID: id, SMTPCredentialID: m.CredentialID, SMTPCredentialDigest: digest}
+	app := submission.App{
+		ID: id, SMTPCredentialID: m.CredentialID, SMTPCredentialDigest: digest,
+		DefaultTrackOpens: policy.DefaultTrackOpens, DefaultTrackClicks: policy.DefaultTrackClicks,
+	}
 	receipt, err := s.Acceptance.AcceptRaw(ctx, app, fence, req)
 	if err != nil {
 		return Result{Outcome: outcomeOf(err)}

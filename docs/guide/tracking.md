@@ -88,6 +88,7 @@ An app can default opens and clicks on. Both are off by default. Set them in the
 - **Only HTML bodies are tracked.** A default on a text-only message sends it untracked.
 - **A default never causes a rejection.** If a defaulted message fails the size or link-rewrite check (more than 100 links, a link over 2,048 bytes, an oversized document), Thinpost drops the click default first, then the open default, and accepts the message with what remains. An explicit opt-in that does not fit is rejected.
 - **The choice is resolved once**, when the message is accepted. A later default change never affects a message already accepted.
+- **SMTP mail uses the same defaults.** Over [SMTP](/guide/smtp#tracking-and-unsubscribe), a message can turn them on or off with `X-Thinpost-Track-Opens` or `X-Thinpost-Track-Clicks` set to `true` or `false`. Only `text/html` body parts are rewritten; plain text, attachments and signed or encrypted mail are never changed. Tracking that can't be applied is dropped (clicks first) and the message is still sent: an SMTP message is never refused for tracking.
 - **A runtime is required.** Turning a default on returns 409 on a replica without tracking configured. Turning one off is always allowed.
 
 ## What gets rewritten

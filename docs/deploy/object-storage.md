@@ -5,7 +5,7 @@ description: Provision the S3-compatible bucket for Thinpost, grant the control 
 
 # Object storage
 
-The control plane stores original submissions, signed per-recipient messages (complete for HTTP mail, a header-only recipe over the stored original for SMTP mail), received bounce bodies, encrypted tracking mappings and inbound messages in one S3-compatible bucket. It encrypts every object before upload. The edge worker never sees the bucket: it receives only the bytes of the delivery it is asked to send.
+The control plane stores original submissions, signed per-recipient messages (complete for HTTP mail, a recipe over the stored original for SMTP mail: its headers, plus the recipient's own HTML part when the mail is tracked), received bounce bodies, encrypted tracking mappings and inbound messages in one S3-compatible bucket. It encrypts every object before upload. The edge worker never sees the bucket: it receives only the bytes of the delivery it is asked to send.
 
 ## What the bucket needs
 
@@ -146,7 +146,7 @@ Do not enable object deletion, other than the lifecycle rule above, until you ha
 
 ## Capacity
 
-An attachment is stored once in the encrypted source object. For mail submitted over SMTP, each recipient's `final/` object is a small recipe: the exact signed header block (DKIM signature, trace, Message-ID and the rest) and no body. The control plane rebuilds the message from the source when it sends and refuses to send it if its size or SHA-256 differ from what was signed. SMTP storage therefore grows with the attachment size once, plus a few kilobytes per recipient. Mail submitted over the HTTP API is unchanged: each recipient's object is a complete signed message, so its storage grows with attachment size times recipient count. Deliveries prepared before this change also keep their complete objects.
+An attachment is stored once in the encrypted source object. For mail submitted over SMTP, each recipient's `final/` object is a small recipe: the exact signed header block (DKIM signature, trace, Message-ID and the rest) and, for tracked mail, that recipient's rewritten HTML part(s), which carry the recipient's own tracking links (typically 10 to 100 KB); the rest of the body is read from the original. The control plane rebuilds the message from the source when it sends and refuses to send it if its size or SHA-256 differ from what was signed. SMTP storage therefore grows with the attachment size once, plus a few kilobytes per recipient, plus the HTML part for each recipient of tracked mail. Mail submitted over the HTTP API is unchanged: each recipient's object is a complete signed message, so its storage grows with attachment size times recipient count. Deliveries prepared before this change also keep their complete objects.
 
 ## Next
 

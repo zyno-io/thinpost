@@ -60,6 +60,6 @@ func PreparedSize(raw []byte, in PrepareInput) (Size, error) {
 	if err != nil {
 		return Size{}, err
 	}
-	body := in.Scan.Size - in.Scan.BodyStart + in.Scan.BareLF
+	body := in.bodyLen(raw)
 	return Size{Headers: count.n, DKIM: len(sig), Total: len(sig) + count.n + 2 + body}, nil
 }

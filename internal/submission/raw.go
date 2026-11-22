@@ -67,10 +67,11 @@ type RawHeader struct {
 	// RawSHA256 is the lowercase hex SHA-256 of the raw bytes.
 	RawSHA256 string `json:"raw_sha256"`
 	// TrackOpens and TrackClicks are the open and click tracking decisions for
-	// the message, resolved at acceptance. They are read-first: this version
-	// reads and ignores them (SMTP mail is not tracked yet) so a later one can
-	// write them without a schema change, and omitempty keeps every object
-	// written without them byte-identical when it is encoded again.
+	// the message, resolved at acceptance: the kinds that survived the message's
+	// own X-Thinpost-Track-* headers, the app's defaults, the tracking runtime
+	// and the size check. An object written without them (before SMTP tracking,
+	// or untracked) prepares untracked, and omitempty keeps it byte-identical
+	// when it is encoded again.
 	TrackOpens  bool `json:"track_opens,omitempty"`
 	TrackClicks bool `json:"track_clicks,omitempty"`
 }

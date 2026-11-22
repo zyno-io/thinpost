@@ -185,7 +185,7 @@ func TestRecipeObjectSelfCheck(t *testing.T) {
 	sum := sha256.Sum256(raw)
 	baseSHA := hex.EncodeToString(sum[:])
 	good := rawmime.Prepared{Message: signed, HeaderLen: len(signed) - len("body\r\nmore\r\n")}
-	if _, err = recipeObject(id, baseSHA, raw, scan.BodyStart, good); err != nil {
+	if _, err = recipeObject(id, baseSHA, raw, scan.BodyStart, good, nil); err != nil {
 		t.Fatal(err)
 	}
 	for name, tc := range map[string]struct {
@@ -196,7 +196,7 @@ func TestRecipeObjectSelfCheck(t *testing.T) {
 		"the body differs":                 {raw, rawmime.Prepared{Message: append(append([]byte{}, signed[:good.HeaderLen]...), "body\r\nmoreX\r\n"...), HeaderLen: good.HeaderLen}},
 		"the header length is wrong":       {raw, rawmime.Prepared{Message: signed, HeaderLen: good.HeaderLen - 2}},
 	} {
-		if _, err = recipeObject(id, baseSHA, tc.raw, scan.BodyStart, tc.signed); err == nil {
+		if _, err = recipeObject(id, baseSHA, tc.raw, scan.BodyStart, tc.signed, nil); err == nil {
 			t.Errorf("%s: stored", name)
 		}
 	}

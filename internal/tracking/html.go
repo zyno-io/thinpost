@@ -46,6 +46,10 @@ type Options struct {
 	Clicks bool
 }
 
+// ErrTooManyLinks is returned by Rewrite for a document with more than maxLinks
+// trackable links.
+var ErrTooManyLinks = errors.New("too many trackable links")
+
 // Rewrite operates on one recipient's HTML before MIME construction and DKIM
 // signing. Only absolute HTTP(S) anchor destinations without URL credentials
 // are rewritten. Relative, fragment, mailto and other links are left intact.
@@ -100,7 +104,7 @@ func Rewrite(input string, options Options) (string, []Mapping, error) {
 				}
 				if count == 1 && eligibleDestination(node.Attr[index].Val) {
 					if len(anchors) >= maxLinks {
-						return "", nil, errors.New("too many trackable links")
+						return "", nil, ErrTooManyLinks
 					}
 					anchors = append(anchors, anchor{node: node, attribute: index, destination: node.Attr[index].Val})
 				}

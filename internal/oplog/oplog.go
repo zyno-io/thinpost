@@ -300,3 +300,27 @@ func PreparedInvalid(appID, messageID, deliveryID string) {
 func OneClickSkipped(appID, messageID string) {
 	emit("one_click app=%s message=%s status=skipped reason=too_large", ID(appID), ID(messageID))
 }
+
+// trackingSkipReasons are the fixed reasons SMTP mail is sent with less
+// tracking than was asked for. internal/rawtracking and acceptance pin their
+// constants to this set in tests.
+var trackingSkipReasons = map[string]bool{
+	"not_configured": true, "not_mime": true, "signed_or_encrypted": true, "malformed": true,
+	"no_html": true, "unsupported_encoding": true, "unsupported_charset": true, "too_large": true,
+	"too_many_parts": true, "too_many_links": true, "rewrite_failed": true, "message_too_large": true,
+}
+
+// TrackingSkipped logs `tracking app=<id> message=<id> status=skipped reason=<reason>`
+// when SMTP mail was sent with less open or click tracking than was requested
+// (an X-Thinpost-Track header, or the app's defaults) because it could not be
+// honored. The mail is never refused for this. An unlisted reason is logged as
+// "other".
+func TrackingSkipped(appID, messageID, reason string) {
+	if !trackingSkipReasons[reason] {
+		reason = "other"
+	}
+	emit("tracking app=%s message=%s status=skipped reason=%s", ID(appID), ID(messageID), reason)
+}
+
+// TrackingSkipReason reports whether reason is one TrackingSkipped logs as is.
+func TrackingSkipReason(reason string) bool { return trackingSkipReasons[reason] }

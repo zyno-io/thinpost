@@ -30,6 +30,9 @@ type Policy struct {
 	// OnlyUnauthorized is smtp_from_only_unauthorized: keep a From whose domain
 	// the app has verified instead of rewriting it.
 	OnlyUnauthorized bool
+	// DefaultTrackOpens and DefaultTrackClicks are the app's tracking defaults.
+	// They ride along with the policy to save a query; DecideFrom ignores them.
+	DefaultTrackOpens, DefaultTrackClicks bool
 }
 
 // FromDecision is the effective From of a submission.

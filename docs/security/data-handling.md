@@ -32,7 +32,7 @@ PostgreSQL can log bind values unless you configure it not to. Set `log_paramete
 | Data | Where | Protection |
 | --- | --- | --- |
 | Original submission (body, attachments, headers). For SMTP mail, the raw message as the client sent it | Object store | Encrypted by the control plane before upload |
-| Signed message per recipient | Object store | Encrypted. HTTP mail: a complete signed message per recipient, so attachments are stored again in each. SMTP mail: a recipe holding that recipient's signed header block (including its own unsubscribe link when the app has one-click on) and no body; the body and attachments are stored once, in the original. Deliveries prepared before recipes existed keep complete objects |
+| Signed message per recipient | Object store | Encrypted. HTTP mail: a complete signed message per recipient, so attachments are stored again in each. SMTP mail: a recipe holding that recipient's signed header block (including its own unsubscribe link when the app has one-click on) and, when the app tracks the message, that recipient's own rewritten HTML part(s) with their tracking links; everything else in the body, attachments included, is stored once, in the original. Deliveries prepared before recipes existed keep complete objects |
 | Received bounces and inbound messages | Object store | Encrypted. Inbound objects live under the `inbound/` prefix |
 | Recipient addresses, sender domain, From address and name, subject | PostgreSQL, plaintext | Database access control. Enhanced Protection subjects are withheld from console reads |
 | API keys | PostgreSQL | A digest only. The secret is shown once at creation |
