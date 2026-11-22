@@ -166,7 +166,7 @@ The SMTP tab warns you when the chosen domain would not be signed yet.
 | Addresses | ASCII only. Thinpost does not offer SMTPUTF8. Recipients must be plain addresses. A quoted local part that isn't a plain name is refused: `"a b"@example.com` gets `501 5.1.3`, and quoting that hides characters such as `"\"ops\""@example.com` gets `553 5.1.3`. Quotes around a plain name (`"ops"@example.com`) are harmless and accepted. |
 | Connection | A connection allows three sign-in attempts and 100 messages. A client must sign in within 2 minutes of connecting, and the connection is closed 30 minutes after it was opened. A single message transfer that takes longer than 10 minutes, or stalls, is cut and the connection closed. |
 
-On top of these, the app's own [limits](/guide/console#app-limits) apply: the submission rate, the daily recipient quota and the pending-message limit. A new app starts with all three at zero, which blocks everything until an administrator raises them.
+On top of these, the app's own [limits](/guide/console#app-limits) apply: the submission rate, the daily recipient quota and the pending-message limit. A new app starts with working defaults: 60 messages per minute (burst of 100), 10,000 recipients per day and 1,000 pending messages. An administrator can change them, and a limit of zero blocks all new messages.
 
 Thinpost buffers a message in memory while it is received, so a heavily loaded edge may ask a client to try again later.
 

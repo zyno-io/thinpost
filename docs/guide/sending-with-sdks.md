@@ -17,7 +17,7 @@ For any provider:
 
 1. An administrator has created an **app** and issued an **API key** for it ([Concepts](/guide/concepts)).
 2. The `From` domain is a **verified sender domain** of that app ([Sender domains](/guide/domains)). For Mailgun, the domain in the URL path must be authorized too.
-3. The app has **limits set**. A new app has a daily recipient limit, a pending-message limit and an upload rate of zero, which blocks submission until an administrator raises them. Requests over a limit get HTTP 429.
+3. The app has **limits set**. A new app starts with 60 messages per minute (burst of 100), 10,000 recipients per day and 1,000 pending messages, so you can send right away. An administrator can change them, and a limit of zero blocks all new messages. Requests over a limit get HTTP 429.
 4. Your SDK points at Thinpost over **HTTPS**.
 
 ## Tested SDKs

@@ -200,7 +200,7 @@ describe.each(cases)('$title panel', c => {
         const text = panel(c).text();
         expect(text).toContain('New messages blocked');
         expect(text).toContain('Every message is rejected until a limit is set');
-        expect(text).toContain('New apps start blocked');
+        expect(text).toContain('New apps start at 10,000 recipients per day');
         expect(panelButton(c, 'Change limit').attributes('disabled')).toBeUndefined();
     });
 

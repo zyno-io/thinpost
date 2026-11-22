@@ -64,7 +64,7 @@ func newFixture(t *testing.T) *fixture {
 	if err = postgres.Migrate(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	// Revert migrations 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29 and 28 to leave the exact schema-27 shape.
+	// Revert migrations 50, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29 and 28 to leave the exact schema-27 shape.
 	// Migration 44: the messages constraints and columns are removed first (messages_smtp_not_console
 	// references console_test, and the credential FK precedes the DROP TABLE);
 	// edge_source_reports.submission_ports is dropped with that table below.
@@ -74,7 +74,10 @@ func newFixture(t *testing.T) *fixture {
 	// Migration 35's constraint is rebuilt without its feedback branch first.
 	// Migration 41: message_recipients.kind is dropped with the table below.
 	// Migration 39: dropping webhook_events.inbound_id also drops the source CHECK and the unique index.
-	if _, err = db.ExecContext(ctx, `ALTER TABLE apps DROP CONSTRAINT apps_deleted_inactive, DROP COLUMN deleted_at;
+	if _, err = db.ExecContext(ctx, `ALTER TABLE apps ALTER COLUMN submission_rate_per_minute SET DEFAULT 0, ALTER COLUMN submission_burst SET DEFAULT 0,
+		ALTER COLUMN submission_tokens SET DEFAULT 0, ALTER COLUMN recipient_daily_limit SET DEFAULT 0, ALTER COLUMN pending_message_limit SET DEFAULT 0,
+		ALTER COLUMN tracking_daily_limit SET DEFAULT 0;
+		ALTER TABLE apps DROP CONSTRAINT apps_deleted_inactive, DROP COLUMN deleted_at;
 		DROP TABLE tracking_domains;
 		DROP TABLE bounce_domains;
 		ALTER TABLE delivery_attempts DROP COLUMN return_path_domain;
@@ -127,7 +130,7 @@ ALTER TABLE webhook_deliveries DROP COLUMN lane;
 		DROP TABLE message_recipients; DROP INDEX deliveries_id_prefix_idx, messages_app_id_prefix_idx;
 		ALTER TABLE messages DROP CONSTRAINT messages_id_app_key, DROP COLUMN subject, DROP COLUMN recipient_count, DROP COLUMN sender_domain, DROP COLUMN sender_domain_rev;
 		ALTER TABLE messages RENAME COLUMN enhanced_protection TO require_tls;
-		DELETE FROM thinpost_schema_migrations WHERE version IN (28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49);
+		DELETE FROM thinpost_schema_migrations WHERE version IN (28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50);
 		UPDATE runtime_gate SET generation='`+testGeneration+`',mode='open',revision=5,quarantine_complete=true,changed_by='fixture' WHERE singleton`); err != nil {
 		t.Fatal(err)
 	}

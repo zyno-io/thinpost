@@ -183,6 +183,10 @@ Deploy the release that serves tracking links at any hostname (links not bound t
 
 Schema 49 adds a nullable `apps.deleted_at` and a `NOT VALID` check that a deleted app is paused. Both are catalog-only changes (no rewrite, no table scan), and no existing app changes. Deploy the release to every replica before anyone deletes an app: a replica without it does not know about deleted apps and would still list one. Deleting is not undone by a rollback; the schema rolls forward only. Deleting an app revokes its keys and SMTP credentials, so nothing sending as that app keeps working.
 
+## Default limits for new apps
+
+Schema 50 changes the column defaults so a new app starts with 60 messages per minute (burst of 100), 10,000 recipients per day, 1,000 pending messages and 100,000 tracking events per day, with a full submission bucket. It is catalog-only and does not touch existing rows: **existing apps keep their current limits**, including a zero that was set to block them. Raise an old app's limits in the console if it should get the new values.
+
 ## Upgrading the edge
 
 The edge release is independent. Its Deployment uses `Recreate`, so an upgrade stops the old pod and starts a new one, and sending pauses briefly. Bounce senders retry. The control plane reconnects and the edge replays any results it has not had acknowledged.

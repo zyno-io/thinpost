@@ -397,6 +397,7 @@ paths:
       - { $ref: '#/components/parameters/AppId' }
     get:
       operationId: getRecipientQuota
+      description: New apps start at 10,000 recipients per day. Zero blocks all new messages. Existing apps keep their values.
       responses:
         '200':
           description: Current UTC day recipient limit and usage
@@ -428,6 +429,7 @@ paths:
       - { $ref: '#/components/parameters/AppId' }
     get:
       operationId: getTrackingQuota
+      description: New apps start at 100,000 events per day. Zero records no events. Existing apps keep their values.
       responses:
         '200':
           description: Per-app tracking event budget and aggregate suppressed visits
@@ -547,6 +549,7 @@ paths:
       - { $ref: '#/components/parameters/AppId' }
     get:
       operationId: getPendingQuota
+      description: New apps start at 1,000 pending messages. Zero blocks all new messages. Existing apps keep their values.
       responses:
         '200':
           description: Pending-message limit and approximate current count
@@ -578,6 +581,7 @@ paths:
       - { $ref: '#/components/parameters/AppId' }
     get:
       operationId: getSubmissionRate
+      description: New apps start at 60 messages per minute with a burst of 100. Zero blocks all new messages. Existing apps keep their values.
       responses:
         '200':
           description: Per-app shared upload rate and burst capacity

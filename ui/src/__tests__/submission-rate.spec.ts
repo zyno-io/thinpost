@@ -153,7 +153,7 @@ describe('submission rate panel', () => {
         const text = panel().text();
         expect(text).toContain('New messages blocked');
         expect(text).toContain('Every message is rejected until a limit is set');
-        expect(text).toContain('New apps start blocked');
+        expect(text).toContain('New apps start at 60 messages per minute');
         expect(text).not.toContain('Time to refill');
         expect(panelButton('Change limit').attributes('disabled')).toBeUndefined();
     });

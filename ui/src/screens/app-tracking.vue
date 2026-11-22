@@ -53,7 +53,7 @@
                 <div class="heading-with-help">
                     <h2 id="tracking-budget-heading">Daily tracking limit (UTC)</h2>
                     <HelpButton topic="daily tracking limit">
-                        <p>The most opens and clicks Thinpost records per UTC day for this app. The default is zero, so nothing is recorded until you set a limit.</p>
+                        <p>The most opens and clicks Thinpost records per UTC day for this app. New apps start at 100,000 events per day. A limit of zero records nothing.</p>
                         <ul>
                             <li>Tracked links always work and redirect, whatever the limit.</li>
                             <li>“Recorded today” counts the events kept. “Over limit” counts visits that weren't recorded because a limit was reached.</li>

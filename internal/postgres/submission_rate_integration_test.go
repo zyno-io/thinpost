@@ -24,8 +24,19 @@ func testSubmissionBurst(t *testing.T, ctx context.Context, owner *sql.DB, repo 
 	if _, err := owner.ExecContext(ctx, `INSERT INTO api_keys(id,app_id,digest) VALUES ($1,$2,$3)`, key, app, digest[:]); err != nil {
 		t.Fatal(err)
 	}
+	// A new app starts with the working default and a full bucket.
+	if err := repo.ReserveSubmission(ctx, app, key, 100); err != nil {
+		t.Fatal("a new app could not submit immediately", err)
+	}
 	if err := repo.ReserveSubmission(ctx, app, key, 1); !errors.Is(err, submission.ErrRateLimited) {
-		t.Fatal("default was not disabled", err)
+		t.Fatal("default burst was exceeded", err)
+	}
+	// Zero still blocks everything.
+	if _, err := repo.SetSubmissionRate(ctx, "operator", app, 0, 0); err != nil {
+		t.Fatal("disable rate", err)
+	}
+	if err := repo.ReserveSubmission(ctx, app, key, 1); !errors.Is(err, submission.ErrRateLimited) {
+		t.Fatal("a zero rate did not block", err)
 	}
 	if _, err := repo.SetSubmissionRate(ctx, "operator", app, 1, 7); err != nil {
 		t.Fatal("enable rate", err)
@@ -113,7 +124,7 @@ func testSubmissionBurst(t *testing.T, ctx context.Context, owner *sql.DB, repo 
 		t.Fatal("paused app was admitted", err)
 	}
 	var audits int
-	if err := owner.QueryRowContext(ctx, `SELECT count(*) FROM audit_events WHERE app_id=$1 AND action='app.submission_rate.updated'`, app).Scan(&audits); err != nil || audits != 4 {
+	if err := owner.QueryRowContext(ctx, `SELECT count(*) FROM audit_events WHERE app_id=$1 AND action='app.submission_rate.updated'`, app).Scan(&audits); err != nil || audits != 5 {
 		t.Fatal("rate changes were not audited", audits, err)
 	}
 	testSubmissionRateUpdates(t, ctx, owner, repo)
