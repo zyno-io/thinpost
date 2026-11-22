@@ -132,7 +132,7 @@
                                         <span class="addr" :title="recipientTitle(row)">
                                             <button
                                                 v-if="firstRecipient(row)!.domain"
-                                                class="link-btn domain-filter local"
+                                                class="link-btn domain-filter local address-filter"
                                                 type="button"
                                                 :aria-label="`Search messages to ${firstRecipient(row)!.address}`"
                                                 @click="applySearch('recipient', firstRecipient(row)!.address)"
