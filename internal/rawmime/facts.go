@@ -57,6 +57,29 @@ type Scanned struct {
 	ListUnsubscribe                          bool
 	UnsubscribeFields, UnsubscribePostFields int
 	UnsubscribeValue, UnsubscribePostValue   string
+
+	// trackOpens and trackClicks hold the raw unfolded values of every
+	// X-Thinpost-Track-Opens / -Clicks field. They are never validated during
+	// Scan, because Scan re-runs on stored sources that may carry junk; see
+	// TrackingChoice.
+	trackOpens, trackClicks []string
+}
+
+// TrackingChoice reads the per-message tracking options. Each header may appear
+// at most once and must be "true" or "false" (case-insensitive), like
+// X-Thinpost-Hold; an absent header is nil. Anything else returns ErrInvalid.
+// Callers that accept mail (smtpintake) reject on the error; stored sources are
+// never judged by it.
+func (s *Scanned) TrackingChoice() (opens, clicks *bool, err error) {
+	opens, err = optionalFlag(s.trackOpens)
+	if err != nil {
+		return nil, nil, err
+	}
+	clicks, err = optionalFlag(s.trackClicks)
+	if err != nil {
+		return nil, nil, err
+	}
+	return opens, clicks, nil
 }
 
 // collect reads the header block, validates the field syntax and fills the facts.
@@ -108,6 +131,10 @@ func (s *Scanned) collect(head []byte) error {
 			enhanced = append(enhanced, unfoldValue(head, f))
 		case nameIs(head, f, "X-Thinpost-Hold"):
 			hold = append(hold, unfoldValue(head, f))
+		case nameIs(head, f, "X-Thinpost-Track-Opens"):
+			s.trackOpens = append(s.trackOpens, unfoldValue(head, f))
+		case nameIs(head, f, "X-Thinpost-Track-Clicks"):
+			s.trackClicks = append(s.trackClicks, unfoldValue(head, f))
 		}
 		return nil
 	})
@@ -250,16 +277,30 @@ func cleanText(s string, max int) string {
 // must be "true" or "false" (case-insensitive), like the HTTP option headers.
 // Absent is false.
 func flag(values []string) (bool, error) {
+	v, _, err := parseFlag(values)
+	return v, err
+}
+
+// optionalFlag is flag that tells absent (nil) from false.
+func optionalFlag(values []string) (*bool, error) {
+	v, set, err := parseFlag(values)
+	if err != nil || !set {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func parseFlag(values []string) (v, set bool, err error) {
 	switch len(values) {
 	case 0:
-		return false, nil
+		return false, false, nil
 	case 1:
 		switch strings.ToLower(values[0]) {
 		case "true":
-			return true, nil
+			return true, true, nil
 		case "false":
-			return false, nil
+			return false, true, nil
 		}
 	}
-	return false, ErrInvalid
+	return false, false, ErrInvalid
 }
