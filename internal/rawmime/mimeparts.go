@@ -130,7 +130,8 @@ func (p HTMLPart) Replace(html string) ([]Splice, *TopLevelHTML, error) {
 // encodeQP appends the quoted-printable encoding of s to dst. Line breaks
 // (CRLF or LF) become hard CRLF breaks, a lone CR is =0D, and white space
 // before a break or at the end is encoded. Soft breaks keep every line within
-// 76 octets, the "=" included. With final set the output always ends with a
+// 76 octets, the "=" included. A "-" that would begin an output line is
+// written as =2D so that decoded content can never form a boundary delimiter. With final set the output always ends with a
 // line terminator: a hard break already there, or else a soft break, so the
 // decoded bytes are unchanged.
 func encodeQP(dst []byte, s string, final bool) []byte {
@@ -173,6 +174,14 @@ func encodeQP(dst []byte, s string, final bool) []byte {
 		if col+w > 75 {
 			dst = append(dst, '=', '\r', '\n')
 			col = 0
+		}
+		// No output line may start with "-": "--boundary" at a line start would
+		// be read as a MIME delimiter. Every splice starts at a line start, and
+		// a soft break starts a new line, so col == 0 here is exactly the set of
+		// places a line begins (after the soft-break decision above).
+		if c == '-' && col == 0 {
+			tok = [3]byte{'=', '2', 'D'}
+			w = 3
 		}
 		dst = append(dst, tok[:w]...)
 		col += w
@@ -335,6 +344,11 @@ func (w *walker) part(ph partHeader, end, depth int, top bool) {
 	case strings.HasPrefix(mt, "multipart/"):
 		switch mt {
 		case "multipart/mixed", "multipart/alternative", "multipart/related":
+			if ph.hasContentLen {
+				// A length that no longer matches a rewritten body.
+				w.whole = ReasonMalformed
+				return
+			}
 			w.multipart(ph.bodyStart, end, params["boundary"], depth+1)
 		default:
 			w.whole = ReasonNoHTML

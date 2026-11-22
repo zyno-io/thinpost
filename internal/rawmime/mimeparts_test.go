@@ -510,3 +510,32 @@ func FuzzHTMLParts(f *testing.F) {
 		}
 	})
 }
+
+// A Content-Length on a container (or the top level) would be kept over a
+// rewritten body, so the whole message stays untracked.
+func TestHTMLPartsContentLengthOnAContainer(t *testing.T) {
+	inner := "Content-Type: multipart/alternative; boundary=\"I\"\nContent-Length: 10\n\n--I\n" + htmlPart("<p>x</p>") + "\n--I--"
+	for name, raw := range map[string]string{
+		"top level":   strings.Replace(multi("mixed", "B", htmlPart("<p>x</p>")), "Content-Type: multipart", "Content-Length: 99\nContent-Type: multipart", 1),
+		"nested":      multi("mixed", "B", inner),
+		"leaf (skip)": multi("mixed", "B", "Content-Length: 5\n"+htmlPart("<p>x</p>")),
+	} {
+		raw = toCRLF(raw)
+		s := mustScan(t, raw)
+		parts, reason := HTMLParts([]byte(raw), s)
+		if len(parts) != 0 {
+			t.Errorf("%s: %d parts", name, len(parts))
+		}
+		want := ReasonMalformed
+		if name == "leaf (skip)" {
+			want = ReasonNoHTML
+			if reason != ReasonNoHTML && reason != ReasonNone {
+				t.Errorf("%s: %q", name, reason)
+			}
+			continue
+		}
+		if reason != want {
+			t.Errorf("%s: reason %q", name, reason)
+		}
+	}
+}

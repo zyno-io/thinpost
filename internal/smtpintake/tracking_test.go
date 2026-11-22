@@ -2,9 +2,11 @@ package smtpintake
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/zyno-io/thinpost/internal/acceptance"
+	"github.com/zyno-io/thinpost/internal/rawmime"
 	"github.com/zyno-io/thinpost/internal/submission"
 )
 
@@ -100,5 +102,28 @@ func TestSubmitReplayReturnsTheOriginalMessage(t *testing.T) {
 	second := r.submit(raw)
 	if first.Outcome != Accepted || second.Outcome != Accepted || first.MessageID != second.MessageID || len(objects.bodies) != 1 || r.repo.commitCount != 1 {
 		t.Fatalf("%+v %+v", first, second)
+	}
+}
+
+// A message that an older pod accepted with a junk tracking header (which it
+// did not judge) is answered from the replay record on retry; only a fresh
+// submission with that header is refused.
+func TestSubmitReplayPrecedesTrackingHeaderValidation(t *testing.T) {
+	r, objects := trackingRig(t, true, true)
+	raw := htmlOnly + "X-Thinpost-Track-Opens: junk\r\nDate: Fri, 20 Nov 2026 12:00:00 +0000\r\n\r\n<a href=\"https://a.example.org/\">x</a>\r\n"
+	if got := r.submit(raw); got.Outcome != MessageInvalid {
+		t.Fatalf("fresh: %v", got.Outcome)
+	}
+	scanned, err := rawmime.Scan([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := RecipientKeys([]string{"rcpt@example.net"})
+	kind := ReplayKindOf(scanned)
+	digest := Digest([]byte("0123456789abcdef0123456789abcdef"), kind, appID, "sender@example.com", keys, scanned.MessageID, []byte(raw))
+	r.repo.replays[replayKey(kind, digest)] = submission.Receipt{ID: strings.Repeat("7", 32)}
+	got := r.submit(raw)
+	if got.Outcome != Accepted || got.MessageID != strings.Repeat("7", 32) || len(objects.bodies) != 0 {
+		t.Fatalf("retry: %+v", got)
 	}
 }

@@ -184,12 +184,6 @@ func (s *Service) submit(ctx context.Context, fence submission.Fence, m Message,
 		}
 		return Result{Outcome: MessageInvalid}
 	}
-	// The per-message tracking choice is judged here, not in Scan, because Scan
-	// runs again on stored sources.
-	trackOpens, trackClicks, err := scanned.TrackingChoice()
-	if err != nil {
-		return Result{Outcome: MessageInvalid}
-	}
 	keys, ok := RecipientKeys(m.Rcpts)
 	if !ok || len(keys) == 0 || len(keys) > submission.MaxEnvelopeRecipients {
 		return Result{Outcome: MessageInvalid}
@@ -216,6 +210,14 @@ func (s *Service) submit(ctx context.Context, fence submission.Fence, m Message,
 	// 4. Pause (fresh submissions only).
 	if !active {
 		return Result{Outcome: AppPaused}
+	}
+	// The per-message tracking choice is judged for fresh submissions only: a
+	// retry of a message an older pod accepted must still get its original
+	// answer. It is judged here, not in Scan, because Scan runs again on stored
+	// sources.
+	trackOpens, trackClicks, err := scanned.TrackingChoice()
+	if err != nil {
+		return Result{Outcome: MessageInvalid}
 	}
 	// 5. Enhanced Protection. AUTH requires TLS, so the second check is a guard.
 	if scanned.RequireTLS {
