@@ -33,13 +33,25 @@ type PrepareInput struct {
 	// the very top of the prepared header block. Empty adds none. It is not in
 	// the DKIM h= list, and the client's own Received fields are still removed.
 	Received []byte
+	// ListUnsubscribe is the Thinpost one-click link, "<https://...>" (one
+	// angle-bracketed https URI, printable ASCII, no spaces). Empty leaves the
+	// message's own List-Unsubscribe fields as they are. When set, the client's
+	// List-Unsubscribe and List-Unsubscribe-Post fields are removed, Thinpost's
+	// two fields are written at the end of the header block, and any client DKIM
+	// signature whose h= names either field is dropped.
+	ListUnsubscribe string
 }
+
+// unsubscribePostField is the RFC 8058 field written beside List-Unsubscribe.
+const unsubscribePostField = "List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n"
 
 // generated holds the lines preparation inserts, rendered once up front.
 type generated struct {
 	messageID []byte // "Message-ID: <...>\r\n"
 	date      []byte // "Date: ...\r\n", empty if the message has a Date
 	received  []byte // the trace field, empty for none
+	// unsubscribe is both one-click fields, empty when the input has none.
+	unsubscribe []byte
 }
 
 func (in *PrepareInput) check(raw []byte) (generated, error) {
@@ -61,6 +73,12 @@ func (in *PrepareInput) check(raw []byte) (generated, error) {
 		}
 		g.received = in.Received
 	}
+	if v := in.ListUnsubscribe; v != "" {
+		if !validUnsubscribeLink(v) || len("List-Unsubscribe: ")+len(v) > MaxLine {
+			return generated{}, ErrInvalid
+		}
+		g.unsubscribe = []byte("List-Unsubscribe: " + v + "\r\n" + unsubscribePostField)
+	}
 	g.messageID = []byte("Message-ID: " + providerid.MessageIDHeader(in.MessageID, in.From.Domain) + "\r\n")
 	if len(g.messageID) > maxMessageIDLine {
 		return generated{}, ErrInvalid
@@ -69,6 +87,21 @@ func (in *PrepareInput) check(raw []byte) (generated, error) {
 		g.date = []byte("Date: " + in.Date.UTC().Format(time.RFC1123Z) + "\r\n")
 	}
 	return g, nil
+}
+
+// validUnsubscribeLink accepts exactly one "<https://host...>" item of
+// printable ASCII with no spaces, quotes or further angle brackets.
+func validUnsubscribeLink(v string) bool {
+	const prefix = "<https://"
+	if len(v) <= len(prefix)+1 || v[:len(prefix)] != prefix || v[len(v)-1] != '>' {
+		return false
+	}
+	for i := 1; i < len(v)-1; i++ {
+		if c := v[i]; c <= ' ' || c >= 0x7f || c == '<' || c == '>' || c == '"' || c == ',' {
+			return false
+		}
+	}
+	return true
 }
 
 // Prepare applies the header surgery and returns the message to send:
@@ -232,6 +265,7 @@ func writeHeaders(k *sink, raw []byte, in *PrepareInput, g generated) error {
 			k.writeField(head, f)
 		}
 	}
+	k.write(g.unsubscribe)
 	return nil
 }
 
@@ -249,6 +283,8 @@ func dropped(head []byte, f field, in *PrepareInput, dropsSignature bool) bool {
 		return true
 	case equalFoldASCII(name, "Sender"):
 		return in.From.StripSender
+	case equalFoldASCII(name, "List-Unsubscribe"), equalFoldASCII(name, "List-Unsubscribe-Post"):
+		return in.ListUnsubscribe != ""
 	case equalFoldASCII(name, "DKIM-Signature"):
 		return dropSignature(head, f, in, dropsSignature)
 	}
@@ -330,6 +366,8 @@ func namesChangedField(name []byte, in *PrepareInput) bool {
 		return in.From.Field != ""
 	case equalFoldASCII(name, "Date"):
 		return !in.Scan.HasDate
+	case equalFoldASCII(name, "List-Unsubscribe"), equalFoldASCII(name, "List-Unsubscribe-Post"):
+		return in.ListUnsubscribe != ""
 	}
 	return false
 }

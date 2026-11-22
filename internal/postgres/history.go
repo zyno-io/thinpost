@@ -342,6 +342,39 @@ func (r *Repository) GetMessage(ctx context.Context, actor, appID, messageID str
 			return admin.MessageDetail{}, err
 		}
 		feedback.Close()
+		// What became of the call to the sender's own unsubscribe link, for
+		// deliveries whose recipient unsubscribed. The link itself is not read.
+		forwards, forwardErr := tx.QueryContext(ctx, `SELECT f.delivery_id,f.state,COALESCE(f.reason,f.last_failure,''),COALESCE(f.target_host,''),f.attempts,f.finished_at
+			FROM unsubscribe_forwards f JOIN deliveries d ON d.id=f.delivery_id
+			WHERE d.message_id=$1 AND f.state<>'armed'
+			AND EXISTS (SELECT 1 FROM recipient_feedback rf WHERE rf.delivery_id=f.delivery_id AND rf.kind='unsubscribe')`, messageID)
+		if forwardErr != nil {
+			return admin.MessageDetail{}, forwardErr
+		}
+		for forwards.Next() {
+			var deliveryID, state string
+			var item admin.UnsubscribeForward
+			var finished sql.NullTime
+			if err = forwards.Scan(&deliveryID, &state, &item.Reason, &item.Host, &item.Attempts, &finished); err != nil {
+				forwards.Close()
+				return admin.MessageDetail{}, err
+			}
+			item.State = forwardStatus(state)
+			if state == "delivered" {
+				item.Reason = ""
+			}
+			if finished.Valid {
+				item.FinishedAt = &finished.Time
+			}
+			if i, ok := byDelivery[deliveryID]; ok {
+				detail.Deliveries[i].UnsubscribeForward = &item
+			}
+		}
+		if err = forwards.Err(); err != nil {
+			forwards.Close()
+			return admin.MessageDetail{}, err
+		}
+		forwards.Close()
 	}
 	if err = tx.Commit(); err != nil {
 		return admin.MessageDetail{}, err

@@ -10,7 +10,7 @@ import (
 )
 
 // runtimeGrantSchemaVersion forces a privilege review when a migration is added.
-const runtimeGrantSchemaVersion = 50
+const runtimeGrantSchemaVersion = 51
 
 // GrantRuntimeRole grants only the reviewed runtime operations. It is an
 // explicit maintenance operation, not an application startup migration. The
@@ -95,6 +95,7 @@ func grantRuntimeRoleTx(ctx context.Context, tx *sql.Tx, role string) error {
 		{"dkim_keys", "SELECT, INSERT, UPDATE, DELETE"},
 		{"bounce_domains", "SELECT, INSERT, UPDATE, DELETE"},
 		{"tracking_domains", "SELECT, INSERT, UPDATE, DELETE"},
+		{"unsubscribe_forwards", "SELECT, INSERT, UPDATE"},
 		{"edge_source_reports", "SELECT, INSERT, UPDATE"},
 		{"smtp_credentials", "SELECT, INSERT, UPDATE (revoked_at, last_used_at)"},
 		{"smtp_replay_secret", "SELECT, INSERT"},

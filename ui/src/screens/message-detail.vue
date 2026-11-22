@@ -309,6 +309,9 @@
                                     >
                                         {{ tag.label }}
                                     </span>
+                                    <div v-if="readUnsubscribeForward(delivery)" class="forward-note" :class="`tone-${readUnsubscribeForward(delivery)!.tone}`" :title="readUnsubscribeForward(delivery)!.title" data-field="unsubscribe-forward">
+                                        {{ readUnsubscribeForward(delivery)!.text }}
+                                    </div>
                                 </td>
                                 <template v-if="hasProgress">
                                     <td class="num" data-field="retry-attempts">
@@ -483,7 +486,7 @@ import { useAppContext } from '@/app-context';
 import { authState } from '@/auth';
 import { attemptOutcome, hasDeliveryProgress, readDeliveryProgress, smtpCodeLabel, type DeliveryProgress } from '@/delivery-progress';
 import { confirmProtectedAccess } from '@/enhanced-protection';
-import { readDeliveryFeedback } from '@/feedback';
+import { readDeliveryFeedback, readUnsubscribeForward } from '@/feedback';
 import { readMessageIdHeader } from '@/message-id-header';
 import { copyText, formatDateTime, formatRelativeTime, shortId } from '@/format';
 import { readDeliveryTracking } from '@/tracking';
@@ -1095,6 +1098,16 @@ function lastResultTitle(progress: DeliveryProgress): string {
 .deliveries {
     .feedback-tag {
         margin-left: 6px;
+    }
+
+    .forward-note {
+        margin-top: 4px;
+        color: var(--text-3);
+        font-size: 11.5px;
+
+        &.tone-danger {
+            color: var(--danger, var(--text-3));
+        }
     }
 
     .did {

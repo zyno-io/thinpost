@@ -36,6 +36,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/smtpintake"
 	"github.com/zyno-io/thinpost/internal/submission"
 	"github.com/zyno-io/thinpost/internal/tracking"
+	"github.com/zyno-io/thinpost/internal/unsubforward"
 	"github.com/zyno-io/thinpost/internal/webhook"
 )
 
@@ -194,6 +195,12 @@ func run() error {
 	}
 	stopWebhooks := startWebhooks(ctx, repository, webhookKeys, objects, config.WebhookDestinations)
 	defer stopWebhooks()
+	var forwardObjects unsubforward.Objects // stays a nil interface without the object store
+	if objects != nil {
+		forwardObjects = objects
+	}
+	stopUnsubscribeForwards := startUnsubscribeForwards(ctx, repository, forwardObjects)
+	defer stopUnsubscribeForwards()
 	bridgeConfig, err := controlbridge.FromEnvironment(os.Getenv)
 	if err != nil {
 		return err

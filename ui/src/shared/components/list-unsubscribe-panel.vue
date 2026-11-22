@@ -11,14 +11,22 @@
                 </h2>
                 <HelpButton topic="one-click unsubscribe">
                     <p>
-                        When on, every message from this app includes a <code>List-Unsubscribe</code> header (RFC 8058) with a secure
-                        one-click link. When a recipient's mail app, or the confirmation page the link opens, unsubscribes them, Thinpost adds the
+                        When on, every message from this app, whether sent through the API or over SMTP, includes a <code>List-Unsubscribe</code> header (RFC 8058) with a secure
+                        one-click link, different for each recipient. When a recipient's mail app, or the confirmation page the link opens, unsubscribes them, Thinpost adds the
                         address to this app's suppression list and sends one <code>unsubscribed</code> webhook event.
                     </p>
                     <ul>
                         <li>Off by default. Thinpost is built for transactional email, so turn this on only for an app that sends bulk or marketing mail. Gmail and Yahoo require one-click unsubscribe from bulk senders.</li>
                         <li>Needs tracking to be available for this Thinpost installation, and its tracking address to be reachable from the internet. Your Thinpost administrator sets this up.</li>
-                        <li>While on, any send that includes its own <code>List-Unsubscribe</code> headers is rejected.</li>
+                        <li>
+                            If a message brings its own <code>List-Unsubscribe</code> headers, Thinpost's replace them. When the recipient unsubscribes, Thinpost
+                            also tells your system, by sending a one-click request to your own link, if the message had an https link together with a
+                            <code>List-Unsubscribe-Post</code> header. A mailto link is not called. The message page shows whether that worked.
+                        </li>
+                        <li>
+                            Some devices (printers, scanners, alarm systems) send mail over SMTP and can't be told to leave these headers out. If their mail shouldn't have an
+                            unsubscribe link, give them their own app with this turned off.
+                        </li>
                         <li>Thinpost skips unsubscribed addresses in later sends from this app. To send to one again, remove it from the Suppressions tab.</li>
                     </ul>
                 </HelpButton>
@@ -114,7 +122,7 @@ async function toggle() {
     if (enable) {
         const ok = await showConfirm(
             'Turn on one-click unsubscribe?',
-            `Every message sent by “${target.name}” will include a List-Unsubscribe header, and sends that include their own are rejected. Recipients who unsubscribe are added to the suppression list.`
+            `Every message sent by “${target.name}” will include a List-Unsubscribe header, over SMTP too, and any List-Unsubscribe headers a message brings are replaced (we also tell your own link when someone unsubscribes). Recipients who unsubscribe are added to the suppression list.`
         );
         if (!ok || isUnmounted) return;
     }

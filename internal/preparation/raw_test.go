@@ -7,14 +7,20 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/mail"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/emersion/go-msgauth/dkim"
+	"github.com/zyno-io/thinpost/internal/edgeprotocol"
+	"github.com/zyno-io/thinpost/internal/oplog"
 	"github.com/zyno-io/thinpost/internal/rawmime"
 	"github.com/zyno-io/thinpost/internal/submission"
+	"github.com/zyno-io/thinpost/internal/tracking"
 )
 
 func TestRawLimitsMatchRawmime(t *testing.T) {
@@ -64,8 +70,8 @@ func rawSource(t *testing.T, objects *fakeObjects, raw string, mutate func(*subm
 func TestRawPreparationStoresIdenticalObjectsPerRecipient(t *testing.T) {
 	service, repo, objects, _ := setup(t)
 	rawSource(t, objects, rawMessage, nil)
-	// Tracking and one-click on the app side must not touch a raw message.
-	repo.claim.ListUnsubscribe = true
+	// Tracking on the app side must not touch a raw message, and with one-click
+	// off nothing is added or removed, so every recipient's object is identical.
 	service.Tracking = &TrackingConfig{Origin: "https://tracking.example.com", Links: preparationLinkKeys(t), EventLimit: 10, Objects: &fakeTrackingObjects{}}
 	if err := service.PrepareNext(context.Background()); err != nil {
 		t.Fatal(err)
@@ -95,7 +101,7 @@ func TestRawPreparationStoresIdenticalObjectsPerRecipient(t *testing.T) {
 	if got, want := parsed.Header.Get("Message-ID"), "<"+repo.claim.MessageID+"@example.com>"; got != want {
 		t.Fatalf("Message-ID %q want %q", got, want)
 	}
-	// The client's own List-Unsubscribe stays; none is added.
+	// With one-click off the client's own List-Unsubscribe stays; none is added.
 	if got := parsed.Header["List-Unsubscribe"]; len(got) != 1 || got[0] != "<mailto:u@example.com>" || bytes.Contains(first, []byte("List-Unsubscribe-Post")) {
 		t.Fatalf("one-click applied: %q", got)
 	}
@@ -278,4 +284,204 @@ func TestPreparationAddsTraceField(t *testing.T) {
 			t.Fatal("unexpected trace")
 		}
 	})
+}
+
+type unsubscribeCapture struct{ ids []string }
+
+func (c *unsubscribeCapture) RecordUnsubscribe(_ context.Context, id string) error {
+	c.ids = append(c.ids, id)
+	return nil
+}
+
+const clientUnsubscribeRaw = "DKIM-Signature: v=1; a=rsa-sha256; d=client.example; s=one; c=relaxed/relaxed; h=from:to:subject; bh=AAAA; b=AAAA\r\n" +
+	"DKIM-Signature: v=1; a=rsa-sha256; d=client.example; s=two; c=relaxed/relaxed; h=from:list-unsubscribe:list-unsubscribe-post; bh=AAAA; b=AAAA\r\n" +
+	"From: Alice <a@example.com>\r\nTo: b@example.net\r\nCc: c@example.net\r\nSubject: hello\r\nMessage-ID: <client@example.org>\r\n" +
+	"List-Unsubscribe: <https://App.Example.com/u?t=abc>, <mailto:u@example.com>\r\nList-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n\r\nraw body\r\n"
+
+func oneClickRawService(t *testing.T) (*Service, *fakeRepository, *fakeObjects, *fakeKeys) {
+	t.Helper()
+	service, repo, objects, keys := setup(t)
+	repo.claim.ListUnsubscribe = true
+	service.Tracking = &TrackingConfig{Origin: "https://tracking.example.com", Links: preparationLinkKeys(t), EventLimit: 10, Objects: &fakeTrackingObjects{}}
+	return service, repo, objects, keys
+}
+
+// With one-click on, every recipient's copy has its own link, the client's
+// List-Unsubscribe fields are gone, and the client signatures that covered them
+// are dropped while the others stay.
+func TestRawOneClickGivesEachRecipientItsOwnLinkAndReplacesTheClients(t *testing.T) {
+	service, repo, objects, keys := oneClickRawService(t)
+	rawSource(t, objects, clientUnsubscribeRaw, nil)
+	if err := service.PrepareNext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if repo.commits != 1 || len(repo.deliveries) != 3 || len(objects.final) != 3 {
+		t.Fatalf("%d commits, %d deliveries", repo.commits, len(repo.deliveries))
+	}
+	capture := &unsubscribeCapture{}
+	handler := &tracking.Handler{Links: service.Tracking.Links, Unsubscribes: capture}
+	seen := map[string]bool{}
+	der, err := x509.MarshalPKIXPublicKey(&keys.key.Signer.(*rsa.PrivateKey).PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := "v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(der)
+	for _, delivery := range repo.deliveries {
+		final := objects.final[delivery.ObjectKey]
+		parsed, err := mail.ReadMessage(bytes.NewReader(final))
+		if err != nil {
+			t.Fatal(err)
+		}
+		list := parsed.Header["List-Unsubscribe"]
+		if len(list) != 1 || !strings.HasPrefix(list[0], "<https://tracking.example.com/t/u/v3/") || seen[list[0]] || len(parsed.Header["List-Unsubscribe-Post"]) != 1 || parsed.Header.Get("List-Unsubscribe-Post") != "List-Unsubscribe=One-Click" {
+			t.Fatalf("unexpected headers %q", list)
+		}
+		seen[list[0]] = true
+		if bytes.Contains(final, []byte("app.example.com")) || bytes.Contains(final, []byte("u@example.com")) || bytes.Contains(bytes.ToLower(final), []byte("s=two")) {
+			t.Fatal("the client's unsubscribe link or the signature that covered it survived")
+		}
+		// One client signature (not covering the unsubscribe fields) is kept, and
+		// Thinpost's own covers both new fields.
+		if got := bytes.Count(final, []byte("d=client.example")); got != 1 {
+			t.Fatalf("client signatures kept: %d", got)
+		}
+		w := httptest.NewRecorder()
+		post := httptest.NewRequest(http.MethodPost, strings.Trim(list[0], "<>"), strings.NewReader("List-Unsubscribe=One-Click"))
+		post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		handler.ServeHTTP(w, post)
+		if w.Code != 200 || capture.ids[len(capture.ids)-1] != delivery.ID {
+			t.Fatal("the link does not verify to its own delivery", w.Code)
+		}
+		vs, err := dkim.VerifyWithOptions(bytes.NewReader(final), &dkim.VerifyOptions{
+			LookupTXT: func(domain string) ([]string, error) {
+				if domain != "mail._domainkey.example.com" {
+					return nil, errors.New("unexpected lookup")
+				}
+				return []string{record}, nil
+			},
+		})
+		var thinpost *dkim.Verification
+		for _, v := range vs {
+			if v.Domain == "example.com" {
+				thinpost = v
+			}
+		}
+		if err != nil || thinpost == nil || thinpost.Err != nil {
+			t.Fatalf("Thinpost's signature does not verify: %v %+v", err, vs)
+		}
+		if signed := strings.Join(thinpost.HeaderKeys, ":"); !strings.Contains(strings.ToLower(signed), "list-unsubscribe-post") {
+			t.Fatal("the signature does not cover the one-click fields", signed)
+		}
+		if delivery.Forward == nil || delivery.Forward.Host != "app.example.com" || delivery.Forward.Reason != "" {
+			t.Fatalf("forward %+v", delivery.Forward)
+		}
+	}
+	// Each copy differs, so each is its own object; the body is the client's.
+	for _, delivery := range repo.deliveries {
+		if !bytes.HasSuffix(objects.final[delivery.ObjectKey], []byte("\r\n\r\nraw body\r\n")) {
+			t.Fatal("the body changed")
+		}
+	}
+	if len(seen) != 3 {
+		t.Fatal("links are shared")
+	}
+}
+
+func TestRawOneClickAddsHeadersToAMessageWithoutThem(t *testing.T) {
+	service, repo, objects, _ := oneClickRawService(t)
+	rawSource(t, objects, "From: Alice <a@example.com>\r\nTo: b@example.net\r\nSubject: hello\r\n\r\nraw body\r\n", nil)
+	if err := service.PrepareNext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range repo.deliveries {
+		parsed, err := mail.ReadMessage(bytes.NewReader(objects.final[delivery.ObjectKey]))
+		if err != nil || len(parsed.Header["List-Unsubscribe"]) != 1 || delivery.Forward != nil {
+			t.Fatal("expected one added header and no forward", err)
+		}
+	}
+}
+
+func TestRawOneClickUsesTheDeploymentOriginEvenWithATrackingDomain(t *testing.T) {
+	service, repo, objects, _ := oneClickRawService(t)
+	service.Tracking.CustomDomains = true
+	repo.claim.TrackingDomain = "links.example.com"
+	rawSource(t, objects, rawMessage, nil)
+	if err := service.PrepareNext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range repo.deliveries {
+		final := objects.final[delivery.ObjectKey]
+		if bytes.Contains(final, []byte("links.example.com")) || !bytes.Contains(final, []byte("<https://tracking.example.com/t/u/v3/")) {
+			t.Fatal("the unsubscribe link left the deployment origin")
+		}
+	}
+}
+
+func TestRawOneClickWithoutTrackingRuntimeFailsVisibly(t *testing.T) {
+	for name, config := range map[string]*TrackingConfig{
+		"no tracking": nil,
+		"no keys":     {Origin: "https://tracking.example.com", EventLimit: 10},
+		"no origin":   {EventLimit: 10},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service, repo, objects, _ := setup(t)
+			repo.claim.ListUnsubscribe = true
+			service.Tracking = config
+			rawSource(t, objects, rawMessage, nil)
+			if err := service.PrepareNext(context.Background()); err == nil || repo.commits != 0 || len(objects.final) != 0 || len(repo.failures) != 1 || repo.failures[0] != "internal" {
+				t.Fatal("prepared without the runtime or not failed with reason internal", err, repo.failures)
+			}
+		})
+	}
+}
+
+func TestRawOneClickIsSkippedWhenTheMessageCannotCarryTheHeaders(t *testing.T) {
+	var lines []string
+	t.Cleanup(oplog.SetOutput(func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }))
+	service, repo, objects, keys := oneClickRawService(t)
+	const head = "From: Alice <a@example.com>\r\nTo: b@example.net\r\nCc: c@example.net\r\nSubject: hello\r\nMessage-ID: <client@example.org>\r\nDate: Fri, 20 Nov 2026 12:00:00 +0000\r\n" +
+		"List-Unsubscribe: <mailto:u@example.com>\r\n\r\n"
+	scanned := mustScanRaw(t, head)
+	decision, err := rawmime.DecideFrom(scanned, "", rawmime.Policy{Mode: rawmime.FromOff}, func(d string) bool { return d == "example.com" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	size, err := rawmime.PreparedSize([]byte(head), rawmime.PrepareInput{Scan: scanned, From: decision, MessageID: repo.claim.MessageID, Date: repo.claim.date(), Selector: "mail", Signer: keys.key.Signer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Bare line feeds become CRLF (two bytes each). Leave 60 bytes: enough for
+	// the message as written, not for Thinpost's longer headers.
+	lf := (edgeprotocol.MaxMIMEBytes - size.Total - 60) / 2
+	rawSource(t, objects, head+strings.Repeat("\n", lf), nil)
+	if err := service.PrepareNext(context.Background()); err != nil {
+		t.Fatal("preparation failed instead of skipping one-click:", err)
+	}
+	if repo.commits != 1 || len(repo.deliveries) != 3 {
+		t.Fatal("not committed")
+	}
+	for _, delivery := range repo.deliveries {
+		final := objects.final[delivery.ObjectKey]
+		if len(final) > edgeprotocol.MaxMIMEBytes || !bytes.Contains(final, []byte("List-Unsubscribe: <mailto:u@example.com>\r\n")) || bytes.Contains(final, []byte("tracking.example.com")) || delivery.Forward != nil {
+			t.Fatal("the client's headers were not kept, or Thinpost's were added, or a forward was recorded", len(final), edgeprotocol.MaxMIMEBytes, bytes.Contains(final, []byte("List-Unsubscribe: <mailto:u@example.com>\r\n")), bytes.Contains(final, []byte("tracking.example.com")), delivery.Forward)
+		}
+	}
+	skipped := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, "one_click ") {
+			skipped++
+		}
+	}
+	if skipped != 1 {
+		t.Fatal("expected one constant log line", lines)
+	}
+}
+
+func mustScanRaw(t *testing.T, raw string) *rawmime.Scanned {
+	t.Helper()
+	s, err := rawmime.Scan([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

@@ -22,9 +22,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zyno-io/thinpost/internal/edgeprotocol"
+	"github.com/zyno-io/thinpost/internal/message"
 	"github.com/zyno-io/thinpost/internal/oplog"
 	"github.com/zyno-io/thinpost/internal/submission"
 	"github.com/zyno-io/thinpost/internal/tracking"
+	"github.com/zyno-io/thinpost/internal/unsubforward"
 )
 
 type fakeTrackingObjects struct {
@@ -526,21 +529,84 @@ func TestOneClickIsOffUnlessTheClaimSaysSo(t *testing.T) {
 	}
 }
 
-func TestOneClickKeepsAppSuppliedHeadersFromASourceAcceptedBeforeTheToggle(t *testing.T) {
+// An app that brings its own List-Unsubscribe headers while one-click is on has
+// them replaced by Thinpost's, and the original is recorded for forwarding.
+func TestOneClickReplacesAppSuppliedHeadersAndRecordsTheForward(t *testing.T) {
+	for name, tc := range map[string]struct {
+		list   string
+		post   bool
+		url    string
+		host   string
+		reason string
+	}{
+		"https with one-click post": {"<https://App.Example.com/u?t=abc>", true, "https://app.example.com/u?t=abc", "app.example.com", ""},
+		"mailto then https":         {"<mailto:u@example.com>, <https://app.example.com/u>", true, "https://app.example.com/u", "app.example.com", ""},
+		"https without post":        {"<https://app.example.com/u>", false, "", "", unsubforward.ReasonNoOneClick},
+		"mailto only":               {"<mailto:u@example.com>", false, "", "", unsubforward.ReasonMailtoOnly},
+		"private address literal":   {"<https://10.0.0.1/u>", true, "", "", unsubforward.ReasonUnusable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service, repo, objects, _ := setup(t)
+			oneClickSource(t, objects, func(m *submission.Message) { m.ListUnsubscribe, m.ListUnsubscribePost = tc.list, tc.post })
+			repo.claim.EnhancedProtection = false
+			repo.claim.ListUnsubscribe = true
+			service.Tracking = &TrackingConfig{Origin: "https://tracking.example.com", Links: preparationLinkKeys(t), EventLimit: 10, Objects: &fakeTrackingObjects{}}
+			if err := service.PrepareNext(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(repo.deliveries) != 2 {
+				t.Fatal("not committed")
+			}
+			for _, delivery := range repo.deliveries {
+				parsed, err := mail.ReadMessage(bytes.NewReader(objects.final[delivery.ObjectKey]))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := parsed.Header["List-Unsubscribe"]; len(got) != 1 || !strings.HasPrefix(got[0], "<https://tracking.example.com/t/u/v3/") || len(parsed.Header["List-Unsubscribe-Post"]) != 1 {
+					t.Fatal("the app's headers were not replaced", got)
+				}
+				if bytes.Contains(objects.final[delivery.ObjectKey], []byte("app.example.com")) || bytes.Contains(objects.final[delivery.ObjectKey], []byte("u@example.com")) {
+					t.Fatal("the app's own link leaked into the message")
+				}
+				if delivery.Forward == nil || delivery.Forward.Host != tc.host || delivery.Forward.Reason != tc.reason {
+					t.Fatalf("forward %+v", delivery.Forward)
+				}
+			}
+		})
+	}
+}
+
+func TestOneClickWithoutOwnHeadersRecordsNoForward(t *testing.T) {
+	service, repo, objects, _ := setup(t)
+	oneClickSource(t, objects, nil)
+	repo.claim.EnhancedProtection = false
+	repo.claim.ListUnsubscribe = true
+	service.Tracking = &TrackingConfig{Origin: "https://tracking.example.com", Links: preparationLinkKeys(t), EventLimit: 10, Objects: &fakeTrackingObjects{}}
+	if err := service.PrepareNext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, delivery := range repo.deliveries {
+		if delivery.Forward != nil {
+			t.Fatal("a forward without original headers")
+		}
+	}
+}
+
+// With one-click off (also after the app turned it off following acceptance)
+// the app's own headers go out untouched, and nothing is forwarded.
+func TestOwnHeadersPassThroughWhenOneClickIsOff(t *testing.T) {
 	service, repo, objects, _ := setup(t)
 	oneClickSource(t, objects, func(m *submission.Message) {
 		m.ListUnsubscribe, m.ListUnsubscribePost = "<https://app.example.com/u>", true
 	})
 	repo.claim.EnhancedProtection = false
-	repo.claim.ListUnsubscribe = true
-	// Even without a tracking runtime: the app's own header is passed through.
 	if err := service.PrepareNext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	for _, delivery := range repo.deliveries {
 		parsed, err := mail.ReadMessage(bytes.NewReader(objects.final[delivery.ObjectKey]))
-		if err != nil || parsed.Header.Get("List-Unsubscribe") != "<https://app.example.com/u>" {
-			t.Fatal("app header replaced", err)
+		if err != nil || parsed.Header.Get("List-Unsubscribe") != "<https://app.example.com/u>" || delivery.Forward != nil {
+			t.Fatal("app header changed or forwarded", err)
 		}
 	}
 }
@@ -768,5 +834,62 @@ func TestCustomOriginLinksVerifyAnywhere(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "https://tracking.example.com"+strings.TrimPrefix(link, "https://links.customer.example"), nil)
 	if w := httptest.NewRecorder(); func() int { (&tracking.Handler{Links: keys}).ServeHTTP(w, request); return w.Code }() == http.StatusNotFound {
 		t.Fatal("a custom-origin link does not open at the deployment")
+	}
+}
+
+// A message accepted before one-click was sized in can be too big to carry
+// Thinpost's headers. It is sent without them (the app's own stay, nothing is
+// forwarded) instead of failing preparation, with a constant log line.
+func TestOneClickIsSkippedWhenTheMessageCannotCarryTheHeaders(t *testing.T) {
+	var lines []string
+	t.Cleanup(oplog.SetOutput(func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }))
+	service, repo, objects, keys := setup(t)
+	repo.claim.EnhancedProtection = false
+	repo.claim.ListUnsubscribe = true
+	service.Tracking = &TrackingConfig{Origin: "https://tracking.example.com", Links: preparationLinkKeys(t), EventLimit: 10, Objects: &fakeTrackingObjects{}}
+	build := func(n int) int {
+		m := submission.Message{From: "a@example.com", To: []string{"b@example.net"}, Subject: "hello", Text: strings.Repeat("a", n), ListUnsubscribe: "<https://app.example.com/u>", ListUnsubscribePost: true}
+		final, err := message.Build(m, message.Options{Recipient: "b@example.net", ID: repo.claim.MessageID, Date: repo.claim.date(), SigningDomain: "example.com", Selector: "mail", Signer: keys.key.Signer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(final)
+	}
+	// The largest text whose message (with the app's own headers) still fits, less 100 bytes:
+	// Thinpost's much longer link then no longer does.
+	low, high := 1<<20, 8<<20
+	for low < high {
+		mid := (low + high + 1) / 2
+		if build(mid) <= edgeprotocol.MaxMIMEBytes-100 {
+			low = mid
+		} else {
+			high = mid - 1
+		}
+	}
+	oneClickSource(t, objects, func(m *submission.Message) {
+		m.To, m.Text = []string{"b@example.net"}, strings.Repeat("a", low)
+		m.ListUnsubscribe, m.ListUnsubscribePost = "<https://app.example.com/u>", true
+	})
+	if err := service.PrepareNext(context.Background()); err != nil {
+		t.Fatal("preparation failed instead of skipping one-click:", err)
+	}
+	if repo.commits != 1 || len(repo.deliveries) != 1 {
+		t.Fatal("not committed")
+	}
+	final := objects.final[repo.deliveries[0].ObjectKey]
+	if !bytes.Contains(final, []byte("List-Unsubscribe: <https://app.example.com/u>\r\n")) || bytes.Contains(final, []byte("tracking.example.com")) || repo.deliveries[0].Forward != nil {
+		t.Fatal("the app's own headers were not kept, or Thinpost's were added, or a forward was recorded")
+	}
+	skipped := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, "one_click ") {
+			skipped++
+			if !strings.HasSuffix(line, "status=skipped reason=too_large") {
+				t.Fatal(line)
+			}
+		}
+	}
+	if skipped != 1 {
+		t.Fatal("expected one constant log line", lines)
 	}
 }

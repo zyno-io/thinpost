@@ -105,3 +105,18 @@ func TestDomainCheckLine(t *testing.T) {
 		t.Fatalf("got\n%s", strings.Join(*lines, "\n"))
 	}
 }
+
+func TestUnsubscribeForwardLine(t *testing.T) {
+	lines := capture(t)
+	UnsubscribeForward(app, app, app, "queued")
+	UnsubscribeForward(app, app, app, "delivered")
+	UnsubscribeForward("https://unsub.example.com/u?t=1", "a@example.com", app, "https://unsub.example.com/u?t=1")
+	want := []string{
+		"unsubscribe_forward app=" + app + " message=" + app + " delivery=" + app + " state=queued",
+		"unsubscribe_forward app=" + app + " message=" + app + " delivery=" + app + " state=delivered",
+		"unsubscribe_forward app=invalid message=invalid delivery=" + app + " state=other",
+	}
+	if strings.Join(*lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got\n%s", strings.Join(*lines, "\n"))
+	}
+}

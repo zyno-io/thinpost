@@ -272,3 +272,24 @@ func DomainCheck(appID, kind, state, result string) {
 	}
 	emit("domain_check app=%s kind=%s state=%s result=%s", ID(appID), kind, state, result)
 }
+
+var forwardStates = map[string]bool{"queued": true, "delivered": true, "failed": true}
+
+// UnsubscribeForward logs `unsubscribe_forward app=<id> message=<id> delivery=<id> state=<enum>`
+// when a recipient's one-click unsubscribe is queued for the sender's own link,
+// and when that forward is delivered or given up on. The link, its host, the
+// response and any error text never reach the log; anything outside the enum is
+// logged as "other".
+func UnsubscribeForward(appID, messageID, deliveryID, state string) {
+	if !forwardStates[state] {
+		state = string(StatusOther)
+	}
+	emit("unsubscribe_forward app=%s message=%s delivery=%s state=%s", ID(appID), ID(messageID), ID(deliveryID), state)
+}
+
+// OneClickSkipped logs `one_click app=<id> message=<id> status=skipped reason=too_large`
+// when a message could not carry Thinpost's one-click unsubscribe headers
+// within the delivery size limit and was prepared without them.
+func OneClickSkipped(appID, messageID string) {
+	emit("one_click app=%s message=%s status=skipped reason=too_large", ID(appID), ID(messageID))
+}

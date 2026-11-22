@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -192,7 +193,10 @@ func TestPreflightReservesSpaceForOneClickHeader(t *testing.T) {
 	}
 }
 
-func TestAcceptRejectsAppHeadersWhenOneClickIsOn(t *testing.T) {
+// A request with its own List-Unsubscribe headers is accepted whether or not
+// the app has one-click on; with it on, preparation replaces them. The stored
+// source keeps them so the original can be forwarded.
+func TestAcceptKeepsAppHeadersInTheSourceWhenOneClickIsOn(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		edit func(*submission.Message)
@@ -202,36 +206,80 @@ func TestAcceptRejectsAppHeadersWhenOneClickIsOn(t *testing.T) {
 			m.ListUnsubscribe, m.ListUnsubscribePost = "<https://example.com/u>", true
 		}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			repo := &memoryRepository{}
-			objects := &memoryObjects{}
-			service := testService(t, repo, objects)
-			req := validRequest()
-			tc.edit(&req.Message)
-			if _, err := service.Accept(context.Background(), submission.App{ID: "app", ListUnsubscribe: true}, req); !errors.Is(err, submission.ErrInvalidMessage) || len(objects.objects) != 0 || len(repo.records) != 0 || len(repo.reservations) != 0 {
-				t.Fatal("conflicting headers were accepted or charged", err)
-			}
-			// The same request is accepted for an app without the toggle (U1 passthrough).
-			if _, err := service.Accept(context.Background(), submission.App{ID: "app"}, req); err != nil {
-				t.Fatal("passthrough rejected", err)
-			}
-		})
-	}
-	// A request without its own headers is fine with the toggle on.
-	service := testService(t, &memoryRepository{}, &memoryObjects{})
-	if _, err := service.Accept(context.Background(), submission.App{ID: "app", ListUnsubscribe: true}, validRequest()); err != nil {
-		t.Fatal(err)
+		for _, oneClick := range []bool{true, false} {
+			t.Run(fmt.Sprint(tc.name, oneClick), func(t *testing.T) {
+				repo := &memoryRepository{}
+				objects := &memoryObjects{}
+				service := testService(t, repo, objects)
+				req := validRequest()
+				tc.edit(&req.Message)
+				if _, err := service.Accept(context.Background(), submission.App{ID: "app", ListUnsubscribe: oneClick}, req); err != nil || len(repo.records) != 1 || len(objects.objects) != 1 {
+					t.Fatal("rejected", err)
+				}
+				for _, stored := range objects.objects {
+					if !strings.Contains(string(stored), "https://example.com/u") {
+						t.Fatal("the source lost the app's own header")
+					}
+				}
+			})
+		}
 	}
 }
 
-func TestBatchRejectsAppHeadersWhenOneClickIsOn(t *testing.T) {
+func TestBatchAcceptsAppHeadersWhenOneClickIsOn(t *testing.T) {
 	repo := &memoryBatchRepository{memoryRepository: &memoryRepository{}}
 	objects := &memoryObjects{}
 	service := testService(t, repo, objects)
 	req := batchRequest()
 	req.Messages[1].ListUnsubscribe = "<https://example.com/u>"
-	if _, err := service.AcceptBatch(context.Background(), submission.App{ID: "app", ListUnsubscribe: true}, req); !errors.Is(err, submission.ErrInvalidMessage) || len(objects.objects) != 0 || repo.calls != 0 || len(repo.reservations) != 0 {
-		t.Fatal("conflicting batch item was accepted or charged", err)
+	if _, err := service.AcceptBatch(context.Background(), submission.App{ID: "app", ListUnsubscribe: true}, req); err != nil || repo.calls != 1 {
+		t.Fatal("batch item with its own header was rejected", err)
+	}
+}
+
+// Preparation replaces the app's own headers with Thinpost's, but the app can
+// switch one-click off before preparation, and then the own headers go out. So a
+// request with its own headers must fit both ways: whichever is longer decides.
+func TestPreflightWithOwnHeadersMustFitWithAndWithoutOneClick(t *testing.T) {
+	limit := func(m submission.Message, oneClick bool) int {
+		low, high := 0, 8<<20
+		for low < high {
+			mid := (low + high + 1) / 2
+			m.Text = strings.Repeat("x", mid)
+			if preflight(m, oneClick) == nil {
+				low = mid
+			} else {
+				high = mid - 1
+			}
+		}
+		return low
+	}
+	base := submission.Message{From: "a@example.com", To: []string{"b@example.net"}, Subject: "s", Text: "x"}
+	// A short own header: Thinpost's long link is the tighter case.
+	short := base
+	short.ListUnsubscribe, short.ListUnsubscribePost = "<https://example.com/u>", true
+	if on, off := limit(short, true), limit(short, false); on <= 0 || on >= off {
+		t.Fatalf("short header: limits with one-click on %d, off %d", on, off)
+	}
+	// An own header near the 998-byte line limit is longer than Thinpost's link:
+	// with one-click on the message is measured as written too, so the limit is
+	// the "off" one, and it is lower than what measuring only the replacement gives.
+	long := base
+	long.ListUnsubscribe, long.ListUnsubscribePost = "<https://example.com/"+strings.Repeat("a", 940)+">", true
+	if err := submission.ValidateListUnsubscribe(long.ListUnsubscribe, true); err != nil {
+		t.Fatal(err)
+	}
+	off := limit(long, false)
+	replaced := long
+	replaced.ListUnsubscribe, replaced.ListUnsubscribePost = "", false
+	onlyReplacement := limit(replaced, true)
+	if on := limit(long, true); on != off || off >= onlyReplacement {
+		t.Fatalf("long header: with one-click on %d, off %d, replacement alone %d", on, off, onlyReplacement)
+	}
+	// Just past the off limit is refused with one-click on.
+	long.Text = strings.Repeat("x", off+1)
+	if preflight(long, true) == nil {
+		t.Fatal("a message too big with its own headers was accepted because one-click was on")
 	}
 }
 

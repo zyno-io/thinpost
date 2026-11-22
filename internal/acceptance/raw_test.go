@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zyno-io/thinpost/internal/message"
 	"github.com/zyno-io/thinpost/internal/oplog"
 	"github.com/zyno-io/thinpost/internal/rawmime"
+	"github.com/zyno-io/thinpost/internal/receivedtrace"
 	"github.com/zyno-io/thinpost/internal/submission"
 )
 
@@ -295,5 +297,57 @@ func TestAcceptRawValidatesTheRequest(t *testing.T) {
 	}
 	if len(objects.objects) != 0 || len(repo.records) != 0 {
 		t.Fatal("an invalid request was stored or committed")
+	}
+}
+
+// Acceptance measures a raw message as written and with Thinpost's one-click
+// headers in place of its own, because the app can switch one-click on before
+// preparation. A message that fits only without them is refused (552) up front,
+// never prepared into an object the edge would reject.
+func TestAcceptRawBudgetsTheOneClickHeaders(t *testing.T) {
+	const head = "From: sender@example.com\r\nTo: rcpt@example.net\r\nSubject: Hello\r\nMessage-ID: <abc@client.example.org>\r\nDate: Fri, 20 Nov 2026 12:00:00 +0000\r\n\r\n"
+	signer, err := rawmime.SizingSigner(message.MaxDKIMRSABits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace, err := receivedtrace.Field(receivedtrace.SizingHost(), receivedtrace.WithSMTP, sizingMessageID, time.Unix(0, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := rawRequest(t, head, "sender@example.com", rawmime.Policy{}, "rcpt@example.net")
+	base, err := rawmime.PreparedSize(empty.Raw, rawmime.PrepareInput{Scan: empty.Scan, From: empty.From, MessageID: sizingMessageID, Date: time.Unix(0, 0).UTC(), Selector: sizingSelector, Signer: signer, Received: trace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each bare line feed becomes CRLF: two bytes. Leave 300 bytes, which holds
+	// without the one-click headers (about 700 bytes) and not with them.
+	lines := (rawmime.MaxPreparedMessage - rawmime.SizeSlack - base.Total - 300) / 2
+	repo := &smtpRepository{memoryRepository: &memoryRepository{}}
+	objects := &memoryObjects{}
+	service := rawService(t, repo, objects, true)
+	req := rawRequest(t, head+strings.Repeat("\n", lines), "sender@example.com", rawmime.Policy{}, "rcpt@example.net")
+	if _, err := service.AcceptRaw(context.Background(), smtpApp, smtpFence, req); !errors.Is(err, submission.ErrMessageTooLarge) || len(objects.objects) != 0 || len(repo.records) != 0 {
+		t.Fatal("a message that cannot take the one-click headers was accepted", err)
+	}
+	// 600 bytes less fits both ways.
+	req = rawRequest(t, head+strings.Repeat("\n", lines-500), "sender@example.com", rawmime.Policy{}, "rcpt@example.net")
+	if _, err := service.AcceptRaw(context.Background(), smtpApp, smtpFence, req); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A raw message with its own List-Unsubscribe fields is accepted as is; the
+// stored source keeps them for forwarding.
+func TestAcceptRawKeepsTheClientsUnsubscribeFields(t *testing.T) {
+	repo := &smtpRepository{memoryRepository: &memoryRepository{}}
+	objects := &memoryObjects{}
+	service := rawService(t, repo, objects, true)
+	raw := "List-Unsubscribe: <https://app.example.com/u>\r\nList-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n" + plainRaw
+	req := rawRequest(t, raw, "sender@example.com", rawmime.Policy{}, "rcpt@example.net")
+	if !req.Scan.ListUnsubscribe {
+		t.Fatal("the scan missed the fields")
+	}
+	if _, err := service.AcceptRaw(context.Background(), smtpApp, smtpFence, req); err != nil || len(objects.objects) != 1 {
+		t.Fatal(err)
 	}
 }

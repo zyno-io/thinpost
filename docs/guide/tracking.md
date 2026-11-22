@@ -118,7 +118,9 @@ Because the URL holds no readable message content or recipient identity, access 
 
 ## One-click unsubscribe
 
-Apps that opt in (console **Tracking** tab, or `PUT /api/v1/apps/{appId}/list-unsubscribe`) get an RFC 8058 `List-Unsubscribe` link and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` header on every message, covered by the DKIM signature. A request that carries its own `List-Unsubscribe` headers is rejected while this is on. A new app has it off.
+Apps that opt in (console **Tracking** tab, or `PUT /api/v1/apps/{appId}/list-unsubscribe`) get an RFC 8058 `List-Unsubscribe` link and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` header on every message, covered by the DKIM signature. (A message too large to carry them is sent without them, keeping any headers of its own.) Every recipient gets their own link. This covers mail sent through the HTTP APIs and over [SMTP](/guide/smtp). A new app has it off.
+
+Mail clients and mailbox providers use the headers to show an "Unsubscribe" button. Some devices and printers cannot be told to leave these headers out, and their messages count too. If a device's mail should not carry an unsubscribe link, give it its own app with one-click off.
 
 | Method | Behavior |
 | --- | --- |
@@ -128,7 +130,20 @@ Apps that opt in (console **Tracking** tab, or `PUT /api/v1/apps/{appId}/list-un
 
 A successful unsubscribe adds the recipient to the app's [suppression list](/guide/suppressions) with reason `unsubscribe`, records an `unsubscribed` webhook event and leaves the delivery's state alone. The address comes from Thinpost's own record of the delivery, never from the request. Mailto unsubscribe is not implemented.
 
-If you manage unsubscribes yourself, you can pass your own `List-Unsubscribe` and `List-Unsubscribe-Post` headers with the send request while Thinpost's managed link is off.
+### Messages that bring their own unsubscribe link
+
+If a message already has `List-Unsubscribe` or `List-Unsubscribe-Post` headers (in the API request, or in the raw message sent over SMTP) and the app has one-click on, the message is accepted and **Thinpost's headers replace yours**. Your headers are not sent, and a DKIM signature you added that covers them is dropped (Thinpost signs the message itself). Thinpost then also tells your system about unsubscribes:
+
+| Your original headers | When the recipient unsubscribes |
+| --- | --- |
+| An `https:` link **and** `List-Unsubscribe-Post: List-Unsubscribe=One-Click` | Thinpost records the unsubscribe as usual, **and** sends a one-click POST (`List-Unsubscribe=One-Click`, form-encoded) to your first `https:` link. |
+| An `https:` link without `List-Unsubscribe-Post` | Recorded as usual. Your link is not called. |
+| A `mailto:` link only | Recorded as usual. Your address is not written to. |
+| Anything else (malformed, a very long value, non-ASCII, an address or private network name, a port other than 443) | Recorded as usual. Your link is not called. |
+
+The call to your link has the same safety rules as [webhooks](/guide/webhooks): public addresses only, port 443, no redirects followed, short timeouts. It is retried for about a day when your server is down or answers with an error (5xx, 408 or 429); another answer, such as 404, ends it. It is sent once per delivery, even if the recipient clicks twice. **The recipient's unsubscribe always counts**, whether or not your server answers: they are suppressed and an `unsubscribed` event is sent either way. The message page in the console shows the outcome next to the unsubscribe ("Also unsubscribed at the sender's own link: done / failed / not available").
+
+Thinpost does not copy your link into a separate record, because it can contain a token that identifies the recipient. It keeps only the link's host. When the call is made, Thinpost reads the link from the stored message, checks that it still points to that host, and sends the request. If the stored message is gone or no longer gives the same host, the call is marked failed. The link never appears in logs, and the console shows only the host. With one-click **off**, your own headers are sent exactly as you wrote them and nothing is forwarded.
 
 ## Events, budgets and limits
 

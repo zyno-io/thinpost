@@ -224,11 +224,35 @@ type DeliverySummary struct {
 	// Feedback lists the recipient feedback recorded for this delivery (for
 	// example a one-click unsubscribe), oldest first.
 	Feedback []DeliveryFeedback `json:"feedback,omitempty"`
+	// UnsubscribeForward is present once the recipient unsubscribed from a
+	// message that had its own List-Unsubscribe headers (replaced by Thinpost's):
+	// what became of the call to the sender's own link.
+	UnsubscribeForward *UnsubscribeForward `json:"unsubscribe_forward,omitempty"`
 	// MessageIDHeader is this delivery's RFC 5322 Message-ID with angle
 	// brackets: the same for every delivery of a message prepared at schema 38
 	// or later, per delivery for earlier ones. Absent when the sender domain
 	// was not recorded.
 	MessageIDHeader *string `json:"message_id_header,omitempty"`
+}
+
+// UnsubscribeForward is the state of the call to the sender's own unsubscribe
+// link after a recipient unsubscribed through Thinpost's link. It never holds
+// the link: only its host.
+type UnsubscribeForward struct {
+	// State is "queued" (waiting for an attempt, or retrying), "delivered" (the
+	// sender's endpoint answered 2xx), "failed" (gave up) or "not_forwarded".
+	State string `json:"state"`
+	// Reason: for not_forwarded, "mailto_only", "no_one_click_post" or
+	// "unusable_link"; for failed or a retrying forward, the last failure
+	// ("blocked_destination", "resolution_failed", "connection_failed",
+	// "tls_failed", "timeout", "http_status", "rejected", "invalid_link" or
+	// "unknown"). Absent when delivered.
+	Reason string `json:"reason,omitempty"`
+	// Host is the DNS name of the sender's link; absent for not_forwarded.
+	Host     string `json:"host,omitempty"`
+	Attempts int    `json:"attempts"`
+	// FinishedAt is when it was delivered or given up on.
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 
 // DeliveryFeedback is one recorded unsubscribe or complaint. It holds no

@@ -187,6 +187,10 @@ Schema 49 adds a nullable `apps.deleted_at` and a `NOT VALID` check that a delet
 
 Schema 50 changes the column defaults so a new app starts with 60 messages per minute (burst of 100), 10,000 recipients per day, 1,000 pending messages and 100,000 tracking events per day, with a full submission bucket. It is catalog-only and does not touch existing rows: **existing apps keep their current limits**, including a zero that was set to block them. Raise an old app's limits in the console if it should get the new values.
 
+## One-click unsubscribe over SMTP and forwarding
+
+Schema 51 adds the `unsubscribe_forwards` table, created empty (catalog-only; no existing table changes). When an app has one-click unsubscribe on, SMTP mail now gets Thinpost's per-recipient headers, and mail from either API that carries its own `List-Unsubscribe` headers is accepted and has them replaced; when the recipient unsubscribes, the control plane also POSTs to the sender's own link if it had a one-click https link. Deploy the release to every control replica before turning this on for a busy app: an older replica neither forwards the unsubscribe nor writes the record. Nothing about existing mail changes, and an unsubscribe from a message prepared before this release is recorded exactly as before. The forwarding workers run in every control replica and need no new configuration; they need outbound HTTPS to the senders' hosts, with the same public-address rules as webhooks. The schema rolls forward only.
+
 ## Upgrading the edge
 
 The edge release is independent. Its Deployment uses `Recreate`, so an upgrade stops the old pod and starts a new one, and sending pauses briefly. Bounce senders retry. The control plane reconnects and the edge replays any results it has not had acknowledged.

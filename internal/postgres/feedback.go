@@ -7,6 +7,7 @@ import (
 
 	"github.com/zyno-io/thinpost/internal/admin"
 	"github.com/zyno-io/thinpost/internal/feedback"
+	"github.com/zyno-io/thinpost/internal/oplog"
 	"github.com/zyno-io/thinpost/internal/tracking"
 )
 
@@ -59,8 +60,17 @@ func (r *Repository) RecordUnsubscribe(ctx context.Context, deliveryID string) e
 		if err = countFeedback(ctx, tx, "one_click", feedback.Duplicate); err != nil {
 			return errors.New("unsubscribe unavailable")
 		}
+		// Normally already queued by the first request; this covers an
+		// unsubscribe recorded some other way before the recipient's POST.
+		queued, queueErr := queueForward(ctx, tx, deliveryID)
+		if queueErr != nil {
+			return errors.New("unsubscribe unavailable")
+		}
 		if err = tx.Commit(); err != nil {
 			return errors.New("unsubscribe commit not confirmed")
+		}
+		if queued {
+			oplog.UnsubscribeForward(appID, messageID, deliveryID, "queued")
 		}
 		return nil
 	}
@@ -82,8 +92,19 @@ func (r *Repository) RecordUnsubscribe(ctx context.Context, deliveryID string) e
 	if err = countFeedback(ctx, tx, "one_click", feedback.Accepted); err != nil {
 		return errors.New("unsubscribe unavailable")
 	}
+	// Also call the sender's own unsubscribe link when the message had one that
+	// can take a one-click POST. Queued in this transaction, so the unsubscribe
+	// and its forward commit together; the POST itself is sent later by a
+	// worker, and its failure never affects the recipient's unsubscribe.
+	queued, err := queueForward(ctx, tx, deliveryID)
+	if err != nil {
+		return errors.New("unsubscribe unavailable")
+	}
 	if err = tx.Commit(); err != nil {
 		return errors.New("unsubscribe commit not confirmed")
+	}
+	if queued {
+		oplog.UnsubscribeForward(appID, messageID, deliveryID, "queued")
 	}
 	return nil
 }

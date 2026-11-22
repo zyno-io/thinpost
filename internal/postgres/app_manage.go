@@ -155,6 +155,19 @@ func (r *Repository) DeleteApp(ctx context.Context, actor, appID string) error {
 	if webhooks, err = count(`UPDATE webhook_deliveries SET state='cancelled',claim_token=NULL,claim_until=NULL WHERE app_id=$1 AND state IN ('queued','in_flight')`); err != nil {
 		return err
 	}
+	// End the app's forwards of recipients' unsubscribes to senders' own links.
+	// Lock them first, waiting out a racing claim: a worker's later commit then
+	// finds its lease gone, like a webhook attempt's.
+	if _, err = tx.ExecContext(ctx, `SELECT 1 FROM unsubscribe_forwards f JOIN deliveries d ON d.id=f.delivery_id JOIN messages m ON m.id=d.message_id
+		WHERE m.app_id=$1 AND f.state IN ('armed','queued','in_flight') FOR UPDATE OF f`, appID); err != nil {
+		return err
+	}
+	var forwards int
+	if forwards, err = count(`UPDATE unsubscribe_forwards f SET state='failed',claim_token=NULL,claim_until=NULL,next_attempt_at=NULL,last_failure='app_deleted',finished_at=clock_timestamp()
+		FROM deliveries d JOIN messages m ON m.id=d.message_id
+		WHERE d.id=f.delivery_id AND m.app_id=$1 AND f.state IN ('armed','queued','in_flight')`); err != nil {
+		return err
+	}
 	domains, err := deleteAppDomains(ctx, tx, actor, appID, "inbound_domains", "inbound_domain.deleted")
 	if err != nil {
 		return err
@@ -170,8 +183,8 @@ func (r *Repository) DeleteApp(ctx context.Context, actor, appID string) error {
 	if _, err = tx.ExecContext(ctx, `INSERT INTO audit_events(id,actor_id,app_id,action,resource_id,details)
 		VALUES ($1,$2,$3,'app.deleted',$3,jsonb_build_object('api_keys_revoked',$4::integer,'smtp_credentials_revoked',$5::integer,'inbound_domains_removed',$6::integer,
 		'bounce_domains_removed',$7::integer,'held_messages_cancelled',$8::integer,'unsent_messages_ended',$9::integer,'deliveries_failed',$10::integer,
-		'webhook_endpoints_disabled',$11::integer,'webhook_deliveries_cancelled',$12::integer))`,
-		auditID, actor, appID, keys, credentials, domains, bounce, held, unprepared, deliveries, endpoints, webhooks); err != nil {
+		'webhook_endpoints_disabled',$11::integer,'webhook_deliveries_cancelled',$12::integer,'unsubscribe_forwards_ended',$13::integer))`,
+		auditID, actor, appID, keys, credentials, domains, bounce, held, unprepared, deliveries, endpoints, webhooks, forwards); err != nil {
 		return err
 	}
 	return tx.Commit()
