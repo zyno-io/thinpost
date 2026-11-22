@@ -4,14 +4,18 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/zyno-io/thinpost/internal/admin"
 	"github.com/zyno-io/thinpost/internal/message"
+	"github.com/zyno-io/thinpost/internal/prepared"
 	"github.com/zyno-io/thinpost/internal/submission"
 )
 
@@ -213,6 +217,50 @@ func TestDeliveryHeadersFromSignedMIME(t *testing.T) {
 	}
 	if len(r.audits) != 1 || r.audits[0] != "message.delivery.headers.read message:delivery" {
 		t.Fatal("EP header read not audited", r.audits)
+	}
+}
+
+// A recipe object gives the same header fields as the complete message it
+// stands for, and refuses a recipe built for another delivery.
+func TestDeliveryHeadersFromRecipe(t *testing.T) {
+	const id = "0123456789abcdef0123456789abcdef"
+	base := []byte("From: a@example.com\nSubject: hi\n\nprivate body\nsecond\n")
+	sum := sha256.Sum256(base)
+	header := "DKIM-Signature: v=1; d=example.com;\r\n b=abc\r\nFrom: a@example.com\r\nSubject: hi\r\n\r\n"
+	signed := header + "private body\r\nsecond\r\n"
+	recipe, err := prepared.New(id, hex.EncodeToString(sum[:]), 33, []byte(signed), len(header), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, err := recipe.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(data []byte, delivery string) ([]admin.HeaderField, error) {
+		r := &repo{protected: true}
+		return (&Service{Repository: r, Objects: &objects{repo: r, data: data}}).ReadDeliveryHeaders(context.Background(), "operator", "app", "message", delivery)
+	}
+	fromRecipe, err := read(object, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromFull, err := read([]byte(signed), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fromRecipe) != 3 || fromRecipe[0].Name != "DKIM-Signature" || !reflect.DeepEqual(fromRecipe, fromFull) {
+		t.Fatalf("recipe headers %+v, full %+v", fromRecipe, fromFull)
+	}
+	for _, h := range fromRecipe {
+		if strings.Contains(h.Value, "private body") {
+			t.Fatal("body leaked into headers")
+		}
+	}
+	if _, err = read(object, "fedcba9876543210fedcba9876543210"); err == nil {
+		t.Fatal("a recipe for another delivery was shown")
+	}
+	if _, err = read(object[:len(object)-1], id); err == nil {
+		t.Fatal("a damaged recipe was shown")
 	}
 }
 

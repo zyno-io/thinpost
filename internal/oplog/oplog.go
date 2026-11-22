@@ -287,6 +287,13 @@ func UnsubscribeForward(appID, messageID, deliveryID, state string) {
 	emit("unsubscribe_forward app=%s message=%s delivery=%s state=%s", ID(appID), ID(messageID), ID(deliveryID), state)
 }
 
+// PreparedInvalid logs `prepared app=<id> message=<id> delivery=<id> status=invalid`
+// when a delivery's stored message could not be rebuilt and checked at dispatch
+// (nothing was sent; the attempt is recorded as a local rejection).
+func PreparedInvalid(appID, messageID, deliveryID string) {
+	emit("prepared app=%s message=%s delivery=%s status=invalid", ID(appID), ID(messageID), ID(deliveryID))
+}
+
 // OneClickSkipped logs `one_click app=<id> message=<id> status=skipped reason=too_large`
 // when a message could not carry Thinpost's one-click unsubscribe headers
 // within the delivery size limit and was prepared without them.

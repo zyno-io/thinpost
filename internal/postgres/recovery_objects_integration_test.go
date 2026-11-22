@@ -11,11 +11,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/zyno-io/thinpost/internal/objectstore"
+	"github.com/zyno-io/thinpost/internal/prepared"
 )
 
 type recoveryRaw map[string][]byte
@@ -87,7 +89,7 @@ func TestRecoveryObjectInventory(t *testing.T) {
 	}
 	if _, err = db.ExecContext(ctx, `INSERT INTO apps(id,name) VALUES ('app','app');
 		INSERT INTO messages(id,app_id,object_key,enhanced_protection,state) VALUES ('m1','app','source/1',true,'done'),('m2','app','source/2',true,'done');
-		INSERT INTO deliveries(id,message_id,recipient_index,final_object_key,state) VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','m1',0,'final/1','accepted'),('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','m2',0,'final/2','accepted');
+		INSERT INTO deliveries(id,message_id,recipient_index,final_object_key,state,prepared_format) VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','m1',0,'final/1','accepted',1),('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','m2',0,'final/2','accepted',2);
 		INSERT INTO bounce_receipts(id,delivery_id,object_key,fingerprint) VALUES ('b1','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','bounce/1',decode(repeat('00',32),'hex'));
 		INSERT INTO inbound_messages(id,app_id,domain,object_key,size_bytes,fingerprint,content_expires_at) VALUES
 			('11111111111111111111111111111111','app','example.com','inbound/v1/0000000000/11111111111111111111111111111111',10,decode(repeat('01',32),'hex'),now()+interval '30 days'),
@@ -110,7 +112,20 @@ func TestRecoveryObjectInventory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, objectKey := range []string{"source/1", "source/2", "final/1", "final/2", "bounce/1", "inbound/v1/0000000000/11111111111111111111111111111111", "tracking/v1/0000000000/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"} {
+	// final/2 is a recipe object (delivery bbbb... is prepared_format 2): the
+	// inventory reads it like any other authenticated object.
+	recipe, err := prepared.New("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", strings.Repeat("0", 64), 0, []byte("DKIM-Signature: v=1\r\n\r\nbody\r\n"), len("DKIM-Signature: v=1\r\n\r\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipeObject, err := recipe.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Put(ctx, "final/2", recipeObject); err != nil {
+		t.Fatal(err)
+	}
+	for _, objectKey := range []string{"source/1", "source/2", "final/1", "bounce/1", "inbound/v1/0000000000/11111111111111111111111111111111", "tracking/v1/0000000000/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"} {
 		if err = store.Put(ctx, objectKey, []byte("synthetic message")); err != nil {
 			t.Fatal(err)
 		}

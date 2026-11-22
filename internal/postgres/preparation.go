@@ -12,6 +12,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/objectkey"
 	"github.com/zyno-io/thinpost/internal/oplog"
 	"github.com/zyno-io/thinpost/internal/preparation"
+	"github.com/zyno-io/thinpost/internal/prepared"
 )
 
 const maxPreparationAttempts = 12
@@ -213,6 +214,9 @@ func (r *Repository) CommitPreparation(ctx context.Context, claim preparation.Cl
 		if err != nil || object.Kind != "final" || object.ID != delivery.ID || delivery.RecipientIndex != i {
 			return errors.New("invalid prepared delivery")
 		}
+		if delivery.Format != prepared.FormatFull && delivery.Format != prepared.FormatRecipe {
+			return errors.New("invalid prepared delivery")
+		}
 		if delivery.Forward != nil {
 			deliveries[i].Forward = checkedForward(delivery.Forward)
 		}
@@ -299,7 +303,7 @@ func (r *Repository) CommitPreparation(ctx context.Context, claim preparation.Cl
 		return err
 	}
 	for _, delivery := range deliveries {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO deliveries(id,message_id,recipient_index,final_object_key) VALUES ($1,$2,$3,$4)`, delivery.ID, claim.MessageID, delivery.RecipientIndex, delivery.ObjectKey); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO deliveries(id,message_id,recipient_index,final_object_key,prepared_format) VALUES ($1,$2,$3,$4,$5)`, delivery.ID, claim.MessageID, delivery.RecipientIndex, delivery.ObjectKey, delivery.Format); err != nil {
 			return err
 		}
 		if delivery.Forward != nil {

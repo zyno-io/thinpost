@@ -39,7 +39,7 @@ func TestVersion2SourceListsToAndCcAndNeverBccOnEveryCopy(t *testing.T) {
 		if delivery.RecipientIndex != i {
 			t.Fatal("recipient index out of envelope order")
 		}
-		data := objects.final[delivery.ObjectKey]
+		data := objects.message(t, delivery.ObjectKey)
 		parsed, err := mail.ReadMessage(bytes.NewReader(data))
 		if err != nil {
 			t.Fatal(err)
@@ -61,7 +61,7 @@ func TestVersion1SourceKeepsSingleRecipientTo(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, delivery := range repo.deliveries {
-		data := objects.final[delivery.ObjectKey]
+		data := objects.message(t, delivery.ObjectKey)
 		parsed, err := mail.ReadMessage(bytes.NewReader(data))
 		if err != nil {
 			t.Fatal(err)

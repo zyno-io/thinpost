@@ -18,6 +18,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/edgeprotocol"
 	"github.com/zyno-io/thinpost/internal/oplog"
 	"github.com/zyno-io/thinpost/internal/postgres"
+	"github.com/zyno-io/thinpost/internal/prepared"
 	"github.com/zyno-io/thinpost/internal/submission"
 )
 
@@ -86,6 +87,9 @@ func (p *Provider) Next(ctx context.Context, lease postgres.ControllerLease, cap
 		}
 		if _, commitErr := p.Repository.CommitDeliveryResultIdentified(ctx, result); commitErr != nil {
 			return nil, nil, errors.New("delivery preparation result could not be committed")
+		}
+		if errors.Is(err, errPrepared) {
+			oplog.PreparedInvalid(claim.AppID, claim.MessageID, claim.DeliveryID)
 		}
 		oplog.Delivery(claim.AppID, claim.MessageID, claim.DeliveryID, oplog.Status(result.Outcome), 0, claim.SourceName)
 		return nil, nil, delivery.ErrNoWork
@@ -158,9 +162,13 @@ func (p *Provider) prepare(ctx context.Context, claim delivery.Claim, caps deliv
 	if err != nil || from == "" {
 		return nil, nil, errors.New("bounce address unavailable")
 	}
-	mime, err := p.Objects.Get(ctx, claim.FinalKey, edgeprotocol.MaxMIMEBytes)
-	if err != nil || len(mime) == 0 {
+	stored, err := p.Objects.Get(ctx, claim.FinalKey, edgeprotocol.MaxMIMEBytes+int64(prepared.MaxOverhead))
+	if err != nil || len(stored) == 0 {
 		return nil, nil, errors.New("signed MIME unavailable")
+	}
+	mime, err := finalMessage(claim, object, stored)
+	if err != nil {
+		return nil, nil, err
 	}
 	digest := sha256.Sum256(mime)
 	var trackingCutoff int64
@@ -168,4 +176,40 @@ func (p *Provider) prepare(ctx context.Context, claim delivery.Claim, caps deliv
 		trackingCutoff = claim.TrackingSendCutoff.UnixMilli()
 	}
 	return &controlv1.DeliveryStart{AttemptId: claim.AttemptID, DeliveryId: claim.DeliveryID, Epoch: claim.Epoch, MxName: route.MXName, DestinationIp: route.Address.String(), EnvelopeFrom: from, Recipient: recipient.Address, EnhancedProtection: claim.EnhancedProtection, ExpectedSize: uint64(len(mime)), Sha256: digest[:], TrackingSendCutoffUnixMs: trackingCutoff, SourceAddress: claim.SourceAddress, HeloName: claim.HeloName}, mime, nil
+}
+
+// errPrepared is the one error for a stored final object that is not what the
+// delivery's recorded format says, or that does not rebuild to the bytes that
+// were signed. It never carries anything from the object.
+var errPrepared = errors.New("prepared message is invalid")
+
+// finalMessage returns the exact bytes to send for a delivery. Format 1 is a
+// complete signed message, stored as is. Format 2 is a recipe over the message's
+// raw source: it must carry the recipe prefix, belong to this delivery and
+// assemble against the source the delivery's message was accepted with, to the
+// recorded size and SHA-256. The format and the object prefix must agree; a
+// mismatch either way fails closed. Retries read the same objects and so rebuild
+// the same bytes.
+func finalMessage(claim delivery.Claim, source submission.Source, stored []byte) ([]byte, error) {
+	switch claim.PreparedFormat {
+	case prepared.FormatFull:
+		if prepared.IsRecipe(stored) || len(stored) > edgeprotocol.MaxMIMEBytes {
+			return nil, errPrepared
+		}
+		return stored, nil
+	case prepared.FormatRecipe:
+		if !prepared.IsRecipe(stored) || source.Version != submission.RawSourceVersion {
+			return nil, errPrepared
+		}
+		recipe, err := prepared.Decode(stored)
+		if err != nil || recipe.DeliveryID() != claim.DeliveryID {
+			return nil, errPrepared
+		}
+		mime, err := recipe.Assemble(source.Raw, source.RawHeader.RawSHA256)
+		if err != nil || len(mime) == 0 || len(mime) > edgeprotocol.MaxMIMEBytes {
+			return nil, errPrepared
+		}
+		return mime, nil
+	}
+	return nil, errPrepared
 }

@@ -117,7 +117,7 @@ func TestSharedMessageIDPreparationCommit(t *testing.T) {
 		t.Fatal("claim", claim, err)
 	}
 	a, b := f.id(), f.id()
-	deliveries := []preparation.Delivery{{ID: a, RecipientIndex: 0, ObjectKey: fixtureObjectKey("final", a)}, {ID: b, RecipientIndex: 1, ObjectKey: fixtureObjectKey("final", b)}}
+	deliveries := []preparation.Delivery{{Format: 1, ID: a, RecipientIndex: 0, ObjectKey: fixtureObjectKey("final", a)}, {Format: 1, ID: b, RecipientIndex: 1, ObjectKey: fixtureObjectKey("final", b)}}
 	// other.example is verified for the app, so only the sender_domain guard in
 	// CommitPreparation's WHERE can reject this commit.
 	f.exec(`INSERT INTO sender_domains(app_id,domain,active,verified_at) VALUES ($1,'other.example',true,now())`, app)

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	preparedrecipe "github.com/zyno-io/thinpost/internal/prepared"
 	"github.com/zyno-io/thinpost/internal/providerid"
 	"github.com/zyno-io/thinpost/internal/receivedtrace"
 )
@@ -104,33 +105,43 @@ func validUnsubscribeLink(v string) bool {
 	return true
 }
 
+// Prepared is the result of Prepare.
+type Prepared struct {
+	// Message is the whole message to send.
+	Message []byte
+	// HeaderLen is the length of the header block at the start of Message: the
+	// DKIM-Signature, the prepared fields and the blank line. Message[HeaderLen:]
+	// is the body, the source body from Scanned.BodyStart with CRLF line endings.
+	HeaderLen int
+}
+
 // Prepare applies the header surgery and returns the message to send:
 // DKIM-Signature, the prepared fields, CRLF, the body, with every line ending
 // CRLF. It signs with a streaming signer and allocates one output buffer.
 // The result is deterministic except for the DKIM t= tag.
-func Prepare(raw []byte, in PrepareInput) ([]byte, error) {
+func Prepare(raw []byte, in PrepareInput) (Prepared, error) {
 	g, err := in.check(raw)
 	if err != nil {
-		return nil, err
+		return Prepared{}, err
 	}
 	slack, err := signatureSlack(in.Signer.Public(), in.From.Domain, in.Selector)
 	if err != nil {
-		return nil, err
+		return Prepared{}, err
 	}
 	out, hlen, err := assemble(raw, &in, g, slack)
 	if err != nil {
-		return nil, err
+		return Prepared{}, err
 	}
 	sig, err := sign(out[slack:], hlen, &in)
 	if err != nil {
-		return nil, err
+		return Prepared{}, err
 	}
 	if len(sig) > slack {
-		return nil, ErrSigning
+		return Prepared{}, ErrSigning
 	}
 	start := slack - len(sig)
 	copy(out[start:], sig)
-	return out[start:], nil
+	return Prepared{Message: out[start:], HeaderLen: len(sig) + hlen + 2}, nil
 }
 
 // sink writes into buf, or only counts when buf is nil.
@@ -172,8 +183,7 @@ func assemble(raw []byte, in *PrepareInput, g generated, slack int) ([]byte, int
 	if err := writeHeaders(&count, raw, in, g); err != nil {
 		return nil, 0, err
 	}
-	body := raw[in.Scan.BodyStart:]
-	out := make([]byte, slack+count.n+2+len(body)+in.Scan.BareLF)
+	out := make([]byte, slack+count.n+2+len(raw)-in.Scan.BodyStart+in.Scan.BareLF)
 	k := sink{buf: out, n: slack}
 	if err := writeHeaders(&k, raw, in, g); err != nil {
 		return nil, 0, err
@@ -185,20 +195,13 @@ func assemble(raw []byte, in *PrepareInput, g generated, slack int) ([]byte, int
 		return nil, 0, ErrInvalid
 	}
 	k.crlf()
-	for pos := 0; pos < len(body); {
-		i := bytes.IndexByte(body[pos:], '\n')
-		if i < 0 {
-			k.write(body[pos:])
-			break
-		}
-		at := pos + i
-		k.write(body[pos:at])
-		if at == 0 || body[at-1] != '\r' {
-			k.write([]byte{'\r'})
-		}
-		k.write([]byte{'\n'})
-		pos = at + 1
+	// The body goes through preparedrecipe.AppendBody, the one CRLF normalizer, into
+	// the space already allocated: it never grows out.
+	built, err := preparedrecipe.AppendBody(out[:k.n], raw, in.Scan.BodyStart, nil, nil)
+	if err != nil || len(built) != len(out) || &built[0] != &out[0] {
+		return nil, 0, ErrInvalid // the scan does not match the bytes
 	}
+	k.n = len(built)
 	if k.over || k.n != len(out) {
 		return nil, 0, ErrInvalid // the scan does not match the bytes
 	}

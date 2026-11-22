@@ -3,6 +3,7 @@
 package preparation
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/rand"
@@ -19,6 +20,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/message"
 	"github.com/zyno-io/thinpost/internal/objectkey"
 	"github.com/zyno-io/thinpost/internal/oplog"
+	"github.com/zyno-io/thinpost/internal/prepared"
 	"github.com/zyno-io/thinpost/internal/rawmime"
 	"github.com/zyno-io/thinpost/internal/receivedtrace"
 	"github.com/zyno-io/thinpost/internal/submission"
@@ -75,6 +77,9 @@ type Delivery struct {
 	// Forward is set when the message had its own List-Unsubscribe headers that
 	// Thinpost's one-click headers replaced (see Forward).
 	Forward *Forward
+	// Format is the stored object's format: prepared.FormatFull for a complete
+	// MIME message, prepared.FormatRecipe for a recipe. It is always set.
+	Format int
 }
 
 // Forward records what to do with the sender's own unsubscribe link when the
@@ -450,7 +455,7 @@ func (s *Service) PrepareNext(ctx context.Context) (resultErr error) {
 		if err = s.Objects.PutMIME(work, objectKey, final); err != nil {
 			return fmt.Errorf("store signed MIME: %w", err)
 		}
-		deliveries = append(deliveries, Delivery{ID: id, RecipientIndex: index, ObjectKey: objectKey, Tracking: preparedTracking, Forward: forward})
+		deliveries = append(deliveries, Delivery{ID: id, RecipientIndex: index, ObjectKey: objectKey, Tracking: preparedTracking, Forward: forward, Format: prepared.FormatFull})
 	}
 	return s.commit(ctx, hb, claim, deliveries, &reason)
 }
@@ -481,11 +486,14 @@ func (s *Service) commit(ctx context.Context, hb *heartbeat, claim Claim, delive
 }
 
 // prepareRaw prepares a version 3 (raw MIME) source. Tracking never applies to a
-// raw message yet. Without one-click unsubscribe the message is prepared and
-// signed once and every recipient's delivery points at an identical object,
+// raw message yet. Each delivery's final object is a recipe (internal/prepared):
+// the signed header block and no body, which control rebuilds from the stored
+// source at dispatch. Without one-click unsubscribe the message is prepared and
+// signed once and every recipient's recipe carries the same header bytes,
 // because the recipients are in the SMTP envelope only. With it, each delivery
 // gets its own List-Unsubscribe link (replacing any the client wrote), so each
-// is prepared, signed and stored separately.
+// is prepared, signed and stored separately. Every recipe is assembled against
+// the source and compared with the signed bytes before it is stored.
 func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submission.Source, key SigningKey, trace []byte, reason *string) ([]Delivery, error) {
 	h := payload.RawHeader
 	*reason = "source_invalid"
@@ -515,7 +523,7 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 		Signer:    key.Signer,
 		Received:  trace,
 	}
-	var shared []byte
+	var shared rawmime.Prepared
 	var forward *Forward
 	if oneClick {
 		forward = forwardFor(unsubforward.OriginalOf(payload))
@@ -525,7 +533,7 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 			// rawmime errors are constant, but never wrap anything built from input.
 			return nil, errors.New("build signed MIME failed")
 		}
-		if len(shared) > edgeprotocol.MaxMIMEBytes {
+		if len(shared.Message) > edgeprotocol.MaxMIMEBytes {
 			return nil, errors.New("signed MIME exceeds delivery limit")
 		}
 	}
@@ -552,7 +560,7 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 			if final, err = rawmime.Prepare(payload.Raw, perDelivery); err != nil {
 				return nil, errors.New("build signed MIME failed")
 			}
-			if len(final) > edgeprotocol.MaxMIMEBytes {
+			if len(final.Message) > edgeprotocol.MaxMIMEBytes {
 				// Too big to carry Thinpost's headers (a source accepted before
 				// they were sized in): send it as the client wrote it, with the
 				// client's own headers and no forward, rather than fail it.
@@ -561,23 +569,51 @@ func (s *Service) prepareRaw(ctx context.Context, claim Claim, payload submissio
 				if shared, err = rawmime.Prepare(payload.Raw, input); err != nil {
 					return nil, errors.New("build signed MIME failed")
 				}
-				if len(shared) > edgeprotocol.MaxMIMEBytes {
+				if len(shared.Message) > edgeprotocol.MaxMIMEBytes {
 					return nil, errors.New("signed MIME exceeds delivery limit")
 				}
 				final = shared
 			}
+		}
+		*reason = "mime_build"
+		object, err := recipeObject(id, h.RawSHA256, payload.Raw, scanned.BodyStart, final)
+		if err != nil {
+			return nil, err
 		}
 		objectKey, err := objectkey.New("final", id, time.Now())
 		if err != nil {
 			return nil, err
 		}
 		*reason = "object_write"
-		if err = s.Objects.PutMIME(ctx, objectKey, final); err != nil {
+		if err = s.Objects.PutMIME(ctx, objectKey, object); err != nil {
 			return nil, fmt.Errorf("store signed MIME: %w", err)
 		}
-		deliveries = append(deliveries, Delivery{ID: id, RecipientIndex: index, ObjectKey: objectKey, Forward: forward})
+		deliveries = append(deliveries, Delivery{ID: id, RecipientIndex: index, ObjectKey: objectKey, Forward: forward, Format: prepared.FormatRecipe})
 	}
 	return deliveries, nil
+}
+
+// recipeObject builds a delivery's recipe object and proves it: the object is
+// decoded again and assembled against the source, and must give back exactly
+// the signed bytes. Errors are constant.
+func recipeObject(id, baseSHA string, raw []byte, bodyStart int, signed rawmime.Prepared) ([]byte, error) {
+	recipe, err := prepared.New(id, baseSHA, bodyStart, signed.Message, signed.HeaderLen, nil)
+	if err != nil {
+		return nil, errors.New("build prepared recipe failed")
+	}
+	object, err := recipe.Encode()
+	if err != nil {
+		return nil, errors.New("build prepared recipe failed")
+	}
+	again, err := prepared.Decode(object)
+	if err != nil {
+		return nil, errors.New("prepared recipe self-check failed")
+	}
+	out, err := again.Assemble(raw, baseSHA)
+	if err != nil || !bytes.Equal(out, signed.Message) {
+		return nil, errors.New("prepared recipe self-check failed")
+	}
+	return object, nil
 }
 
 func addressDomain(address string) string {

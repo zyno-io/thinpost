@@ -630,6 +630,11 @@ func TestSubmissionPipelineWithPostgres(t *testing.T) {
 	if !strings.HasPrefix(string(delivered), "DKIM-Signature:") || !strings.Contains(string(delivered), "Hello over SMTP 5559") {
 		t.Fatal("the delivered MIME is not signed or lost its body")
 	}
+	// SMTP mail is stored as a recipe over the stored source; the bytes the MX
+	// got were rebuilt from it (dispatch checks their size and SHA-256).
+	if r.count(`SELECT count(*) FROM deliveries WHERE prepared_format=2`) != 1 {
+		t.Fatal("the SMTP delivery was not prepared as a recipe")
+	}
 	eventually(t, "the delivery to be accepted", func() bool {
 		return r.count(`SELECT count(*) FROM deliveries WHERE state='accepted'`) == 1
 	})

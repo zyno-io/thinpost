@@ -949,7 +949,7 @@ func TestPostgresAcceptanceIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		deliveries := []preparation.Delivery{{ID: "00000000000000000000000000000011", RecipientIndex: 0, ObjectKey: fixtureObjectKey("final", "00000000000000000000000000000011")}, {ID: "00000000000000000000000000000012", RecipientIndex: 1, ObjectKey: fixtureObjectKey("final", "00000000000000000000000000000012")}}
+		deliveries := []preparation.Delivery{{Format: 1, ID: "00000000000000000000000000000011", RecipientIndex: 0, ObjectKey: fixtureObjectKey("final", "00000000000000000000000000000011")}, {Format: 1, ID: "00000000000000000000000000000012", RecipientIndex: 1, ObjectKey: fixtureObjectKey("final", "00000000000000000000000000000012")}}
 		old.SigningDomain = "example.com"
 		if err = repo.CommitPreparation(ctx, old, deliveries); !errors.Is(err, preparation.ErrLostLease) {
 			t.Fatalf("stale claim: %v", err)

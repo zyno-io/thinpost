@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/emersion/go-msgauth/dkim"
+	"github.com/zyno-io/thinpost/internal/edgeprotocol"
+	preparedrecipe "github.com/zyno-io/thinpost/internal/prepared"
 )
 
 // splitPrepared separates the DKIM field, the other header fields and the body.
@@ -127,7 +129,7 @@ func TestPrepareRewritesFromAndDropsExtras(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("0", 32), Date: acceptedAt, Selector: "sel", Signer: testKey(t)}
-	out, err := Prepare([]byte(raw), in)
+	out, err := prepareBytes([]byte(raw), in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +289,7 @@ func TestPrepareWithRewrittenFromSizeMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("f", 32), Date: acceptedAt, Selector: "sel", Signer: testKey(t)}
-	out, err := Prepare(raw, in)
+	out, err := prepareBytes(raw, in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +330,7 @@ func TestAssembleAllocatesOnlyTheOutput(t *testing.T) {
 	if allocs != 1 {
 		t.Fatalf("assemble allocates %v times, want 1", allocs)
 	}
-	out, err := Prepare(raw, in)
+	out, err := prepareBytes(raw, in)
 	if err != nil || cap(out) != len(out) {
 		t.Fatalf("cap %d len %d %v", cap(out), len(out), err)
 	}
@@ -381,7 +383,7 @@ func TestPrepareEd25519(t *testing.T) {
 	s := mustScan(t, string(raw))
 	d, _ := DecideFrom(s, "", Policy{Mode: FromOff}, verifiedSet("example.com"))
 	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), Date: acceptedAt, Selector: "sel", Signer: key}
-	out, err := Prepare(raw, in)
+	out, err := prepareBytes(raw, in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +422,7 @@ func TestPrepareWorstCaseSignatureFitsReservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), Date: acceptedAt, Selector: strings.Repeat("s", 63), Signer: signer}
-	out, err := Prepare(raw, in)
+	out, err := prepareBytes(raw, in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +492,7 @@ func TestPrepareEd25519Verifies(t *testing.T) {
 	s := mustScan(t, string(raw))
 	d, _ := DecideFrom(s, "", Policy{Mode: FromOff}, verifiedSet("example.com"))
 	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a", 32), Date: acceptedAt, Selector: "ed", Signer: key}
-	out, err := Prepare(raw, in)
+	out, err := prepareBytes(raw, in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +567,7 @@ func FuzzScanPrepare(f *testing.F) {
 			return
 		}
 		in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("c", 32), Date: acceptedAt, Selector: "sel", Signer: key}
-		out, err := Prepare(raw, in)
+		out, err := prepareBytes(raw, in)
 		if err != nil {
 			if !isKnown(err) {
 				t.Fatalf("unexpected error %v", err)
@@ -644,7 +646,7 @@ func TestPrepareAddsTraceField(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a1", 16), Date: acceptedAt, Selector: "sel", Signer: testKey(t), Received: []byte(traceField)}
-	out, err := Prepare([]byte(raw), in)
+	out, err := prepareBytes([]byte(raw), in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -667,7 +669,7 @@ func TestPrepareAddsTraceField(t *testing.T) {
 		t.Fatalf("%v %+v", err, vs)
 	}
 	// Same input, same line.
-	again, _ := Prepare([]byte(raw), in)
+	again, _ := prepareBytes([]byte(raw), in)
 	_, rest2, _ := splitPrepared(t, again)
 	if !strings.HasPrefix(rest2, traceField) {
 		t.Fatal("not deterministic")
@@ -695,7 +697,7 @@ func TestPrepareTraceKeepsClientSignatureValid(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a1", 16), Date: acceptedAt, Selector: "sel", Signer: testKey(t), Received: []byte(traceField)}
-	out, err := Prepare([]byte(raw), in)
+	out, err := prepareBytes([]byte(raw), in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -729,5 +731,37 @@ func TestPrepareRejectsMalformedTrace(t *testing.T) {
 		if _, err := Prepare([]byte(raw), in); err == nil {
 			t.Fatalf("accepted %q", bad)
 		}
+	}
+}
+
+func TestPrepareHeaderLenSplitsHeaderAndBody(t *testing.T) {
+	raw := "Subject: hi\nFrom: a@example.com\n\nline\nbare\r\nend\n"
+	s := mustScan(t, raw)
+	d, err := DecideFrom(s, "a@example.com", Policy{Mode: FromOff}, verifiedSet("example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := PrepareInput{Scan: s, From: d, MessageID: strings.Repeat("a1", 16), Date: acceptedAt, Selector: "sel", Signer: testKey(t)}
+	p, err := Prepare([]byte(raw), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, body := p.Message[:p.HeaderLen], p.Message[p.HeaderLen:]
+	if !strings.HasPrefix(string(head), "DKIM-Signature:") || !strings.HasSuffix(string(head), "\r\n\r\n") || strings.Contains(string(head[:len(head)-4]), "\r\n\r\n") {
+		t.Fatalf("header block %q", head)
+	}
+	if string(body) != "line\r\nbare\r\nend\r\n" {
+		t.Fatalf("body %q", body)
+	}
+	// The body is exactly what the one normalizer makes of the source body.
+	again, err := preparedrecipe.AppendBody(nil, []byte(raw), s.BodyStart, nil, nil)
+	if err != nil || !bytes.Equal(again, body) {
+		t.Fatalf("AppendBody parity: %v", err)
+	}
+}
+
+func TestMaxHeaderMirrorsPreparedHeaders(t *testing.T) {
+	if preparedrecipe.MaxHeader != MaxPreparedHeaders+4096 || MaxPreparedMessage != edgeprotocol.MaxMIMEBytes {
+		t.Fatal("prepared.MaxHeader must be MaxPreparedHeaders plus 4 KiB")
 	}
 }

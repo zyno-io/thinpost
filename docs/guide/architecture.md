@@ -107,7 +107,7 @@ If a connection drops between the permit and the acknowledgement, the outcome of
 ## Storage
 
 - **PostgreSQL** holds apps, key digests, domains, message and delivery metadata, queues, leases, webhook events and history, suppressions, audit events and the admission gate. Control requires the current schema at startup; migrations run during deployment. See [Database](/deploy/database).
-- **Object storage** holds original submissions, signed per-recipient MIME, received bounces and inbound messages. Each object is encrypted by the control plane before upload and given a random name. See [Object storage](/deploy/object-storage).
+- **Object storage** holds original submissions, signed per-recipient messages (for SMTP mail, each recipient's object holds only its signed headers and the attachments are stored once, in the original), received bounces and inbound messages. Each object is encrypted by the control plane before upload and given a random name. See [Object storage](/deploy/object-storage).
 - **The edge journal** is a small volume of attempt metadata (no message bodies) that lets the worker prove what it did across restarts.
 
 ## Network exposure

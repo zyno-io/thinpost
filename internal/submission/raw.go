@@ -66,6 +66,13 @@ type RawHeader struct {
 	EnhancedProtection bool `json:"enhanced_protection"`
 	// RawSHA256 is the lowercase hex SHA-256 of the raw bytes.
 	RawSHA256 string `json:"raw_sha256"`
+	// TrackOpens and TrackClicks are the open and click tracking decisions for
+	// the message, resolved at acceptance. They are read-first: this version
+	// reads and ignores them (SMTP mail is not tracked yet) so a later one can
+	// write them without a schema change, and omitempty keeps every object
+	// written without them byte-identical when it is encoded again.
+	TrackOpens  bool `json:"track_opens,omitempty"`
+	TrackClicks bool `json:"track_clicks,omitempty"`
 }
 
 // EncodeRawSource encodes a version 3 stored source. It sets h.RawSHA256 from

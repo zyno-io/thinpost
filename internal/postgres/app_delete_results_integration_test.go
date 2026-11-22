@@ -207,7 +207,7 @@ func TestPreparationAfterDelete(t *testing.T) {
 	}
 	claim.SigningDomain = "example.com"
 	deliveryID := f.id()
-	if err = f.repo.CommitPreparation(ctx, claim, []preparation.Delivery{{ID: deliveryID, RecipientIndex: 0, ObjectKey: fixtureObjectKey("final", deliveryID)}}); err == nil {
+	if err = f.repo.CommitPreparation(ctx, claim, []preparation.Delivery{{Format: 1, ID: deliveryID, RecipientIndex: 0, ObjectKey: fixtureObjectKey("final", deliveryID)}}); err == nil {
 		t.Fatal("preparation committed for a deleted app")
 	}
 	if state, pending := f.state(message); state != "preparation_failed" || pending {

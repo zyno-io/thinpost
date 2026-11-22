@@ -92,12 +92,12 @@ func (r *Repository) claimDeliveryOnce(ctx context.Context, lease ControllerLeas
 		(SELECT min(a.started_at) FROM delivery_attempts a WHERE a.delivery_id=d.id AND a.outcome IS DISTINCT FROM 'recipient_policy_denied'),clock_timestamp(),
 		(SELECT s.reason FROM message_recipients r JOIN suppressions s ON s.app_id=r.app_id AND s.address_lower=r.address_lower
 			WHERE r.message_id=d.message_id AND r.recipient_index=d.recipient_index),
-		host(ip.address),COALESCE(m.sender_domain,'')
+		host(ip.address),COALESCE(m.sender_domain,''),d.prepared_format
 		FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN apps app ON app.id=m.app_id
 		LEFT JOIN sending_ips ip ON ip.id=app.sending_ip_id
 		WHERE app.active AND d.state='queued' AND d.retry_after<=clock_timestamp()
 		AND (app.sending_ip_id IS NULL OR host(ip.address)=ANY($2::text[]))
-		ORDER BY d.retry_after,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1`, delivery.TrackingMinimumRemaining.Milliseconds(), addresses).Scan(&claim.DeliveryID, &claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.FinalKey, &claim.RecipientIndex, &claim.EnhancedProtection, &claim.AcceptedAt, &claim.RouteAttempt, &claim.RecipientPolicyOverride, &trackingUnavailable, &trackingCutoff, &firstAttempt, &now, &suppression, &pinnedAddress, &senderDomain)
+		ORDER BY d.retry_after,d.id FOR UPDATE OF d SKIP LOCKED LIMIT 1`, delivery.TrackingMinimumRemaining.Milliseconds(), addresses).Scan(&claim.DeliveryID, &claim.MessageID, &claim.AppID, &claim.SourceKey, &claim.FinalKey, &claim.RecipientIndex, &claim.EnhancedProtection, &claim.AcceptedAt, &claim.RouteAttempt, &claim.RecipientPolicyOverride, &trackingUnavailable, &trackingCutoff, &firstAttempt, &now, &suppression, &pinnedAddress, &senderDomain, &claim.PreparedFormat)
 	if errors.Is(err, sql.ErrNoRows) {
 		return claim, false, delivery.ErrNoWork
 	}
