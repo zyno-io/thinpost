@@ -75,7 +75,7 @@ func (r *Repository) resolveHold(ctx context.Context, appID, keyID, messageID st
 	// or a key revoked after authentication cannot act. FOR SHARE makes a
 	// concurrent pause or revocation wait for this transaction.
 	var allowed bool
-	err = tx.QueryRowContext(ctx, `SELECT a.active AND k.active FROM apps a JOIN api_keys k ON k.app_id=a.id WHERE a.id=$1 AND k.id=$2 FOR SHARE OF a,k`, appID, keyID).Scan(&allowed)
+	err = tx.QueryRowContext(ctx, `SELECT a.active AND k.active AND a.deleted_at IS NULL FROM apps a JOIN api_keys k ON k.app_id=a.id WHERE a.id=$1 AND k.id=$2 FOR SHARE OF a,k`, appID, keyID).Scan(&allowed)
 	if errors.Is(err, sql.ErrNoRows) || err == nil && !allowed {
 		return submission.ErrInvalidKey
 	}

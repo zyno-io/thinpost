@@ -59,7 +59,11 @@ func (r *Repository) ReconcileOrphanedAttempts(ctx context.Context, lease Contro
 		return false, err
 	}
 	for _, result := range results {
-		if err = commitDeliveryResultTx(ctx, tx, result, true, delivery.DefaultRetryPolicy()); err != nil {
+		appDeleted, lockErr := lockAppDeleted(ctx, tx, result.DeliveryID)
+		if lockErr != nil {
+			return false, lockErr
+		}
+		if err = commitDeliveryResultForTx(ctx, tx, result, true, appDeleted, delivery.DefaultRetryPolicy()); err != nil {
 			return false, err
 		}
 	}

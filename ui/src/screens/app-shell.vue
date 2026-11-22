@@ -1,6 +1,15 @@
 <template>
     <div class="app-shell">
-        <AppHeader v-if="status !== 'not-found'" :app-id="routeAppId" :app="app" :apps="apps" :inert="isModalOpen" />
+        <AppHeader v-if="status !== 'not-found'" :app-id="routeAppId" :app="app" :apps="apps" :inert="isModalOpen" :can-rename="isReady" @rename="openRename" />
+
+        <RenameAppModal
+            v-if="renameTarget"
+            :current-name="renameTarget.name"
+            :is-submitting="isRenaming"
+            :error="renameError"
+            @close="closeRename"
+            @submit="rename"
+        />
 
         <div v-if="status === 'not-found'" class="card empty app-missing">
             <i class="fa-solid fa-cube" aria-hidden="true" />
@@ -21,6 +30,7 @@
 </template>
 
 <script lang="ts" setup>
+import { showToast } from '@zyno-io/vue-foundation';
 import { computed, ref, shallowRef, watch } from 'vue';
 import { useRoute } from 'vue-router';
 
@@ -30,8 +40,10 @@ import { forgetApp, rememberApp } from '@/last-app';
 import { DefaultApi, type App } from '@/openapi-client-generated';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import AppHeader from '@/shared/components/app-header.vue';
+import RenameAppModal from '@/shared/components/rename-app-modal.vue';
 import Loader from '@/shared/components/loader.vue';
 import { openModalCount } from '@/shared/modal-state';
+import { authState } from '@/auth';
 import { isOpaqueId } from '@/validation';
 
 type ShellStatus = 'loading' | 'ready' | 'not-found' | 'error';
@@ -125,6 +137,71 @@ async function reload(): Promise<App | null> {
         }
     }
     return found;
+}
+
+/** The app the open rename dialog was opened for; never re-read from the route. */
+const renameTarget = shallowRef<App | null>(null);
+/** Counts rename dialogs; a request only touches the dialog it was sent from. */
+let renameDialog = 0;
+/** The app whose rename request is in flight. */
+const renamingId = ref<string | null>(null);
+const isRenaming = computed(() => !!renameTarget.value && renamingId.value === renameTarget.value.id);
+const renameError = ref<ApiErrorDescription | null>(null);
+
+function openRename() {
+    if (!isReady.value || !readyApp.value || authState.status !== 'signed-in') return;
+    renameError.value = null;
+    renameDialog++;
+    renameTarget.value = readyApp.value;
+}
+
+function closeRename() {
+    if (isRenaming.value) return;
+    renameDialog++;
+    renameTarget.value = null;
+}
+
+// Moving to another app closes the dialog, even mid-request: the request still
+// applies to the app it was sent for and no longer touches a dialog.
+watch(routeAppId, () => {
+    renameDialog++;
+    renameTarget.value = null;
+    renameError.value = null;
+});
+
+async function rename(name: string) {
+    const target = renameTarget.value;
+    if (!target || renamingId.value === target.id) return;
+    const dialog = renameDialog;
+    const sameDialog = () => dialog === renameDialog && renameTarget.value === target;
+    if (name === target.name) {
+        closeRename();
+        return;
+    }
+    renamingId.value = target.id;
+    renameError.value = null;
+    try {
+        const { data } = await DefaultApi.renameApp({ path: { appId: target.id }, body: { name } });
+        if (!data || data.id !== target.id || typeof data.name !== 'string') throw new InvalidResponseError();
+        applyName(target.id, data.name);
+        if (sameDialog()) {
+            renameTarget.value = null;
+            showToast({ message: `Renamed to “${data.name}”`, durationSecs: 3 });
+        }
+    } catch (err) {
+        if (sameDialog()) renameError.value = describeApiError(err, { mutation: true, notFound: 'The app was not found. It may have been deleted.' });
+    } finally {
+        if (renamingId.value === target.id) renamingId.value = null;
+    }
+}
+
+/** Applies a confirmed rename to the list and, if it is the shown app, to the header, keeping the rest of what is loaded. */
+function applyName(id: string, name: string) {
+    if (apps.value) apps.value = apps.value.map(candidate => (candidate.id === id ? { ...candidate, name } : candidate));
+    if (readyApp.value?.id === id) {
+        readyApp.value = { ...readyApp.value, name };
+        app.value = readyApp.value;
+    }
 }
 
 function update(next: App) {

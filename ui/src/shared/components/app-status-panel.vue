@@ -13,7 +13,7 @@
                 <button class="btn danger"
                     v-if="app.active"
                     type="button"
-                    :disabled="!!blocker || isSubmitting || isReloading"
+                    :disabled="!!blocker || isSubmitting || isReloading || isDeleting"
                     :aria-describedby="blocker ? `${id}-blocker` : undefined"
                     @click="open('pause')"
                 >
@@ -23,12 +23,21 @@
                 <button class="btn primary"
                     v-else
                     type="button"
-                    :disabled="!!blocker || isSubmitting || isReloading"
+                    :disabled="!!blocker || isSubmitting || isReloading || isDeleting"
                     :aria-describedby="blocker ? `${id}-blocker` : undefined"
                     @click="open('resume')"
                 >
                     <i class="fa-solid fa-play" aria-hidden="true" />
                     {{ isSubmitting ? 'Resuming…' : 'Resume app' }}
+                </button>
+                <button class="btn danger"
+                    type="button"
+                    data-testid="delete-app"
+                    :disabled="!isSignedIn || isSubmitting || isReloading || isDeleting"
+                    @click="openDelete"
+                >
+                    <i class="fa-solid fa-trash" aria-hidden="true" />
+                    Delete app
                 </button>
             </div>
         </div>
@@ -76,23 +85,36 @@
             @close="close"
             @submit="confirm"
         />
+        <DeleteAppModal
+            v-if="deleteTarget"
+            :app-id="deleteTarget.id"
+            :app-name="deleteTarget.name"
+            :is-submitting="isDeleting"
+            :error="deleteError"
+            :blocker="isSignedIn ? null : 'Sign in again to delete the app.'"
+            @close="closeDelete"
+            @submit="confirmDelete"
+        />
     </section>
 </template>
 
 <script setup lang="ts">
 import { showConfirm, showToast } from '@zyno-io/vue-foundation';
 import { computed, onBeforeUnmount, ref, useId } from 'vue';
-import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router';
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRouter } from 'vue-router';
 
 import { apiErrorStatus, describeApiError, InvalidResponseError, type ApiErrorDescription, type DescribeOptions } from '@/api-errors';
 import { useAppContext } from '@/app-context';
 import { authState, registerLeaveGuard } from '@/auth';
+import { forgetApp } from '@/last-app';
 import { DefaultApi } from '@/openapi-client-generated';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import HelpButton from '@/shared/components/help-button.vue';
+import DeleteAppModal from '@/shared/components/delete-app-modal.vue';
 import AppStatusModal, { type AppStatusAction } from '@/shared/components/app-status-modal.vue';
 
 const context = useAppContext();
+const router = useRouter();
 const { app, loadedAt } = context;
 
 /** Statuses after which the server definitely did not apply the change. */
@@ -127,6 +149,11 @@ const showPauseNotice = ref(false);
 const needsReload = ref(false);
 /** The last reload found no such app. */
 const isMissing = ref(false);
+
+/** The app the open delete dialog was opened for. */
+const deleteTarget = ref<{ id: string; name: string } | null>(null);
+const isDeleting = ref(false);
+const deleteError = ref<ApiErrorDescription | null>(null);
 
 const isSignedIn = computed(() => authState.status === 'signed-in');
 
@@ -287,8 +314,48 @@ async function confirm() {
     }
 }
 
+function openDelete() {
+    if (!isSignedIn.value || isSubmitting.value || isReloading.value || isDeleting.value) return;
+    deleteError.value = null;
+    deleteTarget.value = { id: app.value.id, name: app.value.name };
+}
+
+function closeDelete() {
+    if (isDeleting.value) return;
+    deleteTarget.value = null;
+}
+
+async function confirmDelete() {
+    const target = deleteTarget.value;
+    if (!target || isDeleting.value || !isSignedIn.value) return;
+    isDeleting.value = true;
+    deleteError.value = null;
+    try {
+        const response = await DefaultApi.deleteApp({ path: { appId: target.id } });
+        if (response?.response?.status !== 204) throw new InvalidResponseError();
+    } catch (err) {
+        isDeleting.value = false;
+        if (isUnmounted) return;
+        const description = describeApiError(err, {
+            mutation: true,
+            notFound: 'The app was not found. It may already have been deleted.',
+            unavailable: 'Deleting is temporarily unavailable. Try again in a moment.'
+        });
+        const status = apiErrorStatus(err);
+        const refused = status !== undefined && DEFINITIVE_REFUSALS.has(status) && !(err instanceof InvalidResponseError);
+        deleteError.value = refused && status !== 404 ? { ...description, message: `${description.message} Nothing was changed.` } : description;
+        return;
+    }
+    isDeleting.value = false;
+    forgetApp(target.id);
+    showToast({ message: `Deleted “${target.name}”. Its messages and history are kept.`, durationSecs: 6 });
+    if (isUnmounted) return;
+    deleteTarget.value = null;
+    await router.push({ name: 'apps' });
+}
+
 async function confirmLeave() {
-    if (!isSubmitting.value) return true;
+    if (!isSubmitting.value && !isDeleting.value) return true;
     return showConfirm(
         'Leave while the app status is changing?',
         'The request has been sent and may still go through. This page won\'t show the result. Reload the app afterwards to check its status.'

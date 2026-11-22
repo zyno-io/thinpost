@@ -158,7 +158,7 @@ func (r *Repository) ListSendingIPs(ctx context.Context) (admin.SendingIPList, e
 		return out, err
 	}
 	rows.Close()
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM apps WHERE sending_ip_id IS NULL`).Scan(&out.UnpinnedAppCount); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM apps WHERE sending_ip_id IS NULL AND deleted_at IS NULL`).Scan(&out.UnpinnedAppCount); err != nil {
 		return out, err
 	}
 	var reportedAt sql.NullTime
@@ -279,7 +279,7 @@ func (r *Repository) SetAppSendingIP(ctx context.Context, actor, appID string, s
 	// NO KEY UPDATE, not UPDATE: audit inserts by bounce-domain checks (which
 	// hold a bounce row) take a KEY SHARE lock on the app, and must not wait
 	// here while this waits for their row.
-	err = tx.QueryRowContext(ctx, `SELECT sending_ip_id FROM apps WHERE id=$1 FOR NO KEY UPDATE`, appID).Scan(&current)
+	err = tx.QueryRowContext(ctx, `SELECT sending_ip_id FROM apps WHERE id=$1 AND deleted_at IS NULL FOR NO KEY UPDATE`, appID).Scan(&current)
 	if errors.Is(err, sql.ErrNoRows) {
 		return admin.AppSendingIP{}, admin.ErrNotFound
 	}

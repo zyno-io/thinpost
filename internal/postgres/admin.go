@@ -14,7 +14,7 @@ import (
 )
 
 func (r *Repository) ListApps(ctx context.Context) ([]admin.App, error) {
-	rows, err := r.DB.QueryContext(ctx, `SELECT id,name,active,created_at,sending_ip_id FROM apps ORDER BY created_at,id`)
+	rows, err := r.DB.QueryContext(ctx, `SELECT id,name,active,created_at,sending_ip_id FROM apps WHERE deleted_at IS NULL ORDER BY created_at,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func (r *Repository) SetAppActive(ctx context.Context, actor, appID string, acti
 	}
 	defer tx.Rollback()
 	var previous bool
-	err = tx.QueryRowContext(ctx, `SELECT active FROM apps WHERE id=$1 FOR UPDATE`, appID).Scan(&previous)
+	err = tx.QueryRowContext(ctx, `SELECT active FROM apps WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, appID).Scan(&previous)
 	if errors.Is(err, sql.ErrNoRows) {
 		return admin.ErrNotFound
 	}

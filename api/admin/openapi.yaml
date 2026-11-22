@@ -317,6 +317,55 @@ paths:
         '404': { description: No such app or sending IP }
         '409': { description: The Edge is not reporting this sending IP right now }
         default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+    patch:
+      operationId: renameApp
+      description: >-
+        Renames an app. The name follows the same rules as at creation. App names are
+        not unique. Renaming to the current name changes nothing. A change is audited
+        as app.renamed with the old and new name in its details.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 128, description: At most 128 UTF-8 bytes; no surrounding whitespace or control characters. }
+      responses:
+        '200':
+          description: The renamed app
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/App' }
+        '400': { description: Invalid name }
+        '404': { description: No such app, or the app was deleted }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      operationId: deleteApp
+      description: >-
+        Deletes an app (a soft delete, in one transaction). The app is marked deleted
+        and paused, all its API keys and SMTP credentials are revoked, its receiving
+        (inbound) domains are removed so another app can claim them, and its sending IP
+        pin is released. Its bounce domains are removed too. Unfinished work is ended:
+        held messages become cancelled, messages not yet prepared become
+        preparation_failed (reason app_deleted), queued, held and uncertain deliveries
+        become failed, its webhook endpoints become inactive and queued or in-flight
+        webhook deliveries cancelled. A send already in flight may still finish.
+        Messages, events, audit records and the app's sender and
+        tracking domain records are kept under the normal retention; nothing is erased.
+        The app disappears from listApps and every app-scoped endpoint answers 404 for
+        it; its name can be used again. Audited as app.deleted. Deleting an app that is
+        already deleted is 404. The request has no body and no query.
+      responses:
+        '204': { description: App deleted }
+        '400': { description: The request has a body or query }
+        '404': { description: No such app, or the app was already deleted }
+        default: { $ref: '#/components/responses/Error' }
   /apps/{appId}/deactivate:
     parameters:
       - { $ref: '#/components/parameters/AppId' }

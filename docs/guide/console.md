@@ -32,6 +32,12 @@ The Applications screen lists apps and creates new ones. An app opens into its o
 
 The app area stays mounted as you move between tabs. The console remembers the last app you used so that the shortcuts `/domains`, `/messages` and `/webhooks` go straight to it. The app picker appears only when none is remembered.
 
+### Rename and delete an app
+
+The pencil button next to the app's name opens **Rename app**. A new name takes effect at once; keys, domains, messages and webhooks are unaffected. App names don't have to be unique. The change is recorded in the audit log with the old and new name.
+
+**Delete app** sits beside **Pause app** in the status panel on the API keys tab. The dialog explains what happens and asks you to type the app's name before it will delete. Deleting removes the app from the console and the API, revokes all of its API keys and SMTP credentials so they are refused from then on, and releases its receiving domains so another app can claim them. Mail that was accepted but not yet sent is not sent: held messages are cancelled, messages waiting to be prepared are ended as failed, and every recipient still queued, held or of unknown outcome is marked failed. Its webhook endpoints are switched off and webhook events still waiting are cancelled. A send already under way may still finish, and anything the operator was already holding for recovery is left as it is. Messages, events and the audit log are kept, not erased, and the app's name can be used again. There is no way to restore a deleted app from the console. Afterwards the console returns to the apps list.
+
 ### SMTP
 
 ::: tip When the tab is shown

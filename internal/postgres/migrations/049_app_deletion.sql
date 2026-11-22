@@ -1,0 +1,26 @@
+-- Schema 49: app deletion.
+--
+-- apps.deleted_at marks a soft-deleted app. A deleted app is hidden from the
+-- console and every app-scoped admin endpoint, cannot authenticate (its API
+-- keys and SMTP credentials are revoked in the same transaction, and key and
+-- credential lookups refuse a deleted app as well), and is never active: it
+-- is deleted from the apps list, not erased. Its messages, events, audit rows
+-- and domain records stay under normal retention, and nothing is removed from
+-- object storage. Receiving (inbound) domains are removed so another app can
+-- claim them. App names are not unique, so a name is reusable with no index
+-- change.
+--
+-- Deploy review (lock and rollout): the pre hook closes the gate before this
+-- runs. ADD COLUMN of a nullable column with no default is catalog-only (no
+-- rewrite), and the CHECK is NOT VALID so no table scan runs; new and updated
+-- rows are checked. No existing app has deleted_at set, so existing behavior
+-- is unchanged. A replica that predates this release ignores the column: it
+-- would still list a deleted app, which only exists once the new release has
+-- deleted one, so deploy the release to every replica before using Delete.
+-- Runtime grants: the runtime role already has table-level SELECT, INSERT and
+-- UPDATE on apps, which covers the new column; the collector and retirement
+-- roles get nothing. No routine or extension is installed.
+-- Recovery: the recovery chain stops at 28, so this is applied by the normal
+-- deploy after "recovery open". Roll forward only.
+ALTER TABLE apps ADD COLUMN deleted_at timestamptz;
+ALTER TABLE apps ADD CONSTRAINT apps_deleted_inactive CHECK (deleted_at IS NULL OR NOT active) NOT VALID;

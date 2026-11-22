@@ -140,7 +140,7 @@ func requireNoBounceDomain(ctx context.Context, tx *sql.Tx, domain string) error
 		return err
 	}
 	var taken bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM bounce_domains WHERE domain=$1)`, domain).Scan(&taken); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM bounce_domains b JOIN apps a ON a.id=b.app_id WHERE b.domain=$1 AND a.deleted_at IS NULL)`, domain).Scan(&taken); err != nil {
 		return err
 	}
 	if taken {
