@@ -475,3 +475,44 @@ func TestNonASCIIDisplayNamesAreEncodedAndSigned(t *testing.T) {
 		t.Fatal("Reply-To name did not round trip", err)
 	}
 }
+
+func TestBuildAddsUnsignedReceivedAfterSignature(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace := []byte("Received: by mx.example.net (Thinpost)\r\n\twith HTTP id unique-123;\r\n\tFri, 02 Jan 2026 03:04:05 +0000\r\n")
+	input := submission.Message{From: "alice@example.com", To: []string{"bob@example.net"}, Subject: "Hi", Text: "body"}
+	opts := Options{Recipient: "bob@example.net", ID: "unique-123", Date: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), SigningDomain: "example.com", Selector: "mail", Signer: key}
+	plain, err := Build(input, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts.Received = []byte("Received: x\r\nX-Injected: y\r\n")
+	if _, err := Build(input, opts); err == nil {
+		t.Fatal("malformed trace accepted")
+	}
+	opts.Received = trace
+	data, err := Build(input, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(data, []byte("DKIM-Signature:")) || bytes.Count(data, []byte("Received:")) != 1 {
+		t.Fatalf("%q", data)
+	}
+	i := bytes.Index(data, trace)
+	if i < 0 || bytes.Contains(data[:i], []byte("\r\nFrom:")) || data[i-2] != '\r' {
+		t.Fatalf("trace not right after the signature: %q", data[:i+len(trace)])
+	}
+	sigEnd := bytes.Index(plain, []byte("\r\nFrom:")) + 2
+	if !bytes.Equal(data[i+len(trace):], plain[sigEnd:]) {
+		t.Fatal("layout changed")
+	}
+	pub, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	results, err := dkim.VerifyWithOptions(bytes.NewReader(data), &dkim.VerifyOptions{LookupTXT: func(string) ([]string, error) {
+		return []string{"v=DKIM1; k=rsa; p=" + base64.StdEncoding.EncodeToString(pub)}, nil
+	}})
+	if err != nil || len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("%v %+v", err, results)
+	}
+}

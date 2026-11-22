@@ -13,6 +13,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/objectkey"
 	"github.com/zyno-io/thinpost/internal/oplog"
 	"github.com/zyno-io/thinpost/internal/rawmime"
+	"github.com/zyno-io/thinpost/internal/receivedtrace"
 	"github.com/zyno-io/thinpost/internal/submission"
 )
 
@@ -113,8 +114,13 @@ func (s *Service) AcceptRaw(ctx context.Context, app submission.App, fence submi
 	if err != nil {
 		return submission.Receipt{}, err
 	}
+	// The trace field is sized with the longest host name preparation can use.
+	trace, err := receivedtrace.Field(receivedtrace.SizingHost(), receivedtrace.WithSMTP, sizingMessageID, time.Unix(0, 0).UTC())
+	if err != nil {
+		return submission.Receipt{}, err
+	}
 	size, err := rawmime.PreparedSize(req.Raw, rawmime.PrepareInput{
-		Scan: req.Scan, From: req.From, MessageID: sizingMessageID, Date: time.Unix(0, 0).UTC(), Selector: sizingSelector, Signer: signer,
+		Scan: req.Scan, From: req.From, MessageID: sizingMessageID, Date: time.Unix(0, 0).UTC(), Selector: sizingSelector, Signer: signer, Received: trace,
 	})
 	if err != nil {
 		if errors.Is(err, rawmime.ErrTooLarge) {

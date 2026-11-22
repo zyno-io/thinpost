@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/zyno-io/thinpost/internal/providerid"
+	"github.com/zyno-io/thinpost/internal/receivedtrace"
 )
 
 const maxMessageIDLine = 300
@@ -28,12 +29,17 @@ type PrepareInput struct {
 	// only reads its public key, so a SizingSigner works there.
 	Selector string
 	Signer   crypto.Signer
+	// Received is Thinpost's own trace field (receivedtrace.Field), written at
+	// the very top of the prepared header block. Empty adds none. It is not in
+	// the DKIM h= list, and the client's own Received fields are still removed.
+	Received []byte
 }
 
 // generated holds the lines preparation inserts, rendered once up front.
 type generated struct {
 	messageID []byte // "Message-ID: <...>\r\n"
 	date      []byte // "Date: ...\r\n", empty if the message has a Date
+	received  []byte // the trace field, empty for none
 }
 
 func (in *PrepareInput) check(raw []byte) (generated, error) {
@@ -49,6 +55,12 @@ func (in *PrepareInput) check(raw []byte) (generated, error) {
 		return generated{}, ErrInvalid // only a single original From may be kept
 	}
 	var g generated
+	if len(in.Received) > 0 {
+		if !receivedtrace.Valid(in.Received) {
+			return generated{}, ErrInvalid
+		}
+		g.received = in.Received
+	}
 	g.messageID = []byte("Message-ID: " + providerid.MessageIDHeader(in.MessageID, in.From.Domain) + "\r\n")
 	if len(g.messageID) > maxMessageIDLine {
 		return generated{}, ErrInvalid
@@ -184,6 +196,7 @@ func writeHeaders(k *sink, raw []byte, in *PrepareInput, g generated) error {
 		}
 		pos = f.end
 	}
+	k.write(g.received)
 	inserted := func() {
 		k.write(g.messageID)
 		k.write(g.date)

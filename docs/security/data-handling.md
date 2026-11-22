@@ -56,7 +56,7 @@ Mail sent over [SMTP](/guide/smtp) is stored like any other submission, with the
 
 - **Credentials.** Only a SHA-256 digest of each password is stored. The username (an ID), the name you gave it and its last-used time are plaintext. The password crosses the edge inside TLS and is never logged, and no log line, error or reply contains it.
 - **The original From.** When the From is replaced, or inserted from the SMTP `MAIL FROM` because the message had none, under any policy, the address the client sent is kept as the message's `original_from`, in plaintext, and shown in the console.
-- **Raw source.** The message is stored as received, with the decisions Thinpost made (recipients and their kinds, the effective From). The client's `Message-ID` and any headers Thinpost later removes remain in the stored original. The client's IP address is not stored.
+- **Raw source.** The message is stored as received, with the decisions Thinpost made (recipients and their kinds, the effective From). The client's `Message-ID` and any headers Thinpost later removes remain in the stored original. The client's IP address is not stored, and the delivered message carries none: Thinpost drops the client's `Received` headers and adds one of its own that names only Thinpost's mail host, the transport (`ESMTPSA` for SMTP submission, `HTTP` for the HTTP APIs), the message ID and the acceptance time.
 - **Retry protection.** To recognize a retry, Thinpost stores a keyed digest for 24 hours (a message with a `Message-ID`) or 10 minutes (only a `Date`), and nothing for a message with neither. Expired digests are removed by the periodic idempotency cleanup.
 
 ## Encryption at rest

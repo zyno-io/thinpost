@@ -227,3 +227,55 @@ func TestRawPreparationRejectsMessageTheScannerRefuses(t *testing.T) {
 		t.Fatal("prepared garbage", err, repo.failures)
 	}
 }
+
+// The Received trace names Thinpost's host, the transport and the message ID,
+// with the acceptance time, and nothing from the client. It is the same on every
+// run, and a service without a host name adds none.
+func TestPreparationAddsTraceField(t *testing.T) {
+	host := func(context.Context) (string, error) { return "mx.example.net", nil }
+	const rawWithClientTrace = "Received: from laptop.corp.example ([10.9.8.7])\r\n\tby smtp.corp.example; Mon, 01 Jan 2024 00:00:00 +0000\r\n" + rawMessage
+	for _, tc := range []struct {
+		name, with string
+		raw        bool
+	}{{"smtp", "ESMTPSA", true}, {"http", "HTTP", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, repo, objects, _ := setup(t)
+			service.Hostname = host
+			if tc.raw {
+				rawSource(t, objects, rawWithClientTrace, nil)
+			}
+			if err := service.PrepareNext(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			got := objects.final[repo.deliveries[0].ObjectKey]
+			want := "Received: by mx.example.net (Thinpost)\r\n\twith " + tc.with + " id " + repo.claim.MessageID + ";\r\n\t" + repo.claim.AcceptedAt.UTC().Format(time.RFC1123Z) + "\r\n"
+			if !bytes.Contains(got, []byte(want)) || bytes.Count(got, []byte("Received:")) != 1 {
+				t.Fatalf("want %q in\n%s", want, got)
+			}
+			if bytes.Contains(got, []byte("corp.example")) || bytes.Contains(got, []byte("10.9.8.7")) {
+				t.Fatal("client trace survived")
+			}
+		})
+	}
+	t.Run("a failing host lookup does not fail preparation", func(t *testing.T) {
+		service, repo, objects, _ := setup(t)
+		service.Hostname = func(context.Context) (string, error) { return "", errors.New("db down: secret@example.com") }
+		rawSource(t, objects, rawMessage, nil)
+		if err := service.PrepareNext(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if repo.commits != 1 || bytes.Contains(objects.final[repo.deliveries[0].ObjectKey], []byte("Received:")) {
+			t.Fatal("expected a committed message without a trace")
+		}
+	})
+	t.Run("none without a host", func(t *testing.T) {
+		service, repo, objects, _ := setup(t)
+		rawSource(t, objects, rawMessage, nil)
+		if err := service.PrepareNext(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(objects.final[repo.deliveries[0].ObjectKey], []byte("Received:")) {
+			t.Fatal("unexpected trace")
+		}
+	})
+}
