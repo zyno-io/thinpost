@@ -60,6 +60,8 @@ const props = defineProps<{
     label: string;
     hint: string;
     submitLabel: string;
+    /** Pre-fills the field (for example the current name when renaming). */
+    initialName?: string;
     isSubmitting: boolean;
     error: ApiErrorDescription | null;
 }>();
@@ -71,7 +73,7 @@ const emit = defineEmits<{
 
 useModalPresence();
 const id = useId();
-const name = ref('');
+const name = ref(props.initialName ?? '');
 const touched = ref(false);
 const validationError = computed(() => validateName(name.value));
 

@@ -29,7 +29,7 @@ func (r *Repository) VerifySMTPCredential(ctx context.Context, id string, digest
 	}
 	defer tx.Rollback()
 	var stored []byte
-	err = tx.QueryRowContext(ctx, `SELECT c.app_id,c.digest,a.active FROM smtp_credentials c JOIN apps a ON a.id=c.app_id WHERE c.id=$1 AND c.revoked_at IS NULL`, id).Scan(&appID, &stored, &active)
+	err = tx.QueryRowContext(ctx, `SELECT c.app_id,c.digest,a.active FROM smtp_credentials c JOIN apps a ON a.id=c.app_id WHERE c.id=$1 AND c.revoked_at IS NULL AND a.deleted_at IS NULL`, id).Scan(&appID, &stored, &active)
 	if errors.Is(err, sql.ErrNoRows) {
 		_ = hmac.Equal(dummySMTPDigest[:], digest[:])
 		return "", false, submission.ErrInvalidKey

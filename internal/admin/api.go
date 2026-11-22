@@ -471,8 +471,11 @@ type Handler struct {
 	PolicyHolds    PolicyHoldStore
 	TrackingHolds  TrackingHoldStore
 	AppStatus      AppStatusStore
-	Suppressions   SuppressionStore
-	Operations     OperationsStore
+	// Apps renames and deletes apps and hides deleted apps from every app
+	// route; without it those routes answer 503 and no app is hidden.
+	Apps         AppStore
+	Suppressions SuppressionStore
+	Operations   OperationsStore
 	// TestMessages submits operator test messages as an app. Without it the
 	// test-send route answers 503.
 	TestMessages TestMessageSubmitter
@@ -578,11 +581,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if len(path) < 6 || path[1] != "api" || path[2] != "v1" || path[3] != "apps" || !opaqueID(path[4]) {
+	if len(path) < 5 || path[1] != "api" || path[2] != "v1" || path[3] != "apps" || !opaqueID(path[4]) {
 		http.NotFound(w, r)
 		return
 	}
 	appID := path[4]
+	// The one place every app-scoped route passes: a deleted app is unknown.
+	if h.Apps != nil {
+		exists, err := h.Apps.AppExists(r.Context(), appID)
+		if err != nil {
+			storeError(w, err)
+			return
+		}
+		if !exists {
+			fail(w, http.StatusNotFound)
+			return
+		}
+	}
+	if len(path) == 5 {
+		h.appRoute(w, r, principal.Subject, appID)
+		return
+	}
 	// Message routes accept any provider rendering of the message ID (UUID text,
 	// "id@domain", "<id@domain>") and use the 32-hex form from here on.
 	if len(path) > 6 && path[5] == "messages" {

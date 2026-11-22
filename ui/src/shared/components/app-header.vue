@@ -19,6 +19,10 @@
         <div class="title-row">
             <h1 v-if="app">{{ app.name }}</h1>
             <h1 v-else><span class="skeleton name-skeleton" aria-hidden="true" /><span class="sr-only">Loading app</span></h1>
+            <button v-if="app && canRename" type="button" class="btn ghost sm icon rename" data-testid="rename-app" @click="emit('rename')">
+                <i class="fa-solid fa-pen" aria-hidden="true" />
+                <span class="sr-only">Rename app</span>
+            </button>
             <span v-if="app" class="tag app-status" :class="{ success: app.active }">{{ app.active ? 'Active' : 'Paused' }}</span>
             <div v-if="app" class="app-meta">
                 <code class="app-id">{{ app.id }}</code>
@@ -48,11 +52,15 @@ import type { App } from '@/openapi-client-generated';
 import AppSwitcher from './app-switcher.vue';
 import AppTabs from './app-tabs.vue';
 
+const emit = defineEmits<{ rename: [] }>();
+
 defineProps<{
     appId: string;
     /** Null until the app is known (not even cached). */
     app: App | null;
     apps: readonly App[] | null;
+    /** Only a loaded app that matches the route can be renamed. */
+    canRename?: boolean;
 }>();
 
 const route = useRoute();

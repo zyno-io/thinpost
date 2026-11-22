@@ -170,6 +170,16 @@ func (r *Repository) RetryPreparation(ctx context.Context, actor, appID, message
 		return err
 	}
 	defer tx.Rollback()
+	// The app before the message, the order delete and acceptance use; a deleted
+	// app's message is never requeued.
+	var live bool
+	err = tx.QueryRowContext(ctx, `SELECT true FROM apps WHERE id=$1 AND deleted_at IS NULL FOR SHARE`, appID).Scan(&live)
+	if errors.Is(err, sql.ErrNoRows) {
+		return admin.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
 	var state string
 	err = tx.QueryRowContext(ctx, `SELECT state FROM messages WHERE id=$1 AND app_id=$2 FOR UPDATE`, messageID, appID).Scan(&state)
 	if errors.Is(err, sql.ErrNoRows) {

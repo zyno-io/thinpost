@@ -87,7 +87,7 @@ func (r *Repository) Operations(ctx context.Context) (admin.Operations, error) {
 		count(*) FILTER (WHERE state='recovery_hold'),
 		count(*) FILTER (WHERE state='on_hold'),
 		min(prepare_next_at) FILTER (WHERE state='queued' AND prepare_next_at<=clock_timestamp())
-		FROM messages WHERE pending`).Scan(&m.QueuedDue, &m.QueuedWaiting, &m.Preparing, &m.PreparationFailed, &m.RecoveryHold, &m.OnHold, &oldest)
+		FROM messages WHERE pending AND `+liveApp("messages.app_id")+``).Scan(&m.QueuedDue, &m.QueuedWaiting, &m.Preparing, &m.PreparationFailed, &m.RecoveryHold, &m.OnHold, &oldest)
 	if err != nil {
 		return admin.Operations{}, err
 	}
@@ -102,7 +102,7 @@ func (r *Repository) Operations(ctx context.Context) (admin.Operations, error) {
 		count(*) FILTER (WHERE state='tracking_held'),
 		count(*) FILTER (WHERE state='recovery_hold'),
 		min(retry_after) FILTER (WHERE state='queued' AND retry_after<=clock_timestamp())
-		FROM deliveries WHERE state NOT IN ('accepted','failed')`).Scan(&d.QueuedDue, &d.QueuedWaiting, &d.InFlight, &d.Uncertain, &d.RecipientPolicyHeld, &d.TrackingHeld, &d.RecoveryHold, &oldest)
+		FROM deliveries WHERE state NOT IN ('accepted','failed') AND EXISTS (SELECT 1 FROM messages m WHERE m.id=deliveries.message_id AND `+liveApp("m.app_id")+`)`).Scan(&d.QueuedDue, &d.QueuedWaiting, &d.InFlight, &d.Uncertain, &d.RecipientPolicyHeld, &d.TrackingHeld, &d.RecoveryHold, &oldest)
 	if err != nil {
 		return admin.Operations{}, err
 	}
@@ -114,7 +114,7 @@ func (r *Repository) Operations(ctx context.Context) (admin.Operations, error) {
 		count(*) FILTER (WHERE state='in_flight'),
 		count(*) FILTER (WHERE state='recovery_hold'),
 		min(next_attempt_at) FILTER (WHERE state='queued' AND next_attempt_at<=clock_timestamp())
-		FROM webhook_deliveries WHERE state IN ('queued','in_flight','recovery_hold')`).Scan(&w.QueuedDue, &w.QueuedWaiting, &w.InFlight, &w.RecoveryHold, &oldest)
+		FROM webhook_deliveries WHERE state IN ('queued','in_flight','recovery_hold') AND `+liveApp("webhook_deliveries.app_id")+``).Scan(&w.QueuedDue, &w.QueuedWaiting, &w.InFlight, &w.RecoveryHold, &oldest)
 	if err != nil {
 		return admin.Operations{}, err
 	}
@@ -178,11 +178,11 @@ func (r *Repository) Attention(ctx context.Context, cursorText string, limit int
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT app_id,app_name,message_id,delivery_id,kind,since FROM (
 		SELECT m.app_id,a.name AS app_name,m.id AS message_id,NULL::text AS delivery_id,m.state AS kind,m.accepted_at AS since,m.id AS entity_id
-			FROM messages m JOIN apps a ON a.id=m.app_id WHERE m.pending AND m.state IN ('preparation_failed','recovery_hold')
+			FROM messages m JOIN apps a ON a.id=m.app_id WHERE a.deleted_at IS NULL AND m.pending AND m.state IN ('preparation_failed','recovery_hold')
 		UNION ALL
 		SELECT m.app_id,a.name,m.id,d.id,d.state,m.accepted_at,d.id
 			FROM deliveries d JOIN messages m ON m.id=d.message_id JOIN apps a ON a.id=m.app_id
-			WHERE d.state IN ('uncertain','recipient_policy_held','tracking_held','recovery_hold')
+			WHERE a.deleted_at IS NULL AND d.state IN ('uncertain','recipient_policy_held','tracking_held','recovery_hold')
 		) x WHERE ($1::timestamptz IS NULL OR (since,entity_id)>($1::timestamptz,$2::text))
 		ORDER BY since,entity_id LIMIT $3`, after, cursor.ID, limit+1)
 	if err != nil {
@@ -214,4 +214,9 @@ func (r *Repository) Attention(ctx context.Context, cursorText string, limit int
 		}
 	}
 	return page, nil
+}
+
+// liveApp is a predicate that holds for an app that has not been deleted.
+func liveApp(column string) string {
+	return "NOT EXISTS (SELECT 1 FROM apps dead WHERE dead.id=" + column + " AND dead.deleted_at IS NOT NULL)"
 }

@@ -204,11 +204,15 @@ func (r *Repository) CommitDeliveryResultIdentified(ctx context.Context, result 
 		return committed, err
 	}
 	defer tx.Rollback()
+	appDeleted, err := lockAppDeleted(ctx, tx, result.DeliveryID)
+	if err != nil {
+		return committed, err
+	}
 	policy, err := deliveryRetryPolicy(ctx, tx)
 	if err != nil {
 		return committed, err
 	}
-	if err = applyDeliveryResultTx(ctx, tx, result, false, policy); errors.Is(err, errResultAlreadyCompleted) {
+	if err = applyDeliveryResultTx(ctx, tx, result, false, appDeleted, policy); errors.Is(err, errResultAlreadyCompleted) {
 		committed.Replayed = true
 	} else if err != nil {
 		return committed, err
@@ -232,8 +236,29 @@ func (r *Repository) CommitDeliveryResultIdentified(ctx context.Context, result 
 // errResultAlreadyCompleted reports an exact replay that changed nothing.
 var errResultAlreadyCompleted = errors.New("delivery result already completed")
 
+// lockAppDeleted share-locks the delivery's app row and reports whether the app
+// is deleted. It must run before the attempt or delivery rows are locked (the
+// order the delete transaction uses: app first), never inside
+// applyDeliveryResultTx, whose claim caller already holds the delivery row. A
+// result for a deleted app ends in a terminal state instead of a retry or hold.
+func lockAppDeleted(ctx context.Context, tx *sql.Tx, deliveryID string) (bool, error) {
+	var deleted bool
+	err := tx.QueryRowContext(ctx, `SELECT a.deleted_at IS NOT NULL FROM apps a JOIN messages m ON m.app_id=a.id JOIN deliveries d ON d.message_id=m.id WHERE d.id=$1 FOR SHARE OF a`, deliveryID).Scan(&deleted)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, delivery.ErrResultConflict
+	}
+	return deleted, err
+}
+
+// commitDeliveryResultTx applies a result for an app that is not deleted: the
+// claim's local results (the claim already required an active app).
 func commitDeliveryResultTx(ctx context.Context, tx *sql.Tx, result delivery.Result, reconciliation bool, policy delivery.RetryPolicy) error {
-	if err := applyDeliveryResultTx(ctx, tx, result, reconciliation, policy); err != nil && !errors.Is(err, errResultAlreadyCompleted) {
+	return commitDeliveryResultForTx(ctx, tx, result, reconciliation, false, policy)
+}
+
+// commitDeliveryResultForTx applies a result; appDeleted comes from lockAppDeleted.
+func commitDeliveryResultForTx(ctx context.Context, tx *sql.Tx, result delivery.Result, reconciliation, appDeleted bool, policy delivery.RetryPolicy) error {
+	if err := applyDeliveryResultTx(ctx, tx, result, reconciliation, appDeleted, policy); err != nil && !errors.Is(err, errResultAlreadyCompleted) {
 		return err
 	}
 	return nil
@@ -241,7 +266,7 @@ func commitDeliveryResultTx(ctx context.Context, tx *sql.Tx, result delivery.Res
 
 // applyDeliveryResultTx applies the same result and webhook transition for
 // journal replay and conservative reconciliation under an existing tx.
-func applyDeliveryResultTx(ctx context.Context, tx *sql.Tx, result delivery.Result, reconciliation bool, policy delivery.RetryPolicy) error {
+func applyDeliveryResultTx(ctx context.Context, tx *sql.Tx, result delivery.Result, reconciliation, appDeleted bool, policy delivery.RetryPolicy) error {
 	if reconciliation && (result.Outcome != "uncertain" || result.SMTPCode != 0) {
 		return errors.New("invalid reconciliation result")
 	}
@@ -330,6 +355,10 @@ func applyDeliveryResultTx(ctx context.Context, tx *sql.Tx, result delivery.Resu
 				}
 			}
 		}
+	}
+	// A deleted app's work ends: every outcome but an acceptance is final.
+	if appDeleted && newState != "accepted" {
+		newState = "failed"
 	}
 	advanceRoute := (result.Outcome == "rejected" || result.Outcome == "route_rejected") && startAuthorized
 	update, err := tx.ExecContext(ctx, `UPDATE deliveries SET state=$3,current_attempt_id=NULL,retry_after=CASE WHEN $3='queued' THEN clock_timestamp()+$4*interval '1 millisecond' ELSE retry_after END,route_attempts=route_attempts+CASE WHEN $5 THEN 1 ELSE 0 END WHERE id=$1 AND current_attempt_id=$2 AND state='in_flight'`, result.DeliveryID, result.AttemptID, newState, retryDelay.Milliseconds(), advanceRoute)

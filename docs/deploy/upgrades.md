@@ -179,6 +179,10 @@ Schema 48 adds `tracking_domains`, an empty table (a catalog-only change; nothin
 
 Deploy the release that serves tracking links at any hostname (links not bound to an origin) to every replica before activating any domain; a replica that predates it cannot open links at a custom name. Apps can use their own tracking domains only where `THINPOST_ADMIN_ORIGIN` is set, and each custom host needs a route, a certificate and an unchanged `Host` at your gateway. Every replica with tracking configured runs the check loop that keeps these domains honest; it needs outbound DNS and HTTPS to the custom names. Don't roll the control plane back past this release while custom tracking domains are in use: mail already sent with custom links would stop opening where an older replica answers.
 
+## App rename and delete
+
+Schema 49 adds a nullable `apps.deleted_at` and a `NOT VALID` check that a deleted app is paused. Both are catalog-only changes (no rewrite, no table scan), and no existing app changes. Deploy the release to every replica before anyone deletes an app: a replica without it does not know about deleted apps and would still list one. Deleting is not undone by a rollback; the schema rolls forward only. Deleting an app revokes its keys and SMTP credentials, so nothing sending as that app keeps working.
+
 ## Upgrading the edge
 
 The edge release is independent. Its Deployment uses `Recreate`, so an upgrade stops the old pod and starts a new one, and sending pauses briefly. Bounce senders retry. The control plane reconnects and the edge replays any results it has not had acknowledged.

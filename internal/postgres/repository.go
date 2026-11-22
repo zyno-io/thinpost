@@ -57,7 +57,7 @@ func (r *Repository) LookupKey(ctx context.Context, digest [32]byte) (submission
 		return app, err
 	}
 	defer tx.Rollback()
-	err = tx.QueryRowContext(ctx, `SELECT a.id,k.id,a.list_unsubscribe,a.default_track_opens,a.default_track_clicks FROM api_keys k JOIN apps a ON a.id = k.app_id WHERE k.digest = $1 AND k.active AND a.active`, digest[:]).Scan(&app.ID, &app.KeyID, &app.ListUnsubscribe, &app.DefaultTrackOpens, &app.DefaultTrackClicks)
+	err = tx.QueryRowContext(ctx, `SELECT a.id,k.id,a.list_unsubscribe,a.default_track_opens,a.default_track_clicks FROM api_keys k JOIN apps a ON a.id = k.app_id WHERE k.digest = $1 AND k.active AND a.active AND a.deleted_at IS NULL`, digest[:]).Scan(&app.ID, &app.KeyID, &app.ListUnsubscribe, &app.DefaultTrackOpens, &app.DefaultTrackClicks)
 	if errors.Is(err, sql.ErrNoRows) {
 		return submission.App{}, submission.ErrInvalidKey
 	}
@@ -85,7 +85,7 @@ func (r *Repository) LookupOperatorApp(ctx context.Context, appID string) (submi
 	}
 	defer tx.Rollback()
 	var active bool
-	err = tx.QueryRowContext(ctx, `SELECT active,list_unsubscribe,default_track_opens,default_track_clicks FROM apps WHERE id=$1`, appID).Scan(&active, &app.ListUnsubscribe, &app.DefaultTrackOpens, &app.DefaultTrackClicks)
+	err = tx.QueryRowContext(ctx, `SELECT active,list_unsubscribe,default_track_opens,default_track_clicks FROM apps WHERE id=$1 AND deleted_at IS NULL`, appID).Scan(&active, &app.ListUnsubscribe, &app.DefaultTrackOpens, &app.DefaultTrackClicks)
 	if errors.Is(err, sql.ErrNoRows) {
 		return submission.App{}, admin.ErrNotFound
 	}
