@@ -6,7 +6,7 @@
                 <span class="tag" :class="{ success: app.active }">{{ app.active ? 'Active' : 'Paused' }}</span>
             </h2>
             <div class="status-actions">
-                <button type="button" class="btn sm" :disabled="isReloading || isSubmitting || !isSignedIn" @click="reloadStatus">
+                <button type="button" class="btn" :disabled="isReloading || isSubmitting || !isSignedIn" @click="reloadStatus">
                     <i class="fa-solid fa-rotate" :class="{ 'fa-spin': isReloading }" aria-hidden="true" />
                     {{ isReloading ? 'Reloading…' : 'Reload status' }}
                 </button>

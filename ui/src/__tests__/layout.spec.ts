@@ -35,10 +35,10 @@ async function mountAt(path: string) {
         routes: [
             { path: '/apps', name: 'apps', component: stub, meta: { nav: 'apps' } },
             appRoute({ 'app-keys': stub, 'app-domains': stub, 'app-messages': stub, 'app-message': stub, 'app-webhooks': stub, 'app-tracking': stub, 'app-suppressions': stub, 'app-inbound': stub, 'app-inbound-message': stub, 'app-smtp': stub }),
-            { path: '/domains', name: 'domains', component: stub, meta: { nav: 'domains' } },
-            { path: '/messages', name: 'messages', component: stub, meta: { nav: 'messages' } },
-            { path: '/webhooks', name: 'webhooks', component: stub, meta: { nav: 'webhooks' } },
-            { path: '/tracking', name: 'tracking', component: stub, meta: { nav: 'tracking' } },
+            { path: '/domains', name: 'domains', component: stub, meta: { nav: 'apps' } },
+            { path: '/messages', name: 'messages', component: stub, meta: { nav: 'apps' } },
+            { path: '/webhooks', name: 'webhooks', component: stub, meta: { nav: 'apps' } },
+            { path: '/tracking', name: 'tracking', component: stub, meta: { nav: 'apps' } },
             { path: '/operations', name: 'operations', component: stub, meta: { nav: 'operations' } }
         ]
     });
@@ -81,51 +81,39 @@ afterEach(() => {
 });
 
 describe('layout navigation', () => {
-    it('links app-scoped entries to the remembered app', async () => {
+    it('shows only Apps and Operations in the top navigation', async () => {
         rememberApp(APP_ID);
         await mountAt('/apps');
-        expect(navHref('Sending domains').attributes('href')).toBe(`/apps/${APP_ID}/domains`);
-        expect(navHref('Messages').attributes('href')).toBe(`/apps/${APP_ID}/messages`);
-        expect(navHref('Webhooks').attributes('href')).toBe(`/apps/${APP_ID}/webhooks`);
+        const labels = wrapper!.findAll('nav[aria-label="Primary"] a').map(a => a.text().trim());
+        expect(labels).toEqual(['Apps', 'Operations']);
         expect(navHref('Apps').attributes('href')).toBe('/apps');
-    });
-
-    it('falls back to the picker paths when no app is remembered', async () => {
-        await mountAt('/apps');
-        expect(navHref('Sending domains').attributes('href')).toBe('/domains');
-        expect(navHref('Messages').attributes('href')).toBe('/messages');
-        expect(navHref('Webhooks').attributes('href')).toBe('/webhooks');
-    });
-
-    it('prefers the app on screen over the remembered one', async () => {
-        await mountAt(`/apps/${APP_ID}`);
-        rememberApp(OTHER_ID);
-        await flushPromises();
-        expect(navHref('Messages').attributes('href')).toBe(`/apps/${APP_ID}/messages`);
-    });
-
-    it('marks the active item from the route meta', async () => {
-        const router = await mountAt(`/apps/${APP_ID}/messages`);
-        expect(navHref('Messages').classes()).toContain('active');
-        expect(navHref('Messages').attributes('aria-current')).toBe('page');
-        expect(navHref('Webhooks').classes()).not.toContain('active');
-
-        await router.push('/apps');
-        await flushPromises();
-        expect(navHref('Apps').classes()).toContain('active');
-        expect(navHref('Messages').classes()).not.toContain('active');
-    });
-
-    it('links Tracking to the app on screen and Operations globally, with no unavailable entries', async () => {
-        const router = await mountAt(`/apps/${APP_ID}/tracking`);
-        expect(navHref('Tracking').attributes('href')).toBe(`/apps/${APP_ID}/tracking`);
-        expect(navHref('Tracking').classes()).toContain('active');
         expect(navHref('Operations').attributes('href')).toBe('/operations');
-        expect(wrapper!.find('nav[aria-label="Primary"] .unavailable').exists()).toBe(false);
-        expect(wrapper!.text()).not.toContain('not yet available');
+        const menuLabels = wrapper!.findAll('.nav-menu a').map(a => a.text().trim());
+        expect(menuLabels.length === 0 || (menuLabels.length === 2 && menuLabels[0] === 'Apps')).toBe(true);
+    });
+
+    it.each(['', '/domains', '/messages', '/webhooks', '/tracking', '/inbound', '/smtp', '/suppressions'])(
+        'highlights Apps on the app-scoped route %s',
+        async suffix => {
+            await mountAt(`/apps/${APP_ID}${suffix}`);
+            expect(navHref('Apps').classes()).toContain('active');
+            expect(navHref('Apps').attributes('aria-current')).toBe('page');
+            expect(navHref('Operations').classes()).not.toContain('active');
+        }
+    );
+
+    it('highlights Apps on the app picker redirect routes', async () => {
+        await mountAt('/messages');
+        expect(navHref('Apps').classes()).toContain('active');
+    });
+
+    it('highlights Operations on the operations route, with no unavailable entries', async () => {
+        const router = await mountAt('/apps');
         await router.push('/operations');
         await flushPromises();
         expect(navHref('Operations').classes()).toContain('active');
+        expect(navHref('Apps').classes()).not.toContain('active');
+        expect(wrapper!.find('nav[aria-label="Primary"] .unavailable').exists()).toBe(false);
     });
 });
 
