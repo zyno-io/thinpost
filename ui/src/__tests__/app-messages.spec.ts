@@ -319,12 +319,30 @@ describe('messages screen', () => {
             setItem.mockRestore();
         });
 
+        it('searches by the full recipient address from the local part', async () => {
+            api.listAppMessages.mockResolvedValue({ data: { messages: [message(1, { recipients: ['ada@Mail.Example.org'] })] } });
+            api.searchAppMessages.mockResolvedValue({ data: { messages: [] } });
+            await mountAt(`/apps/${APP_ID}/messages`);
+            const local = rows()[0]!.find('button.address-filter');
+            expect(local.text()).toBe('ada');
+            expect(local.attributes('aria-label')).toBe('Search messages to ada@Mail.Example.org');
+            await local.trigger('click');
+            await flushPromises();
+            expect(api.searchAppMessages).toHaveBeenLastCalledWith(
+                expect.objectContaining({ body: expect.objectContaining({ field: 'recipient', limit: 50 }) })
+            );
+            const body = api.searchAppMessages.mock.lastCall![0].body;
+            expect(body.q.toLowerCase()).toBe('ada@mail.example.org');
+            const select = wrapper!.find('select[aria-label="Search field"]').element as HTMLSelectElement;
+            expect(select.selectedOptions[0]!.text).toBe('Recipient');
+        });
+
         it('searches by recipient domain from the To cell', async () => {
             api.listAppMessages.mockResolvedValue({ data: { messages: [message(1, { recipients: ['ada@Mail.Example.org'] })] } });
             api.searchAppMessages.mockResolvedValue({ data: { messages: [] } });
             await mountAt(`/apps/${APP_ID}/messages`);
             expect(rows()[0]!.findAll('td')[2]!.text()).toContain('ada@Mail.Example.org');
-            await wrapper!.findAll('button.domain-filter')[1]!.trigger('click');
+            await rows()[0]!.find('td.to button.domain-filter:not(.address-filter)').trigger('click');
             await flushPromises();
             expect(api.searchAppMessages).toHaveBeenLastCalledWith(
                 expect.objectContaining({ body: { q: 'mail.example.org', field: 'recipient_domain', limit: 50 } })
