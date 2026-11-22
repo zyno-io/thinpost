@@ -32,7 +32,7 @@
                 </HelpButton>
             </div>
             <div class="rate-actions">
-                <button type="button" class="btn sm" :aria-describedby="`${id}-heading`" :disabled="isLoading || isSubmitting || !isSignedIn" @click="reload">
+                <button type="button" class="btn" :aria-describedby="`${id}-heading`" :disabled="isLoading || isSubmitting || !isSignedIn" @click="reload">
                     <i class="fa-solid fa-rotate" :class="{ 'fa-spin': isLoading && !!rate }" aria-hidden="true" />
                     {{ isLoading && rate ? 'Reloading…' : 'Reload limit' }}
                 </button>

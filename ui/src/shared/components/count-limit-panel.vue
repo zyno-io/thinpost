@@ -37,7 +37,7 @@
                 </HelpButton>
             </div>
             <div class="limit-actions">
-                <button type="button" class="btn sm" :aria-describedby="`${id}-heading`" :disabled="isLoading || isSubmitting || !isSignedIn" @click="reload">
+                <button type="button" class="btn" :aria-describedby="`${id}-heading`" :disabled="isLoading || isSubmitting || !isSignedIn" @click="reload">
                     <i class="fa-solid fa-rotate" :class="{ 'fa-spin': isLoading && !!current }" aria-hidden="true" />
                     {{ isLoading && current ? 'Reloading…' : 'Reload limit' }}
                 </button>

@@ -25,28 +25,28 @@ export function appRoute(screens: Record<AppScreenName, Component>): RouteRecord
         component: AppShell,
         children: [
             { path: '', name: 'app-keys', component: screens['app-keys'], meta: { title: 'API keys', section: 'keys', nav: 'apps' } },
-            { path: 'domains', name: 'app-domains', component: screens['app-domains'], meta: { title: 'Sending domains', section: 'domains', nav: 'domains' } },
-            { path: 'messages', name: 'app-messages', component: screens['app-messages'], meta: { title: 'Messages', section: 'messages', nav: 'messages' } },
+            { path: 'domains', name: 'app-domains', component: screens['app-domains'], meta: { title: 'Sending domains', section: 'domains', nav: 'apps' } },
+            { path: 'messages', name: 'app-messages', component: screens['app-messages'], meta: { title: 'Messages', section: 'messages', nav: 'apps' } },
             {
                 path: 'messages/:messageId',
                 name: 'app-message',
                 component: screens['app-message'],
-                meta: { title: 'Message', section: 'messages', nav: 'messages' }
+                meta: { title: 'Message', section: 'messages', nav: 'apps' }
             },
-            { path: 'webhooks', name: 'app-webhooks', component: screens['app-webhooks'], meta: { title: 'Webhooks', section: 'webhooks', nav: 'webhooks' } },
-            { path: 'tracking', name: 'app-tracking', component: screens['app-tracking'], meta: { title: 'Tracking', section: 'tracking', nav: 'tracking' } },
+            { path: 'webhooks', name: 'app-webhooks', component: screens['app-webhooks'], meta: { title: 'Webhooks', section: 'webhooks', nav: 'apps' } },
+            { path: 'tracking', name: 'app-tracking', component: screens['app-tracking'], meta: { title: 'Tracking', section: 'tracking', nav: 'apps' } },
             {
                 path: 'suppressions',
                 name: 'app-suppressions',
                 component: screens['app-suppressions'],
                 meta: { title: 'Suppressions', section: 'suppressions', nav: 'apps' }
             },
-            { path: 'inbound', name: 'app-inbound', component: screens['app-inbound'], meta: { title: 'Inbound', section: 'inbound', nav: 'inbound' } },
+            { path: 'inbound', name: 'app-inbound', component: screens['app-inbound'], meta: { title: 'Inbound', section: 'inbound', nav: 'apps' } },
             {
                 path: 'inbound/:inboundId',
                 name: 'app-inbound-message',
                 component: screens['app-inbound-message'],
-                meta: { title: 'Inbound message', section: 'inbound', nav: 'inbound' }
+                meta: { title: 'Inbound message', section: 'inbound', nav: 'apps' }
             },
             { path: 'smtp', name: 'app-smtp', component: screens['app-smtp'], meta: { title: 'SMTP', section: 'smtp', nav: 'apps' } }
         ]

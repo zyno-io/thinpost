@@ -12,7 +12,7 @@
                     <RouterLink
                         v-for="item in NAV"
                         :key="item.id"
-                        :to="item.target(navAppId)"
+                        :to="item.path"
                         class="nav-link"
                         :class="{ active: route.meta.nav === item.id }"
                         :aria-current="route.meta.nav === item.id ? 'page' : undefined"
@@ -26,7 +26,7 @@
                     <RouterLink
                         v-for="item in NAV"
                         :key="item.id"
-                        :to="item.target(navAppId)"
+                        :to="item.path"
                         class="menu-item"
                         role="menuitem"
                         :aria-current="route.meta.nav === item.id ? 'page' : undefined"
@@ -68,10 +68,8 @@ import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 
 import { authState, signIn } from '@/auth';
-import { lastAppId } from '@/last-app';
 import { NAV } from '@/nav';
 import { openModalCount } from '@/shared/modal-state';
-import { isOpaqueId } from '@/validation';
 
 import AccountMenu from './account-menu.vue';
 import DropdownMenu from './dropdown-menu.vue';
@@ -82,8 +80,6 @@ const route = useRoute();
 // Keep keyboard focus out of navigation, sign-in and sign-out while a modal (such as a one-time secret) is open.
 const isModalOpen = computed(() => openModalCount.value > 0);
 
-/** The app the app-scoped links go to: the one on screen, else the remembered one. */
-const navAppId = computed(() => (isOpaqueId(route.params.appId) ? route.params.appId : lastAppId.value));
 </script>
 
 <style lang="scss" scoped>

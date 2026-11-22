@@ -50,7 +50,7 @@ const routes: RouteRecordRaw[] = [
             intro: 'Sending domains belong to an app. Pick an app to see and verify its domains.',
             target: 'app-domains'
         },
-        meta: { title: 'Sending domains', nav: 'domains' },
+        meta: { title: 'Sending domains', nav: 'apps' },
         beforeEnter: () => redirectToRemembered('app-domains')
     },
     {
@@ -58,7 +58,7 @@ const routes: RouteRecordRaw[] = [
         name: 'messages',
         component: AppPicker,
         props: { title: 'Messages', intro: 'Messages belong to an app. Pick an app to see what it has sent.', target: 'app-messages' },
-        meta: { title: 'Messages', nav: 'messages' },
+        meta: { title: 'Messages', nav: 'apps' },
         beforeEnter: () => redirectToRemembered('app-messages')
     },
     {
@@ -70,7 +70,7 @@ const routes: RouteRecordRaw[] = [
             intro: 'Webhooks belong to an app. Pick an app to manage where its delivery events are sent.',
             target: 'app-webhooks'
         },
-        meta: { title: 'Webhooks', nav: 'webhooks' },
+        meta: { title: 'Webhooks', nav: 'apps' },
         beforeEnter: () => redirectToRemembered('app-webhooks')
     },
     {
@@ -82,7 +82,7 @@ const routes: RouteRecordRaw[] = [
             intro: 'Tracking belongs to an app. Pick an app to see its opens, clicks and tracking settings.',
             target: 'app-tracking'
         },
-        meta: { title: 'Tracking', nav: 'tracking' },
+        meta: { title: 'Tracking', nav: 'apps' },
         beforeEnter: () => redirectToRemembered('app-tracking')
     },
     {
@@ -94,7 +94,7 @@ const routes: RouteRecordRaw[] = [
             intro: 'Receiving domains and inbound limits are managed per application.',
             target: 'app-inbound'
         },
-        meta: { title: 'Inbound', nav: 'inbound' },
+        meta: { title: 'Inbound', nav: 'apps' },
         beforeEnter: () => redirectToRemembered('app-inbound')
     },
     { path: '/operations', name: 'operations', component: Operations, meta: { title: 'Operations', nav: 'operations' } },
