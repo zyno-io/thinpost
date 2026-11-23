@@ -80,6 +80,14 @@ async function submitDomain(value: string) {
     await flushPromises();
 }
 
+function senderDnsCheck(domain: string) {
+    return {
+        domain,
+        dmarc: { status: 'ok', org_domain: 'example.com', record_domain: 'example.com', record: 'v=DMARC1; p=reject', policy: 'reject', aspf: 'r' },
+        spf: { result: 'pass', envelope_domain: 'smtp.example.net', envelope_kind: 'standard', aligned: false }
+    };
+}
+
 beforeEach(() => {
     Object.values(api).forEach(fn => fn.mockReset());
     Object.values(vf).forEach(fn => fn.mockReset());
@@ -88,6 +96,7 @@ beforeEach(() => {
     sessionStorage.clear();
     resetRuntimeFeatures();
     api.listApps.mockResolvedValue({ data: { apps: [app] } });
+    api.checkAppDomainDns.mockImplementation(async ({ path }: { path: { domain: string } }) => ({ data: senderDnsCheck(path.domain) }));
 });
 
 afterEach(() => {
@@ -108,7 +117,7 @@ describe('sending domains screen', () => {
         const help = await openHelp(wrapper!, 'sending domains');
         expect(help).toContain('Verified means Thinpost can see your DKIM record');
         expect(help).toContain("Verifying doesn't set up SPF, DMARC or reverse DNS");
-        expect(help).toContain('Choose Check under SPF & DMARC');
+        expect(help).toContain('The SPF and DMARC panel under each verified domain');
         expect(help).not.toContain('_thinpost');
         const text = wrapper!.text();
         expect(text).toContain('Verified');
@@ -681,12 +690,8 @@ describe('tracking domains', () => {
     });
 });
 
-describe('SPF and DMARC check', () => {
-    const goodCheck = {
-        domain: 'mail.example.com',
-        dmarc: { status: 'ok', org_domain: 'example.com', record_domain: 'example.com', record: 'v=DMARC1; p=reject', policy: 'reject', aspf: 'r' },
-        spf: { result: 'pass', envelope_domain: 'smtp.example.net', envelope_kind: 'standard', aligned: false }
-    };
+describe('SPF and DMARC panel', () => {
+    const goodCheck = senderDnsCheck('mail.example.com');
     const badCheck = {
         ...goodCheck,
         dmarc: { status: 'missing', org_domain: 'example.com' },
@@ -694,43 +699,43 @@ describe('SPF and DMARC check', () => {
     };
     const checkButton = () => wrapper!.find('[data-testid="check-sender-dns"]');
 
-    it('offers the check only for a verified domain with a key', async () => {
+    it('appears only for a verified domain with a key', async () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [pending, noKey, { ...verified, name: 'ok.example.com' }] } });
         await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.findAll('[data-testid^="sender-dns-ok"]')).toHaveLength(1);
+        expect(wrapper!.find('[data-testid="sender-dns-ok.example.com"]').text()).toContain('SPF and DMARC for ok.example.com');
         expect(wrapper!.findAll('[data-testid="check-sender-dns"]')).toHaveLength(1);
+        expect(api.checkAppDomainDns).toHaveBeenCalledTimes(1);
         expect(checkButton().text()).toContain('SPF and DMARC for ok.example.com');
     });
 
-    it('checks the domain and shows both results', async () => {
+    it('checks on mount and shows the summary and both results', async () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
         api.checkAppDomainDns.mockResolvedValue({ data: badCheck });
         await mountAt(`/apps/${APP_ID}/domains`);
-        expect(wrapper!.find('[data-testid="sender-dns-summary"]').exists()).toBe(false);
-        await checkButton().trigger('click');
-        await flushPromises();
         expect(api.checkAppDomainDns).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' } });
         expect(wrapper!.find('[data-testid="sender-dns-summary"]').text()).toBe('Needs attention');
         expect(wrapper!.find('[data-testid="dmarc-result"]').text()).toContain("There's no DMARC record for mail.example.com or example.com");
         expect(wrapper!.find('[data-testid="spf-result"]').text()).toContain("SPF doesn't pass for smtp.example.net");
         expect(checkButton().text()).toContain('Check again');
+        expect(wrapper!.text()).toContain('This check only reads DNS and never changes how mail is sent.');
     });
 
-    it('says all good, with the record shown', async () => {
+    it('says all good, with the record shown, and checks again on request', async () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
         api.checkAppDomainDns.mockResolvedValue({ data: goodCheck });
         await mountAt(`/apps/${APP_ID}/domains`);
-        await checkButton().trigger('click');
-        await flushPromises();
         expect(wrapper!.find('[data-testid="sender-dns-summary"]').text()).toBe('All good');
         expect(wrapper!.find('[data-testid="dmarc-result"]').text()).toContain('Currently: v=DMARC1; p=reject');
+        await checkButton().trigger('click');
+        await flushPromises();
+        expect(api.checkAppDomainDns).toHaveBeenCalledTimes(2);
     });
 
     it('explains an unavailable check', async () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
         api.checkAppDomainDns.mockRejectedValue(httpError(503));
         await mountAt(`/apps/${APP_ID}/domains`);
-        await checkButton().trigger('click');
-        await flushPromises();
         expect(wrapper!.text()).toContain("Thinpost couldn't look up DNS just now");
         expect(wrapper!.find('[data-testid="sender-dns-summary"]').exists()).toBe(false);
     });
@@ -740,7 +745,7 @@ describe('SPF and DMARC check', () => {
         let finish!: (value: unknown) => void;
         api.checkAppDomainDns.mockReturnValue(new Promise(resolve => (finish = resolve)));
         await mountAt(`/apps/${APP_ID}/domains`);
-        await checkButton().trigger('click');
+        expect(wrapper!.text()).toContain('Checking what receivers find for mail.example.com…');
         expect(checkButton().text()).toContain('Checking…');
         expect(checkButton().attributes('disabled')).toBeDefined();
         expect(button('Rotate key').attributes('disabled')).toBeUndefined();
@@ -753,9 +758,7 @@ describe('SPF and DMARC check', () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
         api.checkAppDomainDns.mockResolvedValue({ data: { ...goodCheck, domain: 'other.example.com' } });
         await mountAt(`/apps/${APP_ID}/domains`);
-        await checkButton().trigger('click');
-        await flushPromises();
         expect(wrapper!.text()).toContain("something the console didn't understand");
-        expect(wrapper!.find('[data-testid="sender-dns-results"]').exists()).toBe(false);
+        expect(wrapper!.find('[data-testid="sender-dns-summary"]').exists()).toBe(false);
     });
 });

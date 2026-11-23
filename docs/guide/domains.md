@@ -105,7 +105,7 @@ If a record is removed or changed, mail falls back to the standard bounce addres
 
 ## Check SPF and DMARC
 
-Choose **Check** under **SPF & DMARC** on a verified domain that has a key (API: `POST /api/v1/apps/{appId}/domains/{domain}/check-dns`) to see what receivers find. The control plane reads public DNS within 8 seconds. The check is advisory: nothing is stored, logged or audited, and it never affects verifying, signing or sending. Domains that are not verified can be checked through the API too.
+The **SPF and DMARC** panel under each verified domain that has a key checks when the Sending domains tab opens, and again when you choose **Check again** (API: `POST /api/v1/apps/{appId}/domains/{domain}/check-dns`) to see what receivers find. The control plane reads public DNS within 8 seconds. The check is advisory: nothing is stored, logged or audited, and it never affects verifying, signing or sending. Domains that are not verified can be checked through the API too.
 
 **DMARC.** Thinpost reads the record at `_dmarc.<domain>`. If the domain has none, it reads the record at the organizational domain (by the public suffix list), and that record's `sp=` applies if it has one. The result is one of:
 

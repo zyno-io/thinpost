@@ -17,8 +17,8 @@
                             with that key, so DKIM passes and lines up with DMARC.
                         </p>
                         <p>
-                            Verifying doesn't set up SPF, DMARC or reverse DNS, so it doesn't promise mail will reach inboxes. Choose Check under
-                            SPF &amp; DMARC to see what receivers find for a verified domain; it only reads DNS and never changes how mail is sent. To change a
+                            Verifying doesn't set up SPF, DMARC or reverse DNS, so it doesn't promise mail will reach inboxes. The SPF and DMARC
+                            panel under each verified domain shows what receivers find; it only reads DNS and never changes how mail is sent. To change a
                             domain's key, choose Rotate key: add the new record first, then switch, so there's no gap. Domains can't be removed here.
                         </p>
                         <p>
@@ -86,122 +86,97 @@
                             <th scope="col">DKIM key</th>
                             <th scope="col">Added</th>
                             <th scope="col">Verified</th>
-                            <th scope="col">SPF &amp; DMARC</th>
                             <th scope="col"><span class="sr-only">Actions</span></th>
                         </tr>
                     </thead>
                     <tbody>
-                        <template v-for="domain in domains" :key="domain.name">
-                            <tr>
-                                <th scope="row" class="name">{{ domain.name }}</th>
-                                <td>
-                                    <span class="tag" :class="statusClass(domain)">{{ statusLabel(domain) }}</span>
-                                </td>
-                                <td class="key-cell">
-                                    <template v-if="domain.active_key">
-                                        <code>{{ domain.active_key.selector }}</code> <span class="muted">in use</span>
-                                    </template>
-                                    <span v-else-if="!domain.pending_key" class="muted">No DKIM key yet</span>
-                                    <p v-if="domain.pending_key" class="key-note">{{ pendingNote(domain) }}</p>
-                                    <p v-if="domain.retired_key" class="key-note">
-                                        Old record <code>{{ domain.retired_key.selector }}</code> can stay in DNS until
-                                        <time :datetime="domain.retired_key.keep_record_until">{{ formatDateTime(domain.retired_key.keep_record_until) }}</time>.
-                                    </p>
-                                </td>
-                                <td>
-                                    <time :datetime="domain.created_at">{{ formatDateTime(domain.created_at) }}</time>
-                                </td>
-                                <td>
-                                    <time v-if="domain.verified_at" :datetime="domain.verified_at">{{ formatDateTime(domain.verified_at) }}</time>
-                                    <span v-else class="muted">—</span>
-                                </td>
-                                <td>
-                                    <div v-if="domain.active && domain.active_key" class="dns-cell">
-                                        <button type="button" class="btn sm" data-testid="check-sender-dns" :disabled="!isSignedIn || checkingDns !== null" @click="checkDns(domain)">
-                                            {{ checkingDns === domain.name ? 'Checking…' : dnsChecks[domain.name] ? 'Check again' : 'Check' }}<span class="sr-only"> SPF and DMARC for {{ domain.name }}</span>
-                                        </button>
-                                        <span v-if="dnsViews[domain.name]" class="tag" :class="dnsViews[domain.name]!.summary.tone" data-testid="sender-dns-summary">{{ dnsViews[domain.name]!.summary.text }}</span>
-                                    </div>
-                                    <span v-else class="muted">—</span>
-                                </td>
-                                <td class="actions">
-                                    <button
-                                        v-if="domain.active && domain.active_key"
-                                        type="button"
-                                        class="btn sm"
-                                        :disabled="!!testSend.blocker.value || !canAct"
-                                        @click="testSend.open(domain.name)"
-                                    >
-                                        Send test
-                                        <span class="sr-only">from {{ domain.name }}</span>
+                        <tr v-for="domain in domains" :key="domain.name">
+                            <th scope="row" class="name">{{ domain.name }}</th>
+                            <td>
+                                <span class="tag" :class="statusClass(domain)">{{ statusLabel(domain) }}</span>
+                            </td>
+                            <td class="key-cell">
+                                <template v-if="domain.active_key">
+                                    <code>{{ domain.active_key.selector }}</code> <span class="muted">in use</span>
+                                </template>
+                                <span v-else-if="!domain.pending_key" class="muted">No DKIM key yet</span>
+                                <p v-if="domain.pending_key" class="key-note">{{ pendingNote(domain) }}</p>
+                                <p v-if="domain.retired_key" class="key-note">
+                                    Old record <code>{{ domain.retired_key.selector }}</code> can stay in DNS until
+                                    <time :datetime="domain.retired_key.keep_record_until">{{ formatDateTime(domain.retired_key.keep_record_until) }}</time>.
+                                </p>
+                            </td>
+                            <td>
+                                <time :datetime="domain.created_at">{{ formatDateTime(domain.created_at) }}</time>
+                            </td>
+                            <td>
+                                <time v-if="domain.verified_at" :datetime="domain.verified_at">{{ formatDateTime(domain.verified_at) }}</time>
+                                <span v-else class="muted">—</span>
+                            </td>
+                            <td class="actions">
+                                <button
+                                    v-if="domain.active && domain.active_key"
+                                    type="button"
+                                    class="btn sm"
+                                    :disabled="!!testSend.blocker.value || !canAct"
+                                    @click="testSend.open(domain.name)"
+                                >
+                                    Send test
+                                    <span class="sr-only">from {{ domain.name }}</span>
+                                </button>
+                                <template v-if="domain.pending_key">
+                                    <button type="button" class="btn sm" :disabled="!canAct" @click="verify(domain)">
+                                        {{ isBusy(domain.name, 'verify') ? 'Checking…' : domain.active_key ? 'Check record' : 'Verify' }}
+                                        <span class="sr-only">{{ domain.name }}</span>
                                     </button>
-                                    <template v-if="domain.pending_key">
-                                        <button type="button" class="btn sm" :disabled="!canAct" @click="verify(domain)">
-                                            {{ isBusy(domain.name, 'verify') ? 'Checking…' : domain.active_key ? 'Check record' : 'Verify' }}
-                                            <span class="sr-only">{{ domain.name }}</span>
-                                        </button>
-                                        <button v-if="domain.active_key" type="button" class="btn sm" :class="{ primary: domain.pending_key.published_at }" :disabled="!canAct" @click="switchKey(domain)">
-                                            {{ isBusy(domain.name, 'switch') ? 'Switching…' : 'Switch' }}
-                                            <span class="sr-only">to the new key for {{ domain.name }}</span>
-                                        </button>
-                                        <button v-if="domain.active_key" type="button" class="btn sm" :disabled="!canAct" @click="cancelKey(domain)">
-                                            {{ isBusy(domain.name, 'cancel') ? 'Cancelling…' : 'Cancel' }}
-                                            <span class="sr-only">the new key for {{ domain.name }}</span>
-                                        </button>
-                                    </template>
-                                    <template v-else-if="domain.active_key">
-                                        <button type="button" class="btn sm" @click="toggleRecord(domain.name)">
-                                            {{ shown.has(domain.name) ? 'Hide record' : 'Show record' }}
-                                            <span class="sr-only">for {{ domain.name }}</span>
-                                        </button>
-                                        <button type="button" class="btn sm" :disabled="!canAct || !app.active" @click="createKey(domain)">
-                                            {{ isBusy(domain.name, 'create') ? 'Working…' : 'Rotate key' }}
-                                            <span class="sr-only">for {{ domain.name }}</span>
-                                        </button>
-                                    </template>
-                                    <button v-else type="button" class="btn sm primary" :disabled="!canAct || !app.active" @click="createKey(domain)">
-                                        {{ isBusy(domain.name, 'create') ? 'Working…' : 'Create DKIM key' }}
+                                    <button v-if="domain.active_key" type="button" class="btn sm" :class="{ primary: domain.pending_key.published_at }" :disabled="!canAct" @click="switchKey(domain)">
+                                        {{ isBusy(domain.name, 'switch') ? 'Switching…' : 'Switch' }}
+                                        <span class="sr-only">to the new key for {{ domain.name }}</span>
+                                    </button>
+                                    <button v-if="domain.active_key" type="button" class="btn sm" :disabled="!canAct" @click="cancelKey(domain)">
+                                        {{ isBusy(domain.name, 'cancel') ? 'Cancelling…' : 'Cancel' }}
+                                        <span class="sr-only">the new key for {{ domain.name }}</span>
+                                    </button>
+                                </template>
+                                <template v-else-if="domain.active_key">
+                                    <button type="button" class="btn sm" @click="toggleRecord(domain.name)">
+                                        {{ shown.has(domain.name) ? 'Hide record' : 'Show record' }}
                                         <span class="sr-only">for {{ domain.name }}</span>
                                     </button>
-                                </td>
-                            </tr>
-                            <tr v-if="dnsViews[domain.name] || dnsErrors[domain.name]" class="detail" :data-dns-detail="domain.name">
-                                <td colspan="7">
-                                    <ul v-if="dnsViews[domain.name]" class="checks" data-testid="sender-dns-results">
-                                        <li data-testid="dmarc-result">
-                                            <span class="tag" :class="dnsViews[domain.name]!.dmarc.tone">{{ dnsViews[domain.name]!.dmarc.label }}</span>
-                                            <strong>DMARC:</strong> {{ dnsViews[domain.name]!.dmarc.message }}
-                                            <template v-if="dnsChecks[domain.name]!.dmarc.record"> Currently: <code>{{ dnsChecks[domain.name]!.dmarc.record }}</code></template>
-                                        </li>
-                                        <li data-testid="spf-result">
-                                            <span class="tag" :class="dnsViews[domain.name]!.spf.tone">{{ dnsViews[domain.name]!.spf.label }}</span>
-                                            <strong>SPF:</strong> {{ dnsViews[domain.name]!.spf.message }}
-                                        </li>
-                                        <li class="hint">This check reads public DNS and doesn't change anything.</li>
-                                    </ul>
-                                    <p v-if="dnsErrors[domain.name]" class="note warn">{{ dnsErrors[domain.name]!.message }}</p>
-                                </td>
-                            </tr>
-                        </template>
+                                    <button type="button" class="btn sm" :disabled="!canAct || !app.active" @click="createKey(domain)">
+                                        {{ isBusy(domain.name, 'create') ? 'Working…' : 'Rotate key' }}
+                                        <span class="sr-only">for {{ domain.name }}</span>
+                                    </button>
+                                </template>
+                                <button v-else type="button" class="btn sm primary" :disabled="!canAct || !app.active" @click="createKey(domain)">
+                                    {{ isBusy(domain.name, 'create') ? 'Working…' : 'Create DKIM key' }}
+                                    <span class="sr-only">for {{ domain.name }}</span>
+                                </button>
+                            </td>
+                        </tr>
                     </tbody>
                 </table>
             </div>
 
-            <div v-if="verifiedDomains.length && !domainsError" class="card-body bounce-panels" role="group" aria-label="Bounce domains">
-                <BounceDomainPanel v-for="domain in verifiedDomains" :key="domain.name" :app-id="app.id" :app-active="app.active" :can-act="canAct" :domain="domain" @changed="reloadDomains" />
-            </div>
-
-            <div v-if="trackingPanelDomains.length && !domainsError" class="card-body bounce-panels" role="group" aria-label="Tracking domains">
-                <TrackingDomainPanel
-                    v-for="domain in trackingPanelDomains"
-                    :key="domain.name"
-                    :app-id="app.id"
-                    :app-active="app.active"
-                    :can-act="canAct"
-                    :domain="domain"
-                    :support="trackingSupport"
-                    @changed="reloadDomains"
-                />
+            <div v-if="verifiedDomains.length && !domainsError" class="card-body domain-panels">
+                <div role="group" aria-label="Bounce domains" class="panel-group">
+                    <BounceDomainPanel v-for="domain in verifiedDomains" :key="domain.name" :app-id="app.id" :app-active="app.active" :can-act="canAct" :domain="domain" @changed="reloadDomains" />
+                </div>
+                <div v-if="dnsPanelDomains.length" role="group" aria-label="SPF and DMARC" class="panel-group">
+                    <SenderDnsPanel v-for="domain in dnsPanelDomains" :key="domain.name" :app-id="app.id" :domain="domain" />
+                </div>
+                <div v-if="trackingPanelDomains.length" role="group" aria-label="Tracking domains" class="panel-group">
+                    <TrackingDomainPanel
+                        v-for="domain in trackingPanelDomains"
+                        :key="domain.name"
+                        :app-id="app.id"
+                        :app-active="app.active"
+                        :can-act="canAct"
+                        :domain="domain"
+                        :support="trackingSupport"
+                        @changed="reloadDomains"
+                    />
+                </div>
             </div>
         </section>
 
@@ -222,20 +197,20 @@
 
 <script lang="ts" setup>
 import { showConfirm, showToast } from '@zyno-io/vue-foundation';
-import { computed, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 
 import { apiErrorReason, apiErrorStatus, describeApiError, InvalidResponseError, type ApiErrorDescription } from '@/api-errors';
 import { useAppContext } from '@/app-context';
 import { authState } from '@/auth';
 import { parseDkimKey, type DkimKeyView } from '@/dkim';
 import { formatDateTime } from '@/format';
-import { DefaultApi, type Domain, type SenderDomainDnsCheck } from '@/openapi-client-generated';
+import { DefaultApi, type Domain } from '@/openapi-client-generated';
 import { loadRuntimeFeatures, runtimeTracking } from '@/runtime-features';
-import { dmarcLine, parseSenderDnsCheck, senderDnsSummary, spfLine } from '@/sender-dns';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import BounceDomainPanel from '@/shared/components/bounce-domain-panel.vue';
 import DkimRecord from '@/shared/components/dkim-record.vue';
 import HelpButton from '@/shared/components/help-button.vue';
+import SenderDnsPanel from '@/shared/components/sender-dns-panel.vue';
 import DomainModal from '@/shared/components/domain-modal.vue';
 import Loader from '@/shared/components/loader.vue';
 import TestMessageModal from '@/shared/components/test-message-modal.vue';
@@ -260,18 +235,6 @@ const isRequesting = ref(false);
 const requestError = ref<ApiErrorDescription | null>(null);
 const busy = ref<{ domain: string; action: Action } | null>(null);
 
-/** The advisory SPF and DMARC checks, by domain. They never gate or are gated by the DKIM actions. */
-const dnsChecks = reactive<Record<string, SenderDomainDnsCheck | undefined>>({});
-const dnsErrors = reactive<Record<string, ApiErrorDescription | undefined>>({});
-const checkingDns = ref<string | null>(null);
-const dnsViews = computed(() => {
-    const views: Record<string, { summary: ReturnType<typeof senderDnsSummary>; dmarc: ReturnType<typeof dmarcLine>; spf: ReturnType<typeof spfLine> }> = {};
-    for (const [name, check] of Object.entries(dnsChecks)) {
-        if (check) views[name] = { summary: senderDnsSummary(check), dmarc: dmarcLine(check), spf: spfLine(check) };
-    }
-    return views;
-});
-
 /** Domains whose current (active) record the person asked to see. A pending record is always shown. */
 const shown = ref<Set<string>>(new Set());
 
@@ -281,6 +244,9 @@ const canAct = computed(() => isSignedIn.value && !busy.value && !isRequesting.v
 
 /** Verified domains each get a bounce-domain panel. */
 const verifiedDomains = computed(() => (domains.value ?? []).filter(d => d.active));
+
+/** Verified domains with a DKIM key get an SPF and DMARC panel. */
+const dnsPanelDomains = computed(() => verifiedDomains.value.filter(d => d.active_key));
 
 /** What the deployment offers for custom tracking addresses; unknown until the runtime report loads. */
 const trackingSupport = computed(() => ({ available: runtimeTracking.value?.custom_domains === true, cnameTarget: runtimeTracking.value?.cname_target || null }));
@@ -364,9 +330,6 @@ async function load() {
     actionError.value = null;
     domains.value = null;
     shown.value = new Set();
-    for (const name of Object.keys(dnsChecks)) delete dnsChecks[name];
-    for (const name of Object.keys(dnsErrors)) delete dnsErrors[name];
-    checkingDns.value = null;
 
     try {
         const response = await DefaultApi.listAppDomains({ path: { appId: id } });
@@ -401,30 +364,6 @@ async function reloadDomains() {
         domainsError.value = describeApiError(err, { notFound: 'The app was not found.' });
     } finally {
         if (thisReload === reloadSeq) isReloading.value = false;
-    }
-}
-
-async function checkDns(domain: Domain) {
-    const id = appId.value;
-    if (checkingDns.value !== null) return;
-    const seq = loadSeq;
-    const name = domain.name;
-    checkingDns.value = name;
-    dnsErrors[name] = undefined;
-    try {
-        const { data } = await DefaultApi.checkAppDomainDns({ path: { appId: id, domain: name } });
-        const check = parseSenderDnsCheck(data, name);
-        if (isUnmounted || seq !== loadSeq) return;
-        dnsChecks[name] = check;
-    } catch (err) {
-        if (isUnmounted || seq !== loadSeq) return;
-        dnsChecks[name] = undefined;
-        dnsErrors[name] = describeApiError(err, {
-            notFound: `${name} wasn't found for this app. Reload to see where it stands.`,
-            unavailable: "Thinpost couldn't look up DNS just now. Try again in a moment."
-        });
-    } finally {
-        if (seq === loadSeq) checkingDns.value = null;
     }
 }
 
@@ -597,11 +536,16 @@ async function cancelKey(domain: Domain) {
 </script>
 
 <style lang="scss" scoped>
-.bounce-panels {
+.domain-panels {
     display: flex;
     flex-direction: column;
     gap: 12px;
-    border-top: 1px solid var(--border);
+}
+
+.panel-group {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
 
 .domains-body {
@@ -645,7 +589,7 @@ async function cancelKey(domain: Domain) {
 
 .name {
     font-weight: 600;
-    overflow-wrap: anywhere;
+    white-space: nowrap;
 }
 
 .key-cell {
@@ -654,37 +598,6 @@ async function cancelKey(domain: Domain) {
         color: var(--text-3);
         font-size: 12px;
     }
-}
-
-.dns-cell {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px 6px;
-}
-
-.detail td {
-    padding-top: 0;
-}
-
-.note {
-    margin: 2px 0;
-    font-size: 12px;
-    color: var(--text-3);
-
-    &.warn {
-        color: var(--warning, var(--text-2));
-    }
-}
-
-.checks {
-    margin: 4px 0 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
 }
 
 .actions {
