@@ -96,8 +96,7 @@
                             </td>
                             <td class="key-cell">
                                 <template v-if="domain.active_key">
-                                    <code>{{ domain.active_key.selector }}</code>
-                                    <span class="muted">in use</span>
+                                    <code>{{ domain.active_key.selector }}</code> <span class="muted">in use</span>
                                 </template>
                                 <span v-else-if="!domain.pending_key" class="muted">No DKIM key yet</span>
                                 <p v-if="domain.pending_key" class="key-note">{{ pendingNote(domain) }}</p>
