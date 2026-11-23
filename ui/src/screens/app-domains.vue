@@ -92,96 +92,96 @@
                     </thead>
                     <tbody>
                         <template v-for="domain in domains" :key="domain.name">
-                        <tr>
-                            <th scope="row" class="name">{{ domain.name }}</th>
-                            <td>
-                                <span class="tag" :class="statusClass(domain)">{{ statusLabel(domain) }}</span>
-                            </td>
-                            <td class="key-cell">
-                                <template v-if="domain.active_key">
-                                    <code>{{ domain.active_key.selector }}</code> <span class="muted">in use</span>
-                                </template>
-                                <span v-else-if="!domain.pending_key" class="muted">No DKIM key yet</span>
-                                <p v-if="domain.pending_key" class="key-note">{{ pendingNote(domain) }}</p>
-                                <p v-if="domain.retired_key" class="key-note">
-                                    Old record <code>{{ domain.retired_key.selector }}</code> can stay in DNS until
-                                    <time :datetime="domain.retired_key.keep_record_until">{{ formatDateTime(domain.retired_key.keep_record_until) }}</time>.
-                                </p>
-                            </td>
-                            <td>
-                                <time :datetime="domain.created_at">{{ formatDateTime(domain.created_at) }}</time>
-                            </td>
-                            <td>
-                                <time v-if="domain.verified_at" :datetime="domain.verified_at">{{ formatDateTime(domain.verified_at) }}</time>
-                                <span v-else class="muted">—</span>
-                            </td>
-                            <td>
-                                <div v-if="domain.active && domain.active_key" class="dns-cell">
-                                    <button type="button" class="btn sm" data-testid="check-sender-dns" :disabled="!isSignedIn || checkingDns !== null" @click="checkDns(domain)">
-                                        {{ checkingDns === domain.name ? 'Checking…' : dnsChecks[domain.name] ? 'Check again' : 'Check' }}<span class="sr-only"> SPF and DMARC for {{ domain.name }}</span>
+                            <tr>
+                                <th scope="row" class="name">{{ domain.name }}</th>
+                                <td>
+                                    <span class="tag" :class="statusClass(domain)">{{ statusLabel(domain) }}</span>
+                                </td>
+                                <td class="key-cell">
+                                    <template v-if="domain.active_key">
+                                        <code>{{ domain.active_key.selector }}</code> <span class="muted">in use</span>
+                                    </template>
+                                    <span v-else-if="!domain.pending_key" class="muted">No DKIM key yet</span>
+                                    <p v-if="domain.pending_key" class="key-note">{{ pendingNote(domain) }}</p>
+                                    <p v-if="domain.retired_key" class="key-note">
+                                        Old record <code>{{ domain.retired_key.selector }}</code> can stay in DNS until
+                                        <time :datetime="domain.retired_key.keep_record_until">{{ formatDateTime(domain.retired_key.keep_record_until) }}</time>.
+                                    </p>
+                                </td>
+                                <td>
+                                    <time :datetime="domain.created_at">{{ formatDateTime(domain.created_at) }}</time>
+                                </td>
+                                <td>
+                                    <time v-if="domain.verified_at" :datetime="domain.verified_at">{{ formatDateTime(domain.verified_at) }}</time>
+                                    <span v-else class="muted">—</span>
+                                </td>
+                                <td>
+                                    <div v-if="domain.active && domain.active_key" class="dns-cell">
+                                        <button type="button" class="btn sm" data-testid="check-sender-dns" :disabled="!isSignedIn || checkingDns !== null" @click="checkDns(domain)">
+                                            {{ checkingDns === domain.name ? 'Checking…' : dnsChecks[domain.name] ? 'Check again' : 'Check' }}<span class="sr-only"> SPF and DMARC for {{ domain.name }}</span>
+                                        </button>
+                                        <span v-if="dnsViews[domain.name]" class="tag" :class="dnsViews[domain.name]!.summary.tone" data-testid="sender-dns-summary">{{ dnsViews[domain.name]!.summary.text }}</span>
+                                    </div>
+                                    <span v-else class="muted">—</span>
+                                </td>
+                                <td class="actions">
+                                    <button
+                                        v-if="domain.active && domain.active_key"
+                                        type="button"
+                                        class="btn sm"
+                                        :disabled="!!testSend.blocker.value || !canAct"
+                                        @click="testSend.open(domain.name)"
+                                    >
+                                        Send test
+                                        <span class="sr-only">from {{ domain.name }}</span>
                                     </button>
-                                    <span v-if="dnsViews[domain.name]" class="tag" :class="dnsViews[domain.name]!.summary.tone" data-testid="sender-dns-summary">{{ dnsViews[domain.name]!.summary.text }}</span>
-                                </div>
-                                <span v-else class="muted">—</span>
-                            </td>
-                            <td class="actions">
-                                <button
-                                    v-if="domain.active && domain.active_key"
-                                    type="button"
-                                    class="btn sm"
-                                    :disabled="!!testSend.blocker.value || !canAct"
-                                    @click="testSend.open(domain.name)"
-                                >
-                                    Send test
-                                    <span class="sr-only">from {{ domain.name }}</span>
-                                </button>
-                                <template v-if="domain.pending_key">
-                                    <button type="button" class="btn sm" :disabled="!canAct" @click="verify(domain)">
-                                        {{ isBusy(domain.name, 'verify') ? 'Checking…' : domain.active_key ? 'Check record' : 'Verify' }}
-                                        <span class="sr-only">{{ domain.name }}</span>
-                                    </button>
-                                    <button v-if="domain.active_key" type="button" class="btn sm" :class="{ primary: domain.pending_key.published_at }" :disabled="!canAct" @click="switchKey(domain)">
-                                        {{ isBusy(domain.name, 'switch') ? 'Switching…' : 'Switch' }}
-                                        <span class="sr-only">to the new key for {{ domain.name }}</span>
-                                    </button>
-                                    <button v-if="domain.active_key" type="button" class="btn sm" :disabled="!canAct" @click="cancelKey(domain)">
-                                        {{ isBusy(domain.name, 'cancel') ? 'Cancelling…' : 'Cancel' }}
-                                        <span class="sr-only">the new key for {{ domain.name }}</span>
-                                    </button>
-                                </template>
-                                <template v-else-if="domain.active_key">
-                                    <button type="button" class="btn sm" @click="toggleRecord(domain.name)">
-                                        {{ shown.has(domain.name) ? 'Hide record' : 'Show record' }}
+                                    <template v-if="domain.pending_key">
+                                        <button type="button" class="btn sm" :disabled="!canAct" @click="verify(domain)">
+                                            {{ isBusy(domain.name, 'verify') ? 'Checking…' : domain.active_key ? 'Check record' : 'Verify' }}
+                                            <span class="sr-only">{{ domain.name }}</span>
+                                        </button>
+                                        <button v-if="domain.active_key" type="button" class="btn sm" :class="{ primary: domain.pending_key.published_at }" :disabled="!canAct" @click="switchKey(domain)">
+                                            {{ isBusy(domain.name, 'switch') ? 'Switching…' : 'Switch' }}
+                                            <span class="sr-only">to the new key for {{ domain.name }}</span>
+                                        </button>
+                                        <button v-if="domain.active_key" type="button" class="btn sm" :disabled="!canAct" @click="cancelKey(domain)">
+                                            {{ isBusy(domain.name, 'cancel') ? 'Cancelling…' : 'Cancel' }}
+                                            <span class="sr-only">the new key for {{ domain.name }}</span>
+                                        </button>
+                                    </template>
+                                    <template v-else-if="domain.active_key">
+                                        <button type="button" class="btn sm" @click="toggleRecord(domain.name)">
+                                            {{ shown.has(domain.name) ? 'Hide record' : 'Show record' }}
+                                            <span class="sr-only">for {{ domain.name }}</span>
+                                        </button>
+                                        <button type="button" class="btn sm" :disabled="!canAct || !app.active" @click="createKey(domain)">
+                                            {{ isBusy(domain.name, 'create') ? 'Working…' : 'Rotate key' }}
+                                            <span class="sr-only">for {{ domain.name }}</span>
+                                        </button>
+                                    </template>
+                                    <button v-else type="button" class="btn sm primary" :disabled="!canAct || !app.active" @click="createKey(domain)">
+                                        {{ isBusy(domain.name, 'create') ? 'Working…' : 'Create DKIM key' }}
                                         <span class="sr-only">for {{ domain.name }}</span>
                                     </button>
-                                    <button type="button" class="btn sm" :disabled="!canAct || !app.active" @click="createKey(domain)">
-                                        {{ isBusy(domain.name, 'create') ? 'Working…' : 'Rotate key' }}
-                                        <span class="sr-only">for {{ domain.name }}</span>
-                                    </button>
-                                </template>
-                                <button v-else type="button" class="btn sm primary" :disabled="!canAct || !app.active" @click="createKey(domain)">
-                                    {{ isBusy(domain.name, 'create') ? 'Working…' : 'Create DKIM key' }}
-                                    <span class="sr-only">for {{ domain.name }}</span>
-                                </button>
-                            </td>
-                        </tr>
-                        <tr v-if="dnsViews[domain.name] || dnsErrors[domain.name]" class="detail" :data-dns-detail="domain.name">
-                            <td colspan="7">
-                                <ul v-if="dnsViews[domain.name]" class="checks" data-testid="sender-dns-results">
-                                    <li data-testid="dmarc-result">
-                                        <span class="tag" :class="dnsViews[domain.name]!.dmarc.tone">{{ dnsViews[domain.name]!.dmarc.label }}</span>
-                                        <strong>DMARC:</strong> {{ dnsViews[domain.name]!.dmarc.message }}
-                                        <template v-if="dnsChecks[domain.name]!.dmarc.record"> Currently: <code>{{ dnsChecks[domain.name]!.dmarc.record }}</code></template>
-                                    </li>
-                                    <li data-testid="spf-result">
-                                        <span class="tag" :class="dnsViews[domain.name]!.spf.tone">{{ dnsViews[domain.name]!.spf.label }}</span>
-                                        <strong>SPF:</strong> {{ dnsViews[domain.name]!.spf.message }}
-                                    </li>
-                                    <li class="hint">This check reads public DNS and doesn't change anything.</li>
-                                </ul>
-                                <p v-if="dnsErrors[domain.name]" class="note warn">{{ dnsErrors[domain.name]!.message }}</p>
-                            </td>
-                        </tr>
+                                </td>
+                            </tr>
+                            <tr v-if="dnsViews[domain.name] || dnsErrors[domain.name]" class="detail" :data-dns-detail="domain.name">
+                                <td colspan="7">
+                                    <ul v-if="dnsViews[domain.name]" class="checks" data-testid="sender-dns-results">
+                                        <li data-testid="dmarc-result">
+                                            <span class="tag" :class="dnsViews[domain.name]!.dmarc.tone">{{ dnsViews[domain.name]!.dmarc.label }}</span>
+                                            <strong>DMARC:</strong> {{ dnsViews[domain.name]!.dmarc.message }}
+                                            <template v-if="dnsChecks[domain.name]!.dmarc.record"> Currently: <code>{{ dnsChecks[domain.name]!.dmarc.record }}</code></template>
+                                        </li>
+                                        <li data-testid="spf-result">
+                                            <span class="tag" :class="dnsViews[domain.name]!.spf.tone">{{ dnsViews[domain.name]!.spf.label }}</span>
+                                            <strong>SPF:</strong> {{ dnsViews[domain.name]!.spf.message }}
+                                        </li>
+                                        <li class="hint">This check reads public DNS and doesn't change anything.</li>
+                                    </ul>
+                                    <p v-if="dnsErrors[domain.name]" class="note warn">{{ dnsErrors[domain.name]!.message }}</p>
+                                </td>
+                            </tr>
                         </template>
                     </tbody>
                 </table>
