@@ -589,6 +589,10 @@ async function cancelKey(domain: Domain) {
 
 .name {
     font-weight: 600;
+}
+
+/* The shared table style lets row headers wrap; a domain name stays on one line (the table scrolls instead). */
+table.data th[scope='row'].name {
     white-space: nowrap;
 }
 

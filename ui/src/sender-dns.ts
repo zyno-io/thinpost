@@ -109,7 +109,7 @@ export function spfLine(check: SenderDomainDnsCheck): CheckLine {
             return {
                 label: 'Passes',
                 tone: 'success',
-                message: `SPF passes for ${env}, Thinpost's standard bounce address. It isn't your domain, so SPF doesn't line up with DMARC. That's fine: DKIM lines up instead. To have SPF line up too, use a bounce domain of yours (see below).`
+                message: `SPF passes for ${env}, Thinpost's standard bounce address. It isn't your domain, so SPF doesn't line up with DMARC. That's fine: DKIM lines up instead. To have SPF line up too, use a bounce domain of yours (see above).`
             };
         case 'temperror':
             return { label: "Couldn't check", tone: '', message: "Thinpost couldn't look up SPF just now. Try again in a moment." };
