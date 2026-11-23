@@ -159,16 +159,11 @@
             </div>
 
             <div v-if="verifiedDomains.length && !domainsError" class="card-body domain-panels">
-                <div role="group" aria-label="Bounce domains" class="panel-group">
-                    <BounceDomainPanel v-for="domain in verifiedDomains" :key="domain.name" :app-id="app.id" :app-active="app.active" :can-act="canAct" :domain="domain" @changed="reloadDomains" />
-                </div>
-                <div v-if="dnsPanelDomains.length" role="group" aria-label="SPF and DMARC" class="panel-group">
-                    <SenderDnsPanel v-for="domain in dnsPanelDomains" :key="domain.name" :app-id="app.id" :domain="domain" />
-                </div>
-                <div v-if="trackingPanelDomains.length" role="group" aria-label="Tracking domains" class="panel-group">
+                <div v-for="domain in verifiedDomains" :key="domain.name" role="group" :aria-label="`Settings for ${domain.name}`" class="panel-group">
+                    <BounceDomainPanel :app-id="app.id" :app-active="app.active" :can-act="canAct" :domain="domain" @changed="reloadDomains" />
+                    <SenderDnsPanel v-if="domain.active_key" :app-id="app.id" :domain="domain" />
                     <TrackingDomainPanel
-                        v-for="domain in trackingPanelDomains"
-                        :key="domain.name"
+                        v-if="hasTrackingPanel(domain)"
                         :app-id="app.id"
                         :app-active="app.active"
                         :can-act="canAct"
@@ -245,13 +240,12 @@ const canAct = computed(() => isSignedIn.value && !busy.value && !isRequesting.v
 /** Verified domains each get a bounce-domain panel. */
 const verifiedDomains = computed(() => (domains.value ?? []).filter(d => d.active));
 
-/** Verified domains with a DKIM key get an SPF and DMARC panel. */
-const dnsPanelDomains = computed(() => verifiedDomains.value.filter(d => d.active_key));
-
 /** What the deployment offers for custom tracking addresses; unknown until the runtime report loads. */
 const trackingSupport = computed(() => ({ available: runtimeTracking.value?.custom_domains === true, cnameTarget: runtimeTracking.value?.cname_target || null }));
 /** Tracking panels appear only where tracking exists: for every verified domain when apps may add their own address, else only for one that already has it. */
-const trackingPanelDomains = computed(() => (runtimeTracking.value ? verifiedDomains.value.filter(d => trackingSupport.value.available || d.tracking_domain) : []));
+function hasTrackingPanel(domain: Domain) {
+    return !!runtimeTracking.value && (trackingSupport.value.available || !!domain.tracking_domain);
+}
 void loadRuntimeFeatures();
 
 /** Domains with a record card: a pending key always, an active key when asked for. */
@@ -539,7 +533,7 @@ async function cancelKey(domain: Domain) {
 .domain-panels {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 28px;
 }
 
 .panel-group {

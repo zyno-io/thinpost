@@ -15,6 +15,7 @@
                     </p>
                     <p>A bounce domain makes SPF line up with your domain too. Add one in the panel above.</p>
                 </HelpButton>
+                <span v-if="view" class="tag" :class="view.summary.tone" data-testid="sender-dns-summary">{{ view.summary.text }}</span>
             </div>
             <button type="button" class="btn sm" data-testid="check-sender-dns" :disabled="!isSignedIn || isChecking" @click="check">
                 {{ isChecking ? 'Checking…' : 'Check again' }}<span class="sr-only"> SPF and DMARC for {{ domain.name }}</span>
@@ -24,9 +25,6 @@
         <ApiErrorNotice v-if="error" :error="error" />
 
         <template v-if="view && result">
-            <p class="line">
-                <span class="tag" :class="view.summary.tone" data-testid="sender-dns-summary">{{ view.summary.text }}</span>
-            </p>
             <p class="result" data-testid="dmarc-result">
                 <span class="tag" :class="view.dmarc.tone">{{ view.dmarc.label }}</span> <strong>DMARC:</strong> {{ view.dmarc.message }}
                 <template v-if="result.dmarc.record"> Currently: <code>{{ result.dmarc.record }}</code></template>
@@ -114,13 +112,6 @@ async function check() {
         font-weight: 600;
         overflow-wrap: anywhere;
     }
-}
-
-.line {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 8px;
 }
 
 .result {
