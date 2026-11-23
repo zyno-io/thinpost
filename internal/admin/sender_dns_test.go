@@ -88,11 +88,14 @@ func TestParseDMARC(t *testing.T) {
 		{"trailing semicolon", "v=DMARC1; p=none;", "none", "", "r", true},
 		{"spaces", "v = DMARC1 ; p = none", "none", "", "r", true},
 		{"unknown tags", "v=DMARC1; p=none; rua=mailto:r@example.com; x=y; pct=50", "none", "", "r", true},
-		{"missing p", "v=DMARC1; rua=mailto:r@example.com", "", "", "", false},
+		{"missing p", "v=DMARC1; aspf=s", "", "", "", false},
+		{"missing p with rua counts as none", "v=DMARC1; rua=mailto:r@example.com", "none", "", "r", true},
 		{"invalid p", "v=DMARC1; p=block", "", "", "", false},
-		{"invalid sp", "v=DMARC1; p=none; sp=x", "", "", "", false},
-		{"invalid aspf", "v=DMARC1; p=none; aspf=x", "", "", "", false},
-		{"invalid adkim", "v=DMARC1; p=none; adkim=strict", "", "", "", false},
+		{"invalid p with rua counts as none", "v=DMARC1; p=block; rua=mailto:r@example.com", "none", "", "r", true},
+		{"invalid sp", "v=DMARC1; p=reject; sp=x", "", "", "", false},
+		{"invalid sp with rua counts as none", "v=DMARC1; p=reject; sp=x; rua=mailto:r@example.com", "none", "", "r", true},
+		{"invalid aspf falls back to relaxed", "v=DMARC1; p=reject; aspf=x", "reject", "", "r", true},
+		{"invalid adkim is ignored", "v=DMARC1; p=reject; adkim=strict", "reject", "", "r", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, sp, aspf, ok := parseDMARC(tc.record)
@@ -119,6 +122,7 @@ func TestSenderDomainDNSCheck(t *testing.T) {
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	target := customdomain.Target{Name: "smtp.example.net", Address: "203.0.113.10", Reported: []string{"smtp.example.net"}}
 	spfOK := map[string][]string{"smtp.example.net": {"v=spf1 ip4:203.0.113.10 -all"}}
+	oldHelo := "smtp-old.example.net"
 	ago := func(d time.Duration) *time.Time { t := now.Add(-d); return &t }
 	merge := func(maps ...map[string][]string) map[string][]string {
 		out := map[string][]string{}
@@ -289,6 +293,16 @@ func TestSenderDomainDNSCheck(t *testing.T) {
 		{
 			name: "stale check means standard", domain: "example.com", target: target,
 			bounces: map[string]BounceDomain{"example.com": {Name: "bounces.example.com", State: BounceDomainActive, LastOKAt: ago(4 * time.Hour)}},
+			dns:     fakeMailDNS{txt: spfOK},
+			check: func(t *testing.T, c SenderDomainDNSCheck, _ *fakeMailDNS) {
+				if c.SPF.EnvelopeKind != EnvelopeStandard || c.SPF.EnvelopeDomain != "smtp.example.net" {
+					t.Fatalf("%+v", c.SPF)
+				}
+			},
+		},
+		{
+			name: "bounce domain last seen pointing at another HELO name means standard", domain: "example.com", target: target,
+			bounces: map[string]BounceDomain{"example.com": {Name: "bounces.example.com", State: BounceDomainActive, LastOKAt: ago(time.Hour), ObservedTarget: &oldHelo}},
 			dns:     fakeMailDNS{txt: spfOK},
 			check: func(t *testing.T, c SenderDomainDNSCheck, _ *fakeMailDNS) {
 				if c.SPF.EnvelopeKind != EnvelopeStandard || c.SPF.EnvelopeDomain != "smtp.example.net" {

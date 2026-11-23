@@ -190,11 +190,14 @@ func isDMARCRecord(txt string) bool {
 	return ok && strings.EqualFold(strings.TrimSpace(key), "v") && strings.TrimSpace(value) == "DMARC1"
 }
 
-// parseDMARC reads the tags the check reports. Tag names and the values of
-// p, sp, aspf and adkim are case-insensitive. ok is false without a valid p
-// or with an invalid sp, aspf or adkim. aspf defaults to relaxed.
+// parseDMARC reads the tags the check reports, as a receiver would (RFC 7489
+// 6.3 and 6.6.3). Tag names and the values of p, sp and aspf are
+// case-insensitive. An invalid aspf is discarded in favour of relaxed. A
+// record with no valid p, or with an invalid sp, counts as p=none when it has
+// a rua tag; without one, receivers apply no DMARC and ok is false.
 func parseDMARC(record string) (p, sp, aspf string, ok bool) {
 	aspf = "r"
+	spInvalid, hasRUA := false, false
 	for i, tag := range strings.Split(record, ";") {
 		key, value, found := strings.Cut(tag, "=")
 		key = strings.ToLower(strings.TrimSpace(key))
@@ -204,25 +207,28 @@ func parseDMARC(record string) (p, sp, aspf string, ok bool) {
 		value = strings.ToLower(strings.TrimSpace(value))
 		switch key {
 		case "p", "sp":
-			if value != "none" && value != "quarantine" && value != "reject" {
-				return "", "", "", false
-			}
-			if key == "p" {
+			valid := value == "none" || value == "quarantine" || value == "reject"
+			switch {
+			case key == "p" && valid:
 				p = value
-			} else {
+			case key == "sp" && valid:
 				sp = value
+			case key == "sp":
+				spInvalid = true
 			}
-		case "aspf", "adkim":
-			if value != "r" && value != "s" {
-				return "", "", "", false
-			}
-			if key == "aspf" {
+		case "aspf":
+			if value == "r" || value == "s" {
 				aspf = value
 			}
+		case "rua":
+			hasRUA = value != ""
 		}
 	}
-	if p == "" {
-		return "", "", "", false
+	if p == "" || spInvalid {
+		if !hasRUA {
+			return "", "", "", false
+		}
+		p, sp = "none", ""
 	}
 	return p, sp, aspf, true
 }
@@ -230,12 +236,19 @@ func parseDMARC(record string) (p, sp, aspf string, ok bool) {
 // bounceDomainInUse is the bounce domain the app's mail from domain would use
 // now: the most specific one, of the domain or a parent sender domain, that
 // is active and passed a check within the freshness window (the claim's
-// customReturnPath, without its check of the target and of receiving domains).
-func bounceDomainInUse(domain string, bounces map[string]BounceDomain, now time.Time) (string, bool) {
+// customReturnPath, without its check of receiving domains). A row whose last
+// check saw the CNAME point at another name than target (the HELO name mail
+// is sent from now) is skipped, as the claim skips it.
+func bounceDomainInUse(domain, target string, bounces map[string]BounceDomain, now time.Time) (string, bool) {
 	for name := domain; name != ""; _, name, _ = strings.Cut(name, ".") {
-		if b, ok := bounces[name]; ok && b.State == BounceDomainActive && b.LastOKAt != nil && now.Sub(*b.LastOKAt) < customdomain.Freshness {
-			return b.Name, true
+		b, ok := bounces[name]
+		if !ok || b.State != BounceDomainActive || b.LastOKAt == nil || now.Sub(*b.LastOKAt) >= customdomain.Freshness {
+			continue
 		}
+		if b.ObservedTarget != nil && *b.ObservedTarget != target {
+			continue
+		}
+		return b.Name, true
 	}
 	return "", false
 }
@@ -247,7 +260,7 @@ func checkSenderSPF(ctx context.Context, dns MailAuthResolver, domain string, ta
 		return SenderDomainSPF{Result: SPFNoSendingIP}
 	}
 	out := SenderDomainSPF{EnvelopeDomain: target.Name, EnvelopeKind: EnvelopeStandard}
-	if name, ok := bounceDomainInUse(domain, bounces, now); ok {
+	if name, ok := bounceDomainInUse(domain, target.Name, bounces, now); ok {
 		out.EnvelopeDomain, out.EnvelopeKind = name, EnvelopeBounceDomain
 	}
 	result, _ := spf.CheckHostWithSender(net.IP(addr.Unmap().AsSlice()), target.Name, "postmaster@"+out.EnvelopeDomain, spf.WithContext(ctx), spf.WithResolver(dns))

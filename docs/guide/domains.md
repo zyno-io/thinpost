@@ -113,12 +113,12 @@ Choose **Check** under **SPF & DMARC** on a verified domain that has a key (API:
 - `monitoring`: `p=none` applies. This is a fine place to start, and the console doesn't nag about it.
 - `missing`: neither the domain nor its organizational domain has a record.
 - `multiple`: more than one `v=DMARC1` record at one name. Receivers ignore them all, so keep exactly one. Thinpost doesn't look past them.
-- `invalid`: no valid `p=`, or an invalid `sp=`, `aspf` or `adkim`.
+- `invalid`: no valid `p=`, or an invalid `sp=`, and no `rua=`. Receivers apply no DMARC to such a record. With `rua=` it counts as `p=none` (RFC 7489 6.6.3), and an invalid `aspf` is read as relaxed.
 - `unavailable`: the lookup failed. Try again.
 
 Other TXT records at `_dmarc` (verification tokens, for example) are ignored, and a record is only a DMARC record when it starts with `v=DMARC1`.
 
-**SPF.** Thinpost evaluates the app's sending IP exactly as a receiver would (RFC 7208, including `include:`, `redirect=` and the 10-lookup limit). The name checked is the envelope domain the domain's mail uses now: the [bounce domain](#your-own-bounce-domain) while it is active and was checked within 3 hours, otherwise the HELO name of the sending IP. `aligned` is true when SPF passes and that name lines up with the domain under the DMARC record's `aspf` (relaxed when there is no usable record). A pass that doesn't line up is fine, because DKIM lines up. If the sending worker hasn't reported an IP yet, the result is `no_sending_ip`.
+**SPF.** Thinpost evaluates the app's sending IP exactly as a receiver would (RFC 7208, including `include:`, `redirect=` and the 10-lookup limit). The name checked is the envelope domain the domain's mail uses now: the [bounce domain](#your-own-bounce-domain) while it is active, was checked within 3 hours and last pointed at the sending IP's HELO name, otherwise the HELO name of the sending IP. `aligned` is true when SPF passes and that name lines up with the domain under the DMARC record's `aspf` (relaxed when there is no usable record). A pass that doesn't line up is fine, because DKIM lines up. If the sending worker hasn't reported an IP yet, the result is `no_sending_ip`.
 
 The domain's own SPF record is not checked, and Thinpost never needs to be in it: no Thinpost mail is checked against it. If SPF doesn't pass, the fix is in the DNS records of the sending IP's HELO name, which your Thinpost administrator manages (see [DNS for a sending IP](/guide/sending-ips#dns-for-a-sending-ip)).
 

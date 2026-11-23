@@ -79,7 +79,7 @@ export function dmarcLine(check: SenderDomainDnsCheck): CheckLine {
             return {
                 label: 'Not valid',
                 tone: 'warning',
-                message: `The DMARC record at _dmarc.${at} isn't valid, so receivers may ignore it. It must start with v=DMARC1 and have p=none, p=quarantine or p=reject.`
+                message: `The DMARC record at _dmarc.${at} isn't valid, so receivers ignore it. It needs p=none, p=quarantine or p=reject (or an rua= reporting address, which counts as p=none).`
             };
         default:
             return { label: "Couldn't check", tone: '', message: "Thinpost couldn't look up DMARC just now. Try again in a moment." };
@@ -109,7 +109,7 @@ export function spfLine(check: SenderDomainDnsCheck): CheckLine {
             return {
                 label: 'Passes',
                 tone: 'success',
-                message: `SPF passes for ${env}, Thinpost's standard bounce address. It isn't your domain, so SPF doesn't line up with DMARC. That's fine: DKIM lines up instead. To have SPF line up too, add a bounce domain below.`
+                message: `SPF passes for ${env}, Thinpost's standard bounce address. It isn't your domain, so SPF doesn't line up with DMARC. That's fine: DKIM lines up instead. To have SPF line up too, use a bounce domain of yours (see below).`
             };
         case 'temperror':
             return { label: "Couldn't check", tone: '', message: "Thinpost couldn't look up SPF just now. Try again in a moment." };

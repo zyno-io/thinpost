@@ -993,7 +993,8 @@ paths:
         is not looked past (RFC 7489 6.6.3). spf: a full RFC 7208 evaluation (include:, redirect=,
         the 10-lookup limit) of the app's sending IP against the envelope domain the domain's mail
         uses now: the most specific bounce domain of the domain or a parent sender domain that is
-        active and passed a check within 3 hours, otherwise the sending IP's HELO name. aligned is
+        active, passed a check within 3 hours and last pointed at the sending IP's HELO name,
+        otherwise that HELO name. aligned is
         true when SPF passes and the envelope domain aligns with the domain under the DMARC
         record's aspf (relaxed without a usable record). The domain's own SPF record is not
         checked: no Thinpost mail is checked against it. 404 when the domain is not one of the
@@ -2795,7 +2796,7 @@ components:
         status:
           type: string
           enum: [ok, monitoring, missing, multiple, invalid, unavailable]
-          description: ok means p=quarantine or p=reject applies; monitoring means p=none applies; missing means neither the domain nor its organizational domain has a record; multiple means more than one v=DMARC1 record at one name (receivers ignore them all); invalid means no valid p=, or an invalid sp=, aspf or adkim; unavailable means a lookup failed.
+          description: ok means p=quarantine or p=reject applies; monitoring means p=none applies; missing means neither the domain nor its organizational domain has a record; multiple means more than one v=DMARC1 record at one name (receivers ignore them all); invalid means no valid p= or an invalid sp=, and no rua= (with rua= the record counts as p=none, RFC 7489 6.6.3; an invalid aspf is read as relaxed); unavailable means a lookup failed.
         org_domain: { type: string, description: The organizational domain; equal to domain when it is one. }
         record_domain: { type: string, description: Where the record was found. Absent for missing and unavailable. }
         record: { type: string, maxLength: 1024, description: The record text, cut at 1024 bytes. Present for ok, monitoring and invalid. }

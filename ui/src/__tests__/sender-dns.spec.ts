@@ -82,7 +82,7 @@ describe('spfLine', () => {
         const standard = spfLine(check());
         expect(standard.tone).toBe('success');
         expect(standard.message).toContain("Thinpost's standard bounce address");
-        expect(standard.message).toContain('add a bounce domain below');
+        expect(standard.message).toContain('use a bounce domain of yours');
     });
 
     it.each([
