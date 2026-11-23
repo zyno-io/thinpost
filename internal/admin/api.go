@@ -484,6 +484,9 @@ type Handler struct {
 	// CNAME serves the bounce-domain check; without it that check is
 	// unavailable.
 	CNAME customdomain.Resolver
+	// MailAuthDNS serves the advisory SPF and DMARC check of a sending domain;
+	// without it that check is unavailable.
+	MailAuthDNS MailAuthResolver
 	// TrackingChecker serves the tracking-domain check; without it that check
 	// is unavailable. Only replicas with tracking configured have one.
 	TrackingChecker TrackingDomainChecker
@@ -761,7 +764,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(path) >= 8 && len(path) <= 10 && path[5] == "domains" {
-		if h.bounceDomainRoute(w, r, principal.Subject, appID, path[6:]) || h.trackingDomainRoute(w, r, principal.Subject, appID, path[6:]) || h.domainKeyRoute(w, r, principal.Subject, appID, path[6:]) {
+		if h.bounceDomainRoute(w, r, principal.Subject, appID, path[6:]) || h.trackingDomainRoute(w, r, principal.Subject, appID, path[6:]) || h.domainKeyRoute(w, r, principal.Subject, appID, path[6:]) || h.senderDomainDNSRoute(w, r, appID, path[6:]) {
 			return
 		}
 	}

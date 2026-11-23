@@ -34,7 +34,7 @@ Thinpost accepts the record when exactly one TXT record exists at that name, it 
 A failed DNS lookup is `503`; try again.
 
 ::: warning What verification does not prove
-Verification shows that the resolver Thinpost uses returned the expected record. Thinpost does not validate DNSSEC. A verified domain does not mean SPF, DMARC or reverse DNS are configured, and the console says so. Domain removal is not available yet.
+Verification shows that the resolver Thinpost uses returned the expected record. Thinpost does not validate DNSSEC. A verified domain does not mean SPF, DMARC or reverse DNS are configured; [check them](#check-spf-and-dmarc) separately. Domain removal is not available yet.
 :::
 
 Receiving-domain verification for [inbound mail](/guide/inbound) is separate and uses its own `_thinpost` TXT name. Sender domains no longer use that name.
@@ -75,7 +75,7 @@ See [Key and certificate rotation](/operations/rotation).
 
 ## SPF and bounces
 
-You do not add Thinpost to your own domain's SPF record. Every message uses `b+<token>@<bounce domain>` as its envelope sender, so receivers check SPF against the **bounce domain**. By default that is the HELO name of the sending IP (see [Sending IPs](/guide/sending-ips#dns-for-a-sending-ip)). If you want SPF to pass for your own domain too, give the sending domain [its own bounce domain](#your-own-bounce-domain).
+You do not add Thinpost to your own domain's SPF record. Every message uses `b+<token>@<bounce domain>` as its envelope sender, so receivers check SPF against the **bounce domain**. By default that is the HELO name of the sending IP (see [Sending IPs](/guide/sending-ips#dns-for-a-sending-ip)). If you want SPF to pass for your own domain too, give the sending domain [its own bounce domain](#your-own-bounce-domain). To see whether SPF passes for the IP your app sends from, use the [SPF and DMARC check](#check-spf-and-dmarc).
 
 ## Your own bounce domain
 
@@ -103,9 +103,28 @@ If a record is removed or changed, mail falls back to the standard bounce addres
 
 **DMARC.** The bounce domain gives **relaxed** SPF alignment only: `bounces.example.com` and `example.com` share an organizational domain. If your DMARC record asks for strict SPF alignment (`aspf=s`), SPF does not align, and DMARC still passes through DKIM, which signs with the exact `From` domain. Feedback-loop reports and other bounces to the custom name arrive and are matched the same way as before; the [feedback mailbox](/guide/suppressions#spam-complaints-and-feedback-loops) address does not change.
 
+## Check SPF and DMARC
+
+Choose **Check** under **SPF & DMARC** on a verified domain that has a key (API: `POST /api/v1/apps/{appId}/domains/{domain}/check-dns`) to see what receivers find. The control plane reads public DNS within 8 seconds. The check is advisory: nothing is stored, logged or audited, and it never affects verifying, signing or sending. Domains that are not verified can be checked through the API too.
+
+**DMARC.** Thinpost reads the record at `_dmarc.<domain>`. If the domain has none, it reads the record at the organizational domain (by the public suffix list), and that record's `sp=` applies if it has one. The result is one of:
+
+- `ok`: `p=quarantine` or `p=reject` applies.
+- `monitoring`: `p=none` applies. This is a fine place to start, and the console doesn't nag about it.
+- `missing`: neither the domain nor its organizational domain has a record.
+- `multiple`: more than one `v=DMARC1` record at one name. Receivers ignore them all, so keep exactly one. Thinpost doesn't look past them.
+- `invalid`: no valid `p=`, or an invalid `sp=`, `aspf` or `adkim`.
+- `unavailable`: the lookup failed. Try again.
+
+Other TXT records at `_dmarc` (verification tokens, for example) are ignored, and a record is only a DMARC record when it starts with `v=DMARC1`.
+
+**SPF.** Thinpost evaluates the app's sending IP exactly as a receiver would (RFC 7208, including `include:`, `redirect=` and the 10-lookup limit). The name checked is the envelope domain the domain's mail uses now: the [bounce domain](#your-own-bounce-domain) while it is active and was checked within 3 hours, otherwise the HELO name of the sending IP. `aligned` is true when SPF passes and that name lines up with the domain under the DMARC record's `aspf` (relaxed when there is no usable record). A pass that doesn't line up is fine, because DKIM lines up. If the sending worker hasn't reported an IP yet, the result is `no_sending_ip`.
+
+The domain's own SPF record is not checked, and Thinpost never needs to be in it: no Thinpost mail is checked against it. If SPF doesn't pass, the fix is in the DNS records of the sending IP's HELO name, which your Thinpost administrator manages (see [DNS for a sending IP](/guide/sending-ips#dns-for-a-sending-ip)).
+
 ## DMARC
 
-Thinpost does not publish or check your DMARC policy. Messages are DKIM-signed with `d=` set to the exact `From` domain, so they align on DKIM even when your DMARC record asks for strict alignment (`adkim=s`). Publish a DMARC record on the sender domain, starting with `p=none` and aggregate reporting, and tighten it as you confirm all your mail authenticates.
+Thinpost does not publish your DMARC record, and nothing it does depends on it; the [check](#check-spf-and-dmarc) reports what receivers find. Messages are DKIM-signed with `d=` set to the exact `From` domain, so they align on DKIM even when your DMARC record asks for strict alignment (`adkim=s`). Publish a DMARC record on the sender domain, starting with `p=none` and aggregate reporting, and tighten it as you confirm all your mail authenticates.
 
 By default SPF alignment depends on the bounce domain, which belongs to the sending IP and is not your domain, so mail passes DMARC through DKIM. With [your own bounce domain](#your-own-bounce-domain), SPF also aligns under DMARC's usual relaxed check. If your DMARC record asks for strict SPF (`aspf=s`), DKIM still carries it.
 

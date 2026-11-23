@@ -24,7 +24,7 @@ This is a statement of direction, not a commitment or a schedule. Items are grou
 - Coordinated rollover and revocation for the private CA that secures the control channel, and verified certificate renewal.
 - A maintenance command to re-seal the SMTP retry-protection secret under a newer object keyring version, so old versions can be retired.
 - Lifecycle management for shared key rings: the idempotency fingerprint key, the bounce key ring and the object-encryption key ring, including inventory of old key versions.
-- Scheduled DKIM key rotation (Thinpost generates keys and rotates them on request today), and sender-domain readiness checks for SPF, DMARC and DNSSEC policy.
+- Scheduled DKIM key rotation (Thinpost generates keys and rotates them on request today), and a sender-domain readiness check for DNSSEC policy (SPF and DMARC have an on-demand check today).
 - Sender-domain removal.
 - Optional DNS-provider automation for domain onboarding.
 

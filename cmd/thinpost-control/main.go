@@ -139,7 +139,7 @@ func run() error {
 		return errors.New("operator identity initialization failed")
 	}
 	repository := &postgres.Repository{DB: db, Generation: config.Generation, WebhookDestinations: config.WebhookDestinations}
-	operator := &admin.Handler{Authenticator: auth, Store: repository, WebhookHistory: repository, PolicyHolds: repository, TrackingHolds: repository, AppStatus: repository, Apps: repository, Suppressions: repository, Operations: repository, AuthConfig: &config.PublicAuth, DNS: net.DefaultResolver, MX: net.DefaultResolver, ReverseDNS: net.DefaultResolver, CNAME: net.DefaultResolver, AdminHost: config.AdminHost, WebhookDestinations: config.WebhookDestinations}
+	operator := &admin.Handler{Authenticator: auth, Store: repository, WebhookHistory: repository, PolicyHolds: repository, TrackingHolds: repository, AppStatus: repository, Apps: repository, Suppressions: repository, Operations: repository, AuthConfig: &config.PublicAuth, DNS: net.DefaultResolver, MX: net.DefaultResolver, ReverseDNS: net.DefaultResolver, CNAME: net.DefaultResolver, MailAuthDNS: net.DefaultResolver, AdminHost: config.AdminHost, WebhookDestinations: config.WebhookDestinations}
 	// Signing keys live in the database, sealed under the object keyring, so
 	// signing (and with it submission, tracking and message preparation) is
 	// available exactly when the keyring is. keys stays nil without it.

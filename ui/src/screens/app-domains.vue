@@ -17,7 +17,8 @@
                             with that key, so DKIM passes and lines up with DMARC.
                         </p>
                         <p>
-                            Verifying doesn't set up or check SPF, DMARC or reverse DNS, so it doesn't promise mail will reach inboxes. To change a
+                            Verifying doesn't set up SPF, DMARC or reverse DNS, so it doesn't promise mail will reach inboxes. Choose Check under
+                            SPF &amp; DMARC to see what receivers find for a verified domain; it only reads DNS and never changes how mail is sent. To change a
                             domain's key, choose Rotate key: add the new record first, then switch, so there's no gap. Domains can't be removed here.
                         </p>
                         <p>
@@ -85,11 +86,13 @@
                             <th scope="col">DKIM key</th>
                             <th scope="col">Added</th>
                             <th scope="col">Verified</th>
+                            <th scope="col">SPF &amp; DMARC</th>
                             <th scope="col"><span class="sr-only">Actions</span></th>
                         </tr>
                     </thead>
                     <tbody>
-                        <tr v-for="domain in domains" :key="domain.name">
+                        <template v-for="domain in domains" :key="domain.name">
+                        <tr>
                             <th scope="row" class="name">{{ domain.name }}</th>
                             <td>
                                 <span class="tag" :class="statusClass(domain)">{{ statusLabel(domain) }}</span>
@@ -110,6 +113,15 @@
                             </td>
                             <td>
                                 <time v-if="domain.verified_at" :datetime="domain.verified_at">{{ formatDateTime(domain.verified_at) }}</time>
+                                <span v-else class="muted">—</span>
+                            </td>
+                            <td>
+                                <div v-if="domain.active && domain.active_key" class="dns-cell">
+                                    <button type="button" class="btn sm" data-testid="check-sender-dns" :disabled="!isSignedIn || checkingDns !== null" @click="checkDns(domain)">
+                                        {{ checkingDns === domain.name ? 'Checking…' : dnsChecks[domain.name] ? 'Check again' : 'Check' }}<span class="sr-only"> SPF and DMARC for {{ domain.name }}</span>
+                                    </button>
+                                    <span v-if="dnsViews[domain.name]" class="tag" :class="dnsViews[domain.name]!.summary.tone" data-testid="sender-dns-summary">{{ dnsViews[domain.name]!.summary.text }}</span>
+                                </div>
                                 <span v-else class="muted">—</span>
                             </td>
                             <td class="actions">
@@ -153,6 +165,24 @@
                                 </button>
                             </td>
                         </tr>
+                        <tr v-if="dnsViews[domain.name] || dnsErrors[domain.name]" class="detail" :data-dns-detail="domain.name">
+                            <td colspan="7">
+                                <ul v-if="dnsViews[domain.name]" class="checks" data-testid="sender-dns-results">
+                                    <li data-testid="dmarc-result">
+                                        <span class="tag" :class="dnsViews[domain.name]!.dmarc.tone">{{ dnsViews[domain.name]!.dmarc.label }}</span>
+                                        <strong>DMARC:</strong> {{ dnsViews[domain.name]!.dmarc.message }}
+                                        <template v-if="dnsChecks[domain.name]!.dmarc.record"> Currently: <code>{{ dnsChecks[domain.name]!.dmarc.record }}</code></template>
+                                    </li>
+                                    <li data-testid="spf-result">
+                                        <span class="tag" :class="dnsViews[domain.name]!.spf.tone">{{ dnsViews[domain.name]!.spf.label }}</span>
+                                        <strong>SPF:</strong> {{ dnsViews[domain.name]!.spf.message }}
+                                    </li>
+                                    <li class="hint">This check reads public DNS and doesn't change anything.</li>
+                                </ul>
+                                <p v-if="dnsErrors[domain.name]" class="note warn">{{ dnsErrors[domain.name]!.message }}</p>
+                            </td>
+                        </tr>
+                        </template>
                     </tbody>
                 </table>
             </div>
@@ -192,15 +222,16 @@
 
 <script lang="ts" setup>
 import { showConfirm, showToast } from '@zyno-io/vue-foundation';
-import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue';
 
 import { apiErrorReason, apiErrorStatus, describeApiError, InvalidResponseError, type ApiErrorDescription } from '@/api-errors';
 import { useAppContext } from '@/app-context';
 import { authState } from '@/auth';
 import { parseDkimKey, type DkimKeyView } from '@/dkim';
 import { formatDateTime } from '@/format';
-import { DefaultApi, type Domain } from '@/openapi-client-generated';
+import { DefaultApi, type Domain, type SenderDomainDnsCheck } from '@/openapi-client-generated';
 import { loadRuntimeFeatures, runtimeTracking } from '@/runtime-features';
+import { dmarcLine, parseSenderDnsCheck, senderDnsSummary, spfLine } from '@/sender-dns';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import BounceDomainPanel from '@/shared/components/bounce-domain-panel.vue';
 import DkimRecord from '@/shared/components/dkim-record.vue';
@@ -228,6 +259,18 @@ const isRequestOpen = ref(false);
 const isRequesting = ref(false);
 const requestError = ref<ApiErrorDescription | null>(null);
 const busy = ref<{ domain: string; action: Action } | null>(null);
+
+/** The advisory SPF and DMARC checks, by domain. They never gate or are gated by the DKIM actions. */
+const dnsChecks = reactive<Record<string, SenderDomainDnsCheck | undefined>>({});
+const dnsErrors = reactive<Record<string, ApiErrorDescription | undefined>>({});
+const checkingDns = ref<string | null>(null);
+const dnsViews = computed(() => {
+    const views: Record<string, { summary: ReturnType<typeof senderDnsSummary>; dmarc: ReturnType<typeof dmarcLine>; spf: ReturnType<typeof spfLine> }> = {};
+    for (const [name, check] of Object.entries(dnsChecks)) {
+        if (check) views[name] = { summary: senderDnsSummary(check), dmarc: dmarcLine(check), spf: spfLine(check) };
+    }
+    return views;
+});
 
 /** Domains whose current (active) record the person asked to see. A pending record is always shown. */
 const shown = ref<Set<string>>(new Set());
@@ -321,6 +364,9 @@ async function load() {
     actionError.value = null;
     domains.value = null;
     shown.value = new Set();
+    for (const name of Object.keys(dnsChecks)) delete dnsChecks[name];
+    for (const name of Object.keys(dnsErrors)) delete dnsErrors[name];
+    checkingDns.value = null;
 
     try {
         const response = await DefaultApi.listAppDomains({ path: { appId: id } });
@@ -355,6 +401,30 @@ async function reloadDomains() {
         domainsError.value = describeApiError(err, { notFound: 'The app was not found.' });
     } finally {
         if (thisReload === reloadSeq) isReloading.value = false;
+    }
+}
+
+async function checkDns(domain: Domain) {
+    const id = appId.value;
+    if (checkingDns.value !== null) return;
+    const seq = loadSeq;
+    const name = domain.name;
+    checkingDns.value = name;
+    dnsErrors[name] = undefined;
+    try {
+        const { data } = await DefaultApi.checkAppDomainDns({ path: { appId: id, domain: name } });
+        const check = parseSenderDnsCheck(data, name);
+        if (isUnmounted || seq !== loadSeq) return;
+        dnsChecks[name] = check;
+    } catch (err) {
+        if (isUnmounted || seq !== loadSeq) return;
+        dnsChecks[name] = undefined;
+        dnsErrors[name] = describeApiError(err, {
+            notFound: `${name} wasn't found for this app. Reload to see where it stands.`,
+            unavailable: "Thinpost couldn't look up DNS just now. Try again in a moment."
+        });
+    } finally {
+        if (seq === loadSeq) checkingDns.value = null;
     }
 }
 
@@ -584,6 +654,37 @@ async function cancelKey(domain: Domain) {
         color: var(--text-3);
         font-size: 12px;
     }
+}
+
+.dns-cell {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 6px;
+}
+
+.detail td {
+    padding-top: 0;
+}
+
+.note {
+    margin: 2px 0;
+    font-size: 12px;
+    color: var(--text-3);
+
+    &.warn {
+        color: var(--warning, var(--text-2));
+    }
+}
+
+.checks {
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
 }
 
 .actions {
