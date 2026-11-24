@@ -90,8 +90,11 @@ function hasMenuItem(label: string) {
     return menuItems().some(b => b.text().includes(label));
 }
 
+/** The DKIM record card's [name, value] as shown, or [] when no card is open. */
 function inputValues() {
-    return wrapper!.findAll<HTMLInputElement>('input[readonly]').map(i => i.element.value);
+    const name = wrapper!.find('[data-testid="dkim-record-name"] .name');
+    const value = wrapper!.find('[data-testid="dkim-record-value"]');
+    return name.exists() ? [name.text(), value.text()] : [];
 }
 
 async function submitDomain(value: string) {
@@ -166,24 +169,54 @@ describe('sending domains screen', () => {
         expect(api.requestAppDomain).toHaveBeenCalledWith({ path: { appId: APP_ID }, body: { domain: 'mail.example.com' } });
         expect(inputValues()).toEqual([keyOne.dns_name, LONG_VALUE]);
         expect(wrapper!.text()).toContain('Waiting for DNS record');
-        expect(wrapper!.text()).toContain('Keep exactly one record at this name.');
+        expect(wrapper!.find('[data-testid="dkim-status"]').text()).toBe('Waiting for DNS record');
+        expect(wrapper!.find('[data-testid="dkim-note"]').text()).toBe('Add this record at your DNS provider, then choose Verify.');
         expect(api.listAppDomains).toHaveBeenCalledTimes(2);
 
-        await button('Copy Record value').trigger('click');
+        const status = () => wrapper!.find('[data-testid="dkim-copy-status"]');
+        expect(status().attributes('role')).toBe('status');
+        await wrapper!.find('[data-testid="dkim-copy-name"]').trigger('click');
+        await flushPromises();
+        expect(writeText).toHaveBeenLastCalledWith(keyOne.dns_name);
+        expect(status().text()).toBe('Copied');
+        expect(vf.showToast).toHaveBeenLastCalledWith(expect.objectContaining({ message: 'Copied DKIM record name' }));
+
+        await wrapper!.find('[data-testid="dkim-copy-value"]').trigger('click');
         await flushPromises();
         expect(writeText).toHaveBeenLastCalledWith(LONG_VALUE);
-        expect(wrapper!.text()).toContain('Copied to clipboard.');
 
         // The split option shows and copies the value as quoted strings of at most 255 characters.
         await wrapper!.find('input[type="checkbox"]').setValue(true);
-        const split = inputValues()[1];
-        expect(split).toBe(`"${LONG_VALUE.slice(0, 255)}" "${LONG_VALUE.slice(255)}"`);
-        await button('Copy Record value (split into 255-character strings)').trigger('click');
+        const split = `"${LONG_VALUE.slice(0, 255)}" "${LONG_VALUE.slice(255)}"`;
+        expect(inputValues()[1]).toBe(split);
+        await wrapper!.find('[data-testid="dkim-copy-value"]').trigger('click');
         await flushPromises();
         expect(writeText).toHaveBeenLastCalledWith(split);
+        // The name is never split.
+        await wrapper!.find('[data-testid="dkim-copy-name"]').trigger('click');
+        await flushPromises();
+        expect(writeText).toHaveBeenLastCalledWith(keyOne.dns_name);
+
+        // The explanation lives in the help, not on the card.
+        expect(wrapper!.find('article.record').text()).not.toContain('Some DNS providers');
+        await openHelp(wrapper!, 'DKIM records');
+        expect(document.body.textContent).toContain('Some DNS providers only take TXT values in pieces of 255 characters or fewer');
 
         expect(setItem.mock.calls.flat().join(' ')).not.toContain(LONG_VALUE);
         setItem.mockRestore();
+    });
+
+    it('selects the value for a manual copy when copying fails', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [pending] } });
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) }, configurable: true });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await wrapper!.find('[data-testid="dkim-copy-value"]').trigger('click');
+        await flushPromises();
+        expect(wrapper!.find('[data-testid="dkim-copy-status"]').text()).toBe("Couldn't copy");
+        expect(vf.showToast).toHaveBeenLastCalledWith(expect.objectContaining({ message: "Couldn't copy" }));
+        const selected = window.getSelection()!;
+        expect(selected.rangeCount).toBe(1);
+        expect(selected.getRangeAt(0).commonAncestorContainer).toBe(wrapper!.find('[data-testid="dkim-record-value"]').element);
     });
 
     it('rejects an invalid domain without calling the API', async () => {
@@ -301,12 +334,16 @@ describe('sending domains screen', () => {
         expect(api.createAppDomainDkimKey).toHaveBeenCalledTimes(1);
         expect(wrapper!.text()).toContain('New DKIM record for mail.example.com');
         expect(wrapper!.text()).toContain('New key thinpost2: waiting for its DNS record.');
+        expect(wrapper!.find('[data-testid="dkim-status"]').text()).toBe('Waiting for DNS record');
+        expect(wrapper!.find('[data-testid="dkim-note"]').text()).toBe('Add this as a new record, then choose Check record. Keep the current record until you switch.');
         expect(inputValues()).toEqual([keyTwo.dns_name, keyTwo.dns_value]);
 
         await button('Check record').trigger('click');
         await flushPromises();
         expect(api.verifyAppDomain).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' } });
         expect(wrapper!.text()).toContain('New key thinpost2: record found, ready to switch.');
+        expect(wrapper!.find('[data-testid="dkim-status"]').text()).toBe('Ready to switch');
+        expect(wrapper!.find('[data-testid="dkim-note"]').text()).toBe('Keep the current record until you switch.');
 
         vf.showConfirm.mockResolvedValueOnce(true);
         await button('Switch').trigger('click');
@@ -383,6 +420,8 @@ describe('sending domains screen', () => {
         await menuItem('Show record').trigger('click');
         await flushPromises();
         expect(inputValues()).toEqual([keyOne.dns_name, LONG_VALUE]);
+        expect(wrapper!.find('[data-testid="dkim-status"]').text()).toBe('In use');
+        expect(wrapper!.find('[data-testid="dkim-note"]').exists()).toBe(false);
         // The menu closed and focus went back to its trigger.
         expect(menuItems()).toHaveLength(0);
         await openRowMenu();
