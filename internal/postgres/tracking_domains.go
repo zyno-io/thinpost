@@ -132,7 +132,7 @@ func (r *Repository) SetTrackingDomain(ctx context.Context, actor, appID, sender
 		return admin.TrackingDomain{}, admin.ErrAppPaused
 	}
 	var verified bool
-	err = tx.QueryRowContext(ctx, `SELECT active FROM sender_domains WHERE app_id=$1 AND domain=$2 FOR SHARE`, appID, senderDomain).Scan(&verified)
+	err = tx.QueryRowContext(ctx, `SELECT active FROM sender_domains WHERE app_id=$1 AND domain=$2 AND removed_at IS NULL FOR SHARE`, appID, senderDomain).Scan(&verified)
 	if errors.Is(err, sql.ErrNoRows) {
 		return admin.TrackingDomain{}, admin.ErrNotFound
 	}

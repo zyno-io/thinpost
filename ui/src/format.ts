@@ -5,6 +5,14 @@ export function formatDateTime(value: string): string {
     return Number.isNaN(date.getTime()) ? value : dateTimeFormat.format(date);
 }
 
+const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
+
+/** Date only ("Nov 20, 2026"); an unparseable value comes back unchanged. */
+export function formatDate(value: string): string {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : dateFormat.format(date);
+}
+
 const relativeFormat = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto', style: 'short' });
 const RELATIVE_UNITS: Array<[Intl.RelativeTimeFormatUnit, number]> = [
     ['day', 86_400_000],

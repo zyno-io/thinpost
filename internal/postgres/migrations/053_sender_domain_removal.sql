@@ -1,0 +1,26 @@
+-- Schema 53: sender-domain removal.
+--
+-- sender_domains.removed_at marks a soft-removed sender domain. A removed
+-- domain is hidden from the console and every domain endpoint, is never
+-- active, and cannot send. The row is kept because dkim_keys, bounce_domains
+-- and tracking_domains reference it, tracking tombstones must outlive it, and
+-- retired DKIM keys must keep reserving their selectors. Adding the domain
+-- again revives the row as unverified. Removal also retires the active DKIM
+-- key (private key shredded, record kept for its window), deletes a pending
+-- key and the bounce domain, and tombstones the tracking domain.
+--
+-- Deploy review (lock and rollout): the pre hook closes the gate before this
+-- runs. ADD COLUMN of a nullable column with no default is catalog-only (no
+-- rewrite), and the CHECK is NOT VALID so no table scan runs; new and updated
+-- rows are checked. No existing domain has removed_at set, so existing
+-- behavior is unchanged. A replica that predates this release ignores the
+-- column: it would still list a removed domain (as not verified), so deploy
+-- the release to every replica before removing a domain.
+-- Runtime grants: the runtime role already has table-level SELECT, INSERT and
+-- UPDATE on sender_domains, which covers the new column; the collector and
+-- retirement roles get nothing. The DELETE on dkim_keys from schema 46 is used
+-- only for a pending key. No routine or extension is installed.
+-- Recovery: the recovery chain stops at 28, so this is applied by the normal
+-- deploy after "recovery open". Roll forward only.
+ALTER TABLE sender_domains ADD COLUMN removed_at timestamptz;
+ALTER TABLE sender_domains ADD CONSTRAINT sender_domains_removed_inactive CHECK (removed_at IS NULL OR NOT active) NOT VALID;

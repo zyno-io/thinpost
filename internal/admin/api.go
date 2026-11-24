@@ -415,6 +415,27 @@ type DomainChallenge struct {
 	DNSName  string `json:"dns_name"`
 	DNSValue string `json:"dns_value"`
 }
+
+// DomainRemoval is the receipt for removing a sender domain: what the caller
+// can now clean up in DNS, and until when.
+type DomainRemoval struct {
+	Name           string              `json:"name"`
+	RemovedAt      time.Time           `json:"removed_at"`
+	DKIMRecords    []RemovedDKIMRecord `json:"dkim_records"`
+	BounceDomain   *string             `json:"bounce_domain,omitempty"`
+	TrackingDomain *string             `json:"tracking_domain,omitempty"`
+	// KeepRecordsUntil is the latest KeepUntil of DKIMRecords; absent when no
+	// record needs to stay.
+	KeepRecordsUntil *time.Time `json:"keep_records_until,omitempty"`
+}
+
+// RemovedDKIMRecord is a DKIM record of a removed domain. KeepUntil is when it
+// can be deleted; nil means the key never signed, so it can go now.
+type RemovedDKIMRecord struct {
+	Selector  string     `json:"selector"`
+	DNSName   string     `json:"dns_name"`
+	KeepUntil *time.Time `json:"keep_until,omitempty"`
+}
 type TXTResolver interface {
 	LookupTXT(context.Context, string) ([]string, error)
 }
@@ -469,6 +490,11 @@ type Store interface {
 	ActivateDKIMKey(ctx context.Context, actor, appID, domain string, key DKIMKeyRef, switchActive bool) (Domain, error)
 	// CancelDKIMKey deletes a pending key; ErrNotFound when it is not pending.
 	CancelDKIMKey(ctx context.Context, actor, appID, domain, selector string) error
+	// DeleteDomain removes a sender domain from an app (see the postgres
+	// implementation for what that retires). ErrNotFound for an unknown app, an
+	// unknown domain or one already removed; ErrDomainInSMTPPolicy while the
+	// app's SMTP From policy sends as the domain.
+	DeleteDomain(ctx context.Context, actor, appID, domain string) (DomainRemoval, error)
 }
 type Handler struct {
 	Authenticator Authenticator
@@ -761,6 +787,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			method(w, "GET, POST")
 		}
+		return
+	}
+	if len(path) == 7 && path[5] == "domains" && path[6] != "" {
+		h.domainRoute(w, r, principal.Subject, appID, path[6])
 		return
 	}
 	if len(path) >= 8 && len(path) <= 10 && path[5] == "domains" {

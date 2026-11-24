@@ -652,6 +652,7 @@ paths:
       - { $ref: '#/components/parameters/AppId' }
     get:
       operationId: listAppDomains
+      description: The app's sender domains. Removed domains are not listed (deleteAppDomain).
       responses:
         '200':
           description: Sender domains and ownership-verification status
@@ -676,7 +677,8 @@ paths:
         active key and no pending one (use createAppDomainDkimKey to rotate).
         503 when the deployment has no object storage (DKIM keys are sealed with
         its encryption keyring). Audited as domain.dkim_key.created when a key is
-        made.
+        made. A removed domain (deleteAppDomain) comes back unverified, with a new
+        key and a new selector: a retired key's selector is never reused.
       requestBody:
         required: true
         content:
@@ -693,6 +695,49 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DomainChallenge' }
+        default: { $ref: '#/components/responses/Error' }
+  /apps/{appId}/domains/{domain}:
+    parameters:
+      - { $ref: '#/components/parameters/AppId' }
+      - name: domain
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      operationId: deleteAppDomain
+      description: >-
+        Removes a sender domain from the app. Mail from it is refused from now
+        on: a send through the API fails with 422 message_rejected, and SMTP
+        mail is refused or, under a rewriting From policy, rewritten like any
+        other unverified From. Mail not yet signed ends as preparation_failed
+        (reason signing_key) instead of retrying for hours; resending it works
+        once the domain is added again. Mail already signed keeps being
+        delivered. The active DKIM key is retired as a rotation switch retires
+        it: its private half is deleted for good and its record should stay in
+        DNS until keep_until. A pending key is deleted. The bounce domain is
+        removed, so mail still on its way uses Thinpost's standard bounce
+        address, and a subdomain no longer falls back to it. The tracking domain
+        keeps its route and certificate while old links matter, as when it is
+        removed on its own. The response lists what to clean up in DNS. SPF and
+        DMARC records are the owner's own, and the bounce and tracking names may
+        be shared with other apps. Other apps that use the same domain are not
+        affected. Allowed for a paused app. Removing a domain that is already
+        removed is 404. 400 for an invalid domain, a query string or a body. 409
+        (reason smtp_from_policy) while the app's SMTP From policy sends as this
+        domain: change it first. 503 when the store is unavailable. Audited as
+        domain.removed, with bounce_domain.removed and tracking_domain.removed
+        for what went with it.
+      responses:
+        '200':
+          description: The domain was removed, with the DNS records left to clean up
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainRemoval' }
+        '409':
+          description: The app's SMTP From policy sends as this domain
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DomainRemovalConflict' }
         default: { $ref: '#/components/responses/Error' }
   /apps/{appId}/domains/{domain}/verify:
     parameters:
@@ -2568,6 +2613,40 @@ components:
           type: string
           enum: [not_found, multiple_records, different_key, testing_mode, unsupported]
           description: Why the DNS record cannot be used. Absent when there is no pending key.
+    DomainRemoval:
+      type: object
+      description: >-
+        What removing a sender domain left in DNS. Nothing here is needed again
+        unless the domain is added once more.
+      required: [name, removed_at, dkim_records]
+      properties:
+        name: { type: string }
+        removed_at: { type: string, format: date-time }
+        dkim_records:
+          type: array
+          description: The domain's DKIM records, newest keep date first, then a cancelled pending key's.
+          items:
+            type: object
+            required: [selector, dns_name]
+            properties:
+              selector: { type: string }
+              dns_name: { type: string, description: The TXT record name, <selector>._domainkey.<domain>. }
+              keep_until:
+                type: string
+                format: date-time
+                description: Keep the record in DNS until then, so signed mail still waiting to be delivered passes DKIM. Absent when the key never signed, so the record can be deleted now.
+        bounce_domain: { type: string, description: The bounce domain that was removed. Delete its CNAME once keep_records_until has passed, unless another app uses the name. }
+        tracking_domain: { type: string, description: The tracking domain that was retired. Keep its DNS and certificate while old links matter, unless another app uses the name. }
+        keep_records_until: { type: string, format: date-time, description: The latest keep_until. Absent when no record needs to stay. }
+    DomainRemovalConflict:
+      type: object
+      required: [error, reason]
+      properties:
+        error: { type: string }
+        reason:
+          type: string
+          enum: [smtp_from_policy]
+          description: smtp_from_policy means the app's SMTP From policy sends as this domain.
     InboundDomain:
       type: object
       required: [name, state, created_at]

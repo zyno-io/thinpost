@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"strings"
@@ -34,6 +35,9 @@ type fakeStore struct {
 	subjectErr      error
 	identity        EdgeIdentity
 	identityErr     error
+	removal         DomainRemoval
+	removeErr       error
+	removed         string
 }
 
 // EdgeIdentity is what the sending worker reported; the zero value means it has
@@ -88,6 +92,12 @@ func (s *fakeStore) CancelDKIMKey(_ context.Context, actor, app, domain, selecto
 	s.calls++
 	s.cancelled = selector
 	return nil
+}
+
+func (s *fakeStore) DeleteDomain(_ context.Context, actor, app, domain string) (DomainRemoval, error) {
+	s.calls++
+	s.actor, s.app, s.removed = actor, app, domain
+	return s.removal, s.removeErr
 }
 
 // testKey stands in for a public key; the handler only passes it to the checker.
@@ -392,6 +402,94 @@ func TestDKIMRotationRoutes(t *testing.T) {
 	h2 := &Handler{Authenticator: fakeAuth{admin: false}, Store: store, DNS: fakeDNS{}}
 	if w := send(h2, "POST", base, "", "valid"); w.Code != 403 {
 		t.Fatal("non-admin", w.Code)
+	}
+}
+
+func TestDeleteDomainRoute(t *testing.T) {
+	app := strings.Repeat("a", 32)
+	path := "/api/v1/apps/" + app + "/domains/example.com"
+	until := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	bounce := "bounce.example.com"
+	removal := DomainRemoval{
+		Name:             "example.com",
+		RemovedAt:        until.Add(-7 * 24 * time.Hour),
+		DKIMRecords:      []RemovedDKIMRecord{{Selector: "thinpost1", DNSName: "thinpost1._domainkey.example.com", KeepUntil: &until}, {Selector: "thinpost2", DNSName: "thinpost2._domainkey.example.com"}},
+		BounceDomain:     &bounce,
+		KeepRecordsUntil: &until,
+	}
+	store := &fakeStore{removal: removal}
+	h := &Handler{Authenticator: fakeAuth{admin: true}, Store: store}
+	w := send(h, "DELETE", path, "", "valid")
+	if w.Code != 200 || store.removed != "example.com" || store.app != app || store.actor != "operator-1" {
+		t.Fatal("delete", w.Code, store.removed, store.app, store.actor)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"name", "removed_at", "dkim_records", "bounce_domain", "keep_records_until"} {
+		if _, ok := body[field]; !ok {
+			t.Error("missing field", field, w.Body.String())
+		}
+	}
+	if _, ok := body["tracking_domain"]; ok {
+		t.Error("absent tracking domain was serialized")
+	}
+	records := body["dkim_records"].([]any)
+	if len(records) != 2 || records[0].(map[string]any)["selector"] != "thinpost1" || records[0].(map[string]any)["keep_until"] == nil || records[1].(map[string]any)["keep_until"] != nil {
+		t.Error("dkim_records", w.Body.String())
+	}
+	// The name is normalized before the store sees it.
+	store.removed = ""
+	if w = send(h, "DELETE", "/api/v1/apps/"+app+"/domains/Example.COM", "", "valid"); w.Code != 200 || store.removed != "example.com" {
+		t.Fatal("not normalized", w.Code, store.removed)
+	}
+	calls := store.calls
+	for name, w := range map[string]*httptest.ResponseRecorder{
+		"invalid domain": send(h, "DELETE", "/api/v1/apps/"+app+"/domains/not_a_domain", "", "valid"),
+		"ip":             send(h, "DELETE", "/api/v1/apps/"+app+"/domains/127.0.0.1", "", "valid"),
+		"query":          send(h, "DELETE", path+"?force=1", "", "valid"),
+		"body":           send(h, "DELETE", path, `{"x":1}`, "valid"),
+	} {
+		if w.Code != 400 {
+			t.Error(name, w.Code)
+		}
+	}
+	for _, m := range []string{"GET", "POST", "PUT"} {
+		if w := send(h, m, path, "", "valid"); w.Code != 405 || w.Header().Get("Allow") != "DELETE" {
+			t.Error(m, w.Code, w.Header().Get("Allow"))
+		}
+	}
+	if w := send(h, "DELETE", "/api/v1/apps/"+app+"/domains/", "", "valid"); w.Code != 404 {
+		t.Error("trailing slash", w.Code)
+	}
+	if store.calls != calls {
+		t.Error("store called for a request that should not reach it")
+	}
+	store.removeErr = ErrNotFound
+	if w := send(h, "DELETE", path, "", "valid"); w.Code != 404 {
+		t.Error("not found", w.Code)
+	}
+	store.removeErr = ErrDomainInSMTPPolicy
+	if w := send(h, "DELETE", path, "", "valid"); w.Code != 409 || strings.TrimSpace(w.Body.String()) != `{"error":"Conflict","reason":"smtp_from_policy"}` {
+		t.Error("policy conflict", w.Code, w.Body.String())
+	}
+	store.removeErr = errors.New("database down")
+	if w := send(h, "DELETE", path, "", "valid"); w.Code != 503 {
+		t.Error("store error", w.Code)
+	}
+	// A deleted app is unknown before the store is asked.
+	store = &fakeStore{removal: removal}
+	h = &Handler{Authenticator: fakeAuth{admin: true}, Store: store, Apps: &fakeApps{missing: map[string]bool{app: true}}}
+	if w := send(h, "DELETE", path, "", "valid"); w.Code != 404 || store.calls != 0 {
+		t.Error("deleted app", w.Code, store.calls)
+	}
+	if w := send(h, "DELETE", path, "", ""); w.Code != 401 {
+		t.Error("unauthenticated", w.Code)
+	}
+	h = &Handler{Authenticator: fakeAuth{admin: false}, Store: store}
+	if w := send(h, "DELETE", path, "", "valid"); w.Code != 403 || store.calls != 0 {
+		t.Error("non-admin", w.Code)
 	}
 }
 

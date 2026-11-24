@@ -195,6 +195,10 @@ Schema 51 adds the `unsubscribe_forwards` table, created empty (catalog-only; no
 
 Schema 52 adds `deliveries.prepared_format` (default 1) and a `NOT VALID` check that it is 1 or 2. Both are catalog-only (no rewrite, no table scan) and take a brief lock on `deliveries`. A format 1 delivery has a complete signed message in its object; a format 2 delivery has a small recipe (the signed header block and a list of byte splices) that the control plane rebuilds from the stored original at send time, checking the size and SHA-256 before the message goes to the edge. SMTP mail is prepared as format 2 from this release on; HTTP mail stays format 1. **Existing deliveries keep their full objects** and send as before, and nothing is rewritten. Pods of the previous schema are fenced by the closed gate, so none of them can claim a recipe it cannot read. The schema rolls forward only: an older release cannot read a recipe, so do not run one against a database that has format 2 deliveries.
 
+## Sender-domain removal
+
+Schema 53 adds a nullable `sender_domains.removed_at` and a `NOT VALID` check that a removed domain is inactive. Both are catalog-only changes (no rewrite, no table scan), and no existing domain changes. Deploy the release to every replica before anyone removes a domain: a replica without it ignores the column and would still list a removed domain, as not verified. Removing a domain does not erase its row, because keys, bounce domains and tracking domains refer to it; see [Remove a domain](/guide/domains#remove-a-domain). The schema rolls forward only.
+
 ## Upgrading the edge
 
 The edge release is independent. Its Deployment uses `Recreate`, so an upgrade stops the old pod and starts a new one, and sending pauses briefly. Bounce senders retry. The control plane reconnects and the edge replays any results it has not had acknowledged.

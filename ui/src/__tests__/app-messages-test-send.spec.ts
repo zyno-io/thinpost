@@ -378,9 +378,17 @@ describe('send test from the sending domains tab', () => {
             'app-message': { template: '<div data-stub="message" />' }
         });
         wrapper = mounted.wrapper;
-        const buttons = wrapper.findAll('button').filter(b => b.text().includes('Send test'));
-        expect(buttons).toHaveLength(2);
-        await buttons[1]!.trigger('click');
+        // Send test lives in each row's menu; a domain still waiting for its record does not offer it.
+        const rows = wrapper.findAll('tbody tr');
+        const sendTest = async (row: number) => {
+            await rows[row]!.find('button[aria-haspopup="menu"]').trigger('click');
+            await flushPromises();
+            return rows[row]!.findAll('[role="menuitem"]').find(b => b.text().includes('Send test'));
+        };
+        expect(await sendTest(1)).toBeUndefined();
+        await rows[1]!.find('button[aria-haspopup="menu"]').trigger('click');
+        const offered = [await sendTest(2)];
+        await offered[0]!.trigger('click');
         await flushPromises();
         expect((dialog()!.querySelector('select') as HTMLSelectElement).value).toBe('send.example.net');
     });

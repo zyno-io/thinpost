@@ -19,7 +19,7 @@
                         <p>
                             Verifying doesn't set up SPF, DMARC or reverse DNS, so it doesn't promise mail will reach inboxes. The SPF and DMARC
                             panel under each verified domain shows what receivers find; it only reads DNS and never changes how mail is sent. To change a
-                            domain's key, choose Rotate key: add the new record first, then switch, so there's no gap. Domains can't be removed here.
+                            domain's key, choose Rotate key: add the new record first, then switch, so there's no gap. To stop sending from a domain, choose Remove domain in the menu at the end of its row.
                         </p>
                         <p>
                             Each verified domain can also have its own <strong>bounce domain</strong>, so bounces come back to a name of yours and SPF passes for your domain too.
@@ -42,6 +42,27 @@
                 <ApiErrorNotice v-if="testSend.outcomeError.value" :error="testSend.outcomeError.value" />
 
                 <ApiErrorNotice v-if="actionError" :error="actionError" />
+
+                <div v-for="notice in removalNotices" :key="notice.name" class="notice success" role="status" data-removal-notice>
+                    <i class="fa-solid fa-circle-check" aria-hidden="true" />
+                    <div class="notice-body">
+                        <p>
+                            <strong>{{ notice.name }} was removed.</strong>
+                            {{ cleanupRecords(notice).length ? 'Clean up its DNS records:' : 'No DNS records need to stay.' }}
+                        </p>
+                        <ul v-if="cleanupRecords(notice).length" class="removal-records">
+                            <li v-for="row in cleanupRecords(notice)" :key="row.id">
+                                <code>{{ row.name }}</code>: {{ row.advice }}
+                            </li>
+                        </ul>
+                        <p>
+                            SPF and DMARC records are yours: keep them if other apps or subdomains still send. Keep any bounce or tracking record another app uses.
+                        </p>
+                    </div>
+                    <div class="notice-actions">
+                        <button type="button" class="btn sm" @click="dismissRemovalNotice(notice.name)">Dismiss</button>
+                    </div>
+                </div>
 
                 <Loader v-if="isReloading && !domains" label="Loading sending domains" />
                 <ApiErrorNotice v-else-if="domainsError" :error="domainsError" :retry="reloadDomains" />
@@ -85,7 +106,6 @@
                             <th scope="col">Status</th>
                             <th scope="col">DKIM key</th>
                             <th scope="col">Added</th>
-                            <th scope="col">Verified</th>
                             <th scope="col"><span class="sr-only">Actions</span></th>
                         </tr>
                     </thead>
@@ -106,24 +126,17 @@
                                     <time :datetime="domain.retired_key.keep_record_until">{{ formatDateTime(domain.retired_key.keep_record_until) }}</time>.
                                 </p>
                             </td>
-                            <td>
-                                <time :datetime="domain.created_at">{{ formatDateTime(domain.created_at) }}</time>
-                            </td>
-                            <td>
-                                <time v-if="domain.verified_at" :datetime="domain.verified_at">{{ formatDateTime(domain.verified_at) }}</time>
-                                <span v-else class="muted">—</span>
+                            <td class="added">
+                                <HoverTip>
+                                    <time :datetime="domain.created_at">{{ formatDate(domain.created_at) }}</time>
+                                    <template #tip>
+                                        <span>Added <time :datetime="domain.created_at">{{ formatDateTime(domain.created_at) }}</time></span>
+                                        <span v-if="domain.verified_at">Verified <time :datetime="domain.verified_at">{{ formatDateTime(domain.verified_at) }}</time></span>
+                                        <span v-else>Not verified yet</span>
+                                    </template>
+                                </HoverTip>
                             </td>
                             <td class="actions">
-                                <button
-                                    v-if="domain.active && domain.active_key"
-                                    type="button"
-                                    class="btn sm"
-                                    :disabled="!!testSend.blocker.value || !canAct"
-                                    @click="testSend.open(domain.name)"
-                                >
-                                    Send test
-                                    <span class="sr-only">from {{ domain.name }}</span>
-                                </button>
                                 <template v-if="domain.pending_key">
                                     <button type="button" class="btn sm" :disabled="!canAct" @click="verify(domain)">
                                         {{ isBusy(domain.name, 'verify') ? 'Checking…' : domain.active_key ? 'Check record' : 'Verify' }}
@@ -138,20 +151,51 @@
                                         <span class="sr-only">the new key for {{ domain.name }}</span>
                                     </button>
                                 </template>
-                                <template v-else-if="domain.active_key">
-                                    <button type="button" class="btn sm" @click="toggleRecord(domain.name)">
-                                        {{ shown.has(domain.name) ? 'Hide record' : 'Show record' }}
-                                        <span class="sr-only">for {{ domain.name }}</span>
-                                    </button>
-                                    <button type="button" class="btn sm" :disabled="!canAct || !app.active" @click="createKey(domain)">
-                                        {{ isBusy(domain.name, 'create') ? 'Working…' : 'Rotate key' }}
-                                        <span class="sr-only">for {{ domain.name }}</span>
-                                    </button>
-                                </template>
-                                <button v-else type="button" class="btn sm primary" :disabled="!canAct || !app.active" @click="createKey(domain)">
+                                <button v-else-if="!domain.active_key" type="button" class="btn sm primary" :disabled="!canAct || !app.active" @click="createKey(domain)">
                                     {{ isBusy(domain.name, 'create') ? 'Working…' : 'Create DKIM key' }}
                                     <span class="sr-only">for {{ domain.name }}</span>
                                 </button>
+                                <span v-if="domain.active_key && isBusy(domain.name, 'create')" class="muted rotating" role="status">Rotating…</span>
+                                <DropdownMenu :label="`More actions for ${domain.name}`" trigger-class="btn sm">
+                                    <template #trigger>
+                                        <i class="fa-solid fa-ellipsis" aria-hidden="true" />
+                                    </template>
+                                    <button
+                                        v-if="domain.active && domain.active_key"
+                                        class="menu-item"
+                                        type="button"
+                                        role="menuitem"
+                                        :aria-disabled="!!testSend.blocker.value || !canAct ? 'true' : undefined"
+                                        @click="openTestSend(domain)"
+                                    >
+                                        <i class="fa-solid fa-paper-plane" aria-hidden="true" />
+                                        Send test
+                                        <span class="sr-only">from {{ domain.name }}</span>
+                                    </button>
+                                    <template v-if="domain.active_key && !domain.pending_key">
+                                        <button class="menu-item" type="button" role="menuitem" @click="toggleRecord(domain.name)">
+                                            <i class="fa-solid fa-key" aria-hidden="true" />
+                                            {{ shown.has(domain.name) ? 'Hide record' : 'Show record' }}
+                                            <span class="sr-only">for {{ domain.name }}</span>
+                                        </button>
+                                        <button
+                                            class="menu-item"
+                                            type="button"
+                                            role="menuitem"
+                                            :aria-disabled="!canAct || !app.active ? 'true' : undefined"
+                                            @click="rotateKey(domain)"
+                                        >
+                                            <i class="fa-solid fa-rotate" aria-hidden="true" />
+                                            {{ isBusy(domain.name, 'create') ? 'Working…' : 'Rotate key' }}
+                                            <span class="sr-only">for {{ domain.name }}</span>
+                                        </button>
+                                    </template>
+                                    <div v-if="domain.active_key" class="menu-separator" role="separator" />
+                                    <button class="menu-item danger" type="button" role="menuitem" :aria-disabled="!canAct ? 'true' : undefined" @click="openRemove(domain)">
+                                        <i class="fa-solid fa-trash" aria-hidden="true" />
+                                        Remove domain
+                                    </button>
+                                </DropdownMenu>
                             </td>
                         </tr>
                     </tbody>
@@ -187,29 +231,45 @@
             @close="testSend.close"
             @submit="testSend.submit"
         />
+        <RemoveDomainModal
+            v-if="removeTarget"
+            :app-id="app.id"
+            :domain="removeTarget"
+            :subdomains="removeSubdomains"
+            :is-submitting="isRemoving"
+            :error="removeError"
+            :policy-blocked="removePolicyBlocked"
+            :blocker="isSignedIn ? null : 'Your session has ended. Sign in again.'"
+            @close="closeRemove"
+            @submit="removeDomain"
+        />
         <DomainModal v-if="isRequestOpen" :is-submitting="isRequesting" :error="requestError" @close="closeRequest" @submit="requestDomain" />
     </div>
 </template>
 
 <script lang="ts" setup>
 import { showConfirm, showToast } from '@zyno-io/vue-foundation';
-import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 
 import { apiErrorReason, apiErrorStatus, describeApiError, InvalidResponseError, type ApiErrorDescription } from '@/api-errors';
 import { useAppContext } from '@/app-context';
 import { authState } from '@/auth';
 import { inheritedFrom, parseBounceDomain } from '@/bounce-domains';
+import { cleanupRecords, dependentSubdomains, parseDomainRemoval, type DomainRemovalView } from '@/domain-removal';
 import { parseDkimKey, type DkimKeyView } from '@/dkim';
-import { formatDateTime } from '@/format';
+import { formatDate, formatDateTime } from '@/format';
 import { DefaultApi, type Domain } from '@/openapi-client-generated';
 import { loadRuntimeFeatures, runtimeTracking } from '@/runtime-features';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import BounceDomainPanel from '@/shared/components/bounce-domain-panel.vue';
 import DkimRecord from '@/shared/components/dkim-record.vue';
 import HelpButton from '@/shared/components/help-button.vue';
+import HoverTip from '@/shared/components/hover-tip.vue';
 import SenderDnsPanel from '@/shared/components/sender-dns-panel.vue';
 import DomainModal from '@/shared/components/domain-modal.vue';
+import DropdownMenu from '@/shared/components/dropdown-menu.vue';
 import Loader from '@/shared/components/loader.vue';
+import RemoveDomainModal from '@/shared/components/remove-domain-modal.vue';
 import TestMessageModal from '@/shared/components/test-message-modal.vue';
 import TrackingDomainPanel from '@/shared/components/tracking-domain-panel.vue';
 import { useTestSend } from '@/test-send';
@@ -233,12 +293,25 @@ const isRequesting = ref(false);
 const requestError = ref<ApiErrorDescription | null>(null);
 const busy = ref<{ domain: string; action: Action } | null>(null);
 
+const removeTarget = ref<Domain | null>(null);
+const isRemoving = ref(false);
+const removeError = ref<ApiErrorDescription | null>(null);
+const removePolicyBlocked = ref(false);
+/** The DNS cleanup list after a removal; it stays until dismissed or the app changes. */
+/** Cleanup notices for domains removed while this page is open, newest first. The receipt can't be fetched again. */
+const removalNotices = ref<DomainRemovalView[]>([]);
+
+function dismissRemovalNotice(name: string) {
+    removalNotices.value = removalNotices.value.filter(n => n.name !== name);
+}
+const removeSubdomains = computed(() => (removeTarget.value ? dependentSubdomains(removeTarget.value, domains.value ?? []) : []));
+
 /** Domains whose current (active) record the person asked to see. A pending record is always shown. */
 const shown = ref<Set<string>>(new Set());
 
 const isSignedIn = computed(() => authState.status === 'signed-in');
-const canRequest = computed(() => app.value.active && isSignedIn.value && !isRequesting.value && !busy.value);
-const canAct = computed(() => isSignedIn.value && !busy.value && !isRequesting.value);
+const canRequest = computed(() => app.value.active && isSignedIn.value && !isRequesting.value && !busy.value && !isRemoving.value);
+const canAct = computed(() => isSignedIn.value && !busy.value && !isRequesting.value && !isRemoving.value);
 
 /** Verified domains each get a bounce-domain panel. */
 const verifiedDomains = computed(() => (domains.value ?? []).filter(d => d.active));
@@ -279,6 +352,28 @@ function toggleRecord(name: string) {
     const next = new Set(shown.value);
     if (!next.delete(name)) next.add(name);
     shown.value = next;
+    // The record card sits above the table; bring it into view if it is off-screen.
+    if (next.has(name)) {
+        void nextTick(() => {
+            const card = document.getElementById(`record-${name}`)?.closest('article');
+            if (!card) return;
+            // Clear the sticky topbar and the sticky app header (its height varies), plus a little air.
+            const topbar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--header-h')) || 46;
+            const appHeader = document.querySelector<HTMLElement>('.app-header')?.offsetHeight ?? 0;
+            card.style.scrollMarginTop = `${topbar + appHeader + 12}px`;
+            card.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+        });
+    }
+}
+
+function openTestSend(domain: Domain) {
+    if (testSend.blocker.value || !canAct.value) return;
+    void testSend.open(domain.name);
+}
+
+function rotateKey(domain: Domain) {
+    if (!canAct.value || !app.value.active) return;
+    void createKey(domain);
 }
 
 function hideRecord(name: string) {
@@ -333,6 +428,8 @@ async function load() {
     actionError.value = null;
     domains.value = null;
     shown.value = new Set();
+    removalNotices.value = [];
+    removeTarget.value = null;
 
     try {
         const response = await DefaultApi.listAppDomains({ path: { appId: id } });
@@ -406,6 +503,8 @@ async function requestDomain(domain: string) {
         checkRecordResponse(data);
         if (isUnmounted || seq !== loadSeq) return;
         isRequestOpen.value = false;
+        // Adding a removed domain again can hand out the selector its notice said to delete, so drop that notice.
+        dismissRemovalNotice(data?.domain?.name ?? domain);
         showToast({ message: `DKIM record ready for ${domain}`, durationSecs: 3 });
         void reloadDomains();
     } catch (err) {
@@ -512,6 +611,56 @@ async function switchKey(domain: Domain) {
     if (seq === loadSeq && !isUnmounted) await reloadDomains();
 }
 
+function openRemove(domain: Domain) {
+    if (!canAct.value) return;
+    removeError.value = null;
+    removePolicyBlocked.value = false;
+    actionError.value = null;
+    removeTarget.value = domain;
+}
+
+function closeRemove() {
+    if (isRemoving.value) return;
+    removeTarget.value = null;
+}
+
+async function removeDomain() {
+    const appId = app.value?.id;
+    const target = removeTarget.value;
+    if (!appId || !target || isRemoving.value || !isSignedIn.value) return;
+    const seq = loadSeq;
+    isRemoving.value = true;
+    removeError.value = null;
+    removePolicyBlocked.value = false;
+    try {
+        const { data } = await DefaultApi.deleteAppDomain({ path: { appId, domain: target.name } });
+        if (isUnmounted || seq !== loadSeq) return;
+        removeTarget.value = null;
+        const removal = parseDomainRemoval(data);
+        if (!removal) {
+            // The removal probably happened; the reload shows where it stands.
+            actionError.value = describeApiError(new InvalidResponseError(), { mutation: true });
+        } else {
+            removalNotices.value = [removal, ...removalNotices.value.filter(n => n.name !== removal.name)];
+            showToast({ message: `${removal.name} removed`, durationSecs: 3 });
+        }
+        void reloadDomains();
+    } catch (err) {
+        if (isUnmounted || seq !== loadSeq) return;
+        if (apiErrorStatus(err) === 409 && apiErrorReason(err) === 'smtp_from_policy') {
+            removePolicyBlocked.value = true;
+        } else {
+            removeError.value = describeApiError(err, {
+                mutation: true,
+                notFound: `${target.name} was already removed, or the app was not found. Reload to see where it stands.`
+            });
+            if (apiErrorStatus(err) === 404) void reloadDomains();
+        }
+    } finally {
+        isRemoving.value = false;
+    }
+}
+
 async function cancelKey(domain: Domain) {
     const appId = app.value?.id;
     const pending = parseDkimKey(domain.pending_key);
@@ -614,5 +763,36 @@ table.data th[scope='row'].name {
     .btn + .btn {
         margin-left: 8px;
     }
+
+    .rotating {
+        margin-left: 8px;
+        font-size: 12px;
+    }
+
+    /* The menu sits in the row with the buttons and the same 8px gap. */
+    :deep(.dropdown) {
+        display: inline-block;
+        margin-left: 8px;
+        vertical-align: middle;
+    }
+}
+
+.added {
+    white-space: nowrap;
+}
+
+.actions :deep(.menu-item.danger) {
+    color: var(--danger);
+
+    > i:first-child {
+        color: inherit;
+    }
+}
+
+.removal-records {
+    margin: 4px 0;
+    padding-left: 18px;
+    overflow-wrap: anywhere;
+    list-style: disc;
 }
 </style>

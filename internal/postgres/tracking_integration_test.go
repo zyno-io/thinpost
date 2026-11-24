@@ -498,7 +498,7 @@ func TestTrackingPostgresAtomicReferencesAndBoundedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = finishPreparationFailure(ctx, failureTx, failedMessage, failedToken, 12, "source_read"); !errors.Is(err, errWebhookFanoutExceeded) {
+	if _, err = finishPreparationFailure(ctx, failureTx, failedMessage, failedToken, 12, "source_read", false); !errors.Is(err, errWebhookFanoutExceeded) {
 		failureTx.Rollback()
 		t.Fatal("over-limit preparation failure was not rejected", err)
 	}
@@ -548,7 +548,7 @@ func TestTrackingPostgresAtomicReferencesAndBoundedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = finishPreparationFailure(ctx, failureTx, failedMessage, failedToken, 12, "source_read"); err != nil {
+	if _, err = finishPreparationFailure(ctx, failureTx, failedMessage, failedToken, 12, "source_read", false); err != nil {
 		failureTx.Rollback()
 		t.Fatal("exactly ten subscriptions were rejected", err)
 	}
@@ -578,7 +578,7 @@ func TestTrackingPostgresAtomicReferencesAndBoundedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = finishPreparationFailure(ctx, failureTx, failedMessage, failedToken, 12, "source_read"); err != nil {
+	if _, err = finishPreparationFailure(ctx, failureTx, failedMessage, failedToken, 12, "source_read", false); err != nil {
 		failureTx.Rollback()
 		t.Fatal("preparation did not recover after reducing subscriptions", err)
 	}

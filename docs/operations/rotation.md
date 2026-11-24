@@ -24,7 +24,7 @@ Thinpost is not a key manager for the secrets you provide. Create and store thos
 
 Thinpost generates each sender domain's DKIM key, seals it with the [object keyring](#object-keyring) and keeps it in the database, so rotating one needs no files, restart or deploy. It is a manual change, in the console or the API, that you control:
 
-1. **Create the next key.** In the app's **Sending domains**, choose **Rotate key** (`POST /api/v1/apps/{appId}/domains/{domain}/dkim-keys`). Thinpost makes a key with the next selector (`thinpost2`, and so on) and shows its record. The current key keeps signing, and only one new key can be waiting at a time.
+1. **Create the next key.** In the app's **Sending domains**, choose **Rotate key** from the domain's **More actions** menu (`POST /api/v1/apps/{appId}/domains/{domain}/dkim-keys`). Thinpost makes a key with the next selector (`thinpost2`, and so on) and shows its record. The current key keeps signing, and only one new key can be waiting at a time.
 2. **Publish the record** at `<new-selector>._domainkey.<domain>` and choose **Check record**. Thinpost looks it up and marks the key ready to switch. Thinpost rechecks DNS before it signs and never signs with a key whose record is missing or does not match.
 3. **Switch** when you are ready (`POST .../dkim-keys/{selector}/activate`). Thinpost checks DNS once more and, in one transaction, makes the new key the signing key and retires the old one. **The old private key is deleted from the database** (copies in backups stay sealed and need the keyring to open) and its selector is never used again. Messages signed with the old key before the switch still verify while its record stays in DNS.
 4. **Keep the old record in DNS** until the date the console shows (`keep_record_until`): at least 7 days, and at least the delivery [retry policy](/operations/recovery)'s maximum message age plus 2 days. Messages signed with the old key may still be in the retry queue.
@@ -32,6 +32,8 @@ Thinpost generates each sender domain's DKIM key, seals it with the [object keyr
 To back out before switching, **Cancel** deletes the pending key (`DELETE .../dkim-keys/{selector}`). A pending key can also simply be left in place.
 
 The private keys are sealed with the object keyring, so keep every keyring version that sealed a key you still use: a version that is missing makes that key unopenable and mail from the domain stops signing. When you [rotate the object keyring](#object-keyring), existing DKIM keys stay sealed under the version that was active when they were created; only a new key uses the new active version, so keep old versions until those keys are rotated out.
+
+[Removing a sender domain](/guide/domains#remove-a-domain) retires its active key the same way as a switch: the private key is deleted, the selector is never used again, and its record stays in DNS until the same keep date.
 
 See [Sender domains](/guide/domains#rotate-a-key) for the DNS records and the checks.
 
