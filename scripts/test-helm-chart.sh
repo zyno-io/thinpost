@@ -26,11 +26,13 @@ helm lint "$chart" --set workload=control --set control.image=$image --set contr
 
 render control --set workload=control --set control.image=$image
 render edge --set workload=edge -f "$base"
-# A Trusted IPv4 subnet can coexist with an exact transit relay.
-render edge_control_sources --set workload=edge -f "$base" --set 'controlClientCidrs={192.0.2.0/24,198.51.100.2/32}'
-grep -q 'cidr: "192.0.2.0/24"' "$tmp/edge_control_sources.yaml" || fail "omitted the control client subnet"
-grep -q 'cidr: "198.51.100.2/32"' "$tmp/edge_control_sources.yaml" || fail "omitted the control client relay"
-for invalid in 0.0.0.0/0 192.0.0.0/16 192.0.2.10/24; do
+# controlClientCidrs takes any IPv4 network address with a /1 to /32 prefix.
+render edge_control_sources --set workload=edge -f "$base" \
+  --set 'controlClientCidrs={10.0.0.0/8,172.16.0.0/12,192.0.2.0/24,198.51.100.64/26,198.51.100.2/32,128.0.0.0/1}'
+for cidr in 10.0.0.0/8 172.16.0.0/12 192.0.2.0/24 198.51.100.64/26 198.51.100.2/32 128.0.0.0/1; do
+  grep -q "cidr: \"$cidr\"" "$tmp/edge_control_sources.yaml" || fail "omitted control client CIDR $cidr"
+done
+for invalid in 0.0.0.0/0 192.0.2.10/24 10.1.0.0/8 198.51.100.65/26 192.0.2.0/33 192.0.2.0 256.0.0.0/8 192.0.2/24 2001:db8::/32; do
   if helm template thinpost "$chart" --set workload=edge -f "$base" --set "controlClientCidrs[0]=$invalid" >/dev/null 2>&1; then
     fail "accepted invalid control client CIDR: $invalid"
   fi

@@ -50,18 +50,14 @@ publicNetwork:
 | `replicas` | `0` or `1`. The journal volume is single-writer. The release renders but runs no pod at `0`. |
 | `workerId` | The worker's stable identifier. Equals `worker-id` in the control plane's `thinpost-edge-binding`. |
 | `controllerIdentity` | The one SPIFFE URI the edge accepts from the control plane. See [Control PKI](/deploy/control-pki). |
-| `controlClientCidrs` | IPv4 `/24` networks or exact `/32` addresses allowed to open the control port. Required for `replicas: 1`; any other prefix fails the render. |
+| `controlClientCidrs` | IPv4 CIDRs allowed to open the control port. Required for `replicas: 1`. |
 | `addresses` | Every public sending address, 1 to 16 entries. Required. The first entry is the main IP. See [Sending addresses](#sending-addresses). |
 | `publicNetwork.*` | The direct public interface; see [Direct public networking](/deploy/direct-public-networking). |
 | `journalCapacity`, `journalReserveBytes`, `clockMargin`, `smtpRate.*` | Journal and SMTP limits. The defaults suit most installs. See the [Helm values reference](/reference/helm-values). |
 
 The chart has no default addresses and refuses to render the edge without them. Its other network defaults, such as `192.0.2.254` for the gateway, are placeholders: set your own. The edge also rejects documentation, private and other special-purpose ranges as sending sources when it runs.
 
-`controlClientCidrs` lists the IPv4 sources the Edge sees after any NAT.
-For direct routing, list the control client's stable Trusted `/24` subnet so
-a change of node stays within the allowlist. For a path that uses SNAT, list
-the gateway's exact `/32` addresses. The Edge still requires the control
-plane's mTLS identity on every connection.
+`controlClientCidrs` are the source addresses the edge sees on control connections, after any NAT between the zones. The edge's NetworkPolicy drops every other source, so the list must cover every address a control connection can come from, including after a control rollout or a move to another node. Use any IPv4 prefix from `/1` to `/32`, written as its network address (`10.20.0.0/16`, not `10.20.0.5/16`). If control traffic is routed directly, list the subnet the control pods or nodes send from. If it passes through a router, gateway or egress gateway that SNATs it, list that device's fixed addresses as `/32`s. The edge still requires the control plane's mTLS identity on every connection.
 
 ## External resources
 
