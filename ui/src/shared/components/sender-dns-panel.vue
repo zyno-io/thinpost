@@ -46,11 +46,11 @@
                                 ><span v-if="view.dmarc.fix.kind === 'add'" class="fix-name mono">{{ view.dmarc.fix.name }}</span
                                 ><code data-testid="dmarc-fix-value">{{ view.dmarc.fix.value }}</code></span
                             >
-                            <span v-if="view.dmarc.fix.kind === 'update' && view.dmarc.fix.warning" class="fix-warning" data-testid="dmarc-fix-warning">{{ view.dmarc.fix.warning }}</span>
                             <button type="button" class="btn sm" data-testid="dmarc-fix-copy" @click="copyFix(view.dmarc.fix.value)">
                                 <i class="fa-solid fa-copy" aria-hidden="true" />
                                 Copy<span class="sr-only"> DMARC record</span>
                             </button>
+                            <span v-if="view.dmarc.fix.kind === 'update' && view.dmarc.fix.warning" class="fix-warning" data-testid="dmarc-fix-warning">{{ view.dmarc.fix.warning }}</span>
                         </template>
                     </div>
                 </div>
@@ -266,6 +266,8 @@ async function check() {
 
 .fix-warning {
     flex-basis: 100%;
+    /* Under the record, past the Update: label. */
+    padding-left: 60px;
     color: var(--warning);
     font-size: 11px;
     font-weight: 600;
