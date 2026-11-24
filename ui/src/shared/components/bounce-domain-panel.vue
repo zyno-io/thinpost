@@ -5,18 +5,14 @@
                 <h3 :id="`${id}-title`">Bounce domain for {{ domain.name }}</h3>
                 <HelpButton topic="bounce domains">
                     <p>
-                        Every email has a hidden return address that bounces go back to. By default it is one of Thinpost's own names, which is fine for delivery but isn't your domain. A bounce
-                        domain is a name of yours, such as <code>{{ suggestBounceName(domain.name) }}</code
-                        >, that Thinpost uses instead, so SPF passes for your domain too.
+                        Bounces go back to a hidden return address, normally one of Thinpost's names. A bounce domain is a name of yours, such as <code>{{ suggestBounceName(domain.name) }}</code
+                        >, used instead, so SPF passes for your domain too.
                     </p>
-                    <ul>
-                        <li>You add one <strong>CNAME</strong> record for it, pointing at the name shown here. It must be <strong>DNS only, not proxied</strong> (turn off an orange-cloud proxy).</li>
-                        <li>Mail uses it only while Thinpost can see the record. If the record goes missing or changes, mail goes back to Thinpost's standard bounce address on its own. Nothing is lost.</li>
-                        <li>It lines up with DMARC's usual (relaxed) SPF check. If your DMARC record asks for strict SPF (<code>aspf=s</code>), DKIM still carries it.</li>
-                        <li>If this app starts sending from a different IP, the CNAME needs to point at that IP's name. This page shows the new name.</li>
-                        <li>It also covers mail from verified subdomains of {{ domain.name }}, using the most specific one that is in use: a subdomain whose own bounce domain isn't in use yet falls back to this one.</li>
-                    </ul>
+                    <p>Add one CNAME to the target shown, <strong>DNS only, not proxied</strong>. Thinpost rechecks every 10 minutes at first, then every 6 hours.</p>
+                    <p>Mail uses it only while the record is right. Otherwise it falls back to Thinpost's bounce address, and nothing is lost.</p>
+                    <p>Also covers verified subdomains that don't have their own.</p>
                 </HelpButton>
+                <span v-if="view" class="tag" :class="view.tag.tone" data-testid="bounce-status">{{ view.tag.label }}</span>
             </div>
             <div v-if="bounce" class="buttons">
                 <button type="button" class="btn sm" :disabled="!canAct || busy !== null" @click="check">
@@ -40,31 +36,13 @@
 
         <ApiErrorNotice v-if="error" :error="error" />
 
-        <template v-if="bounce && status">
-            <p class="line">
-                <strong class="name">{{ bounce.name }}</strong>
-                <span class="tag" :class="status.tone" data-testid="bounce-status">{{ status.label }}</span>
-            </p>
-            <p class="hint" data-testid="bounce-message">{{ status.message }}</p>
-            <div v-if="target.target && bounce.state !== 'active'" class="record">
-                <CopyField label="CNAME record name" :value="bounce.name" />
-                <CopyField label="CNAME record value" :value="target.target" />
-                <p class="hint">Add it as a CNAME record, DNS only, not proxied. DNS changes can take a while to spread, so Thinpost checks again every 10 minutes for the first 48 hours, then every 6 hours. Choose Check now to look straight away.</p>
-            </div>
-            <p v-else-if="target.target" class="hint">
-                The record is a CNAME from <code>{{ bounce.name }}</code> to <code>{{ target.target }}</code
-                >, DNS only.
-            </p>
-            <p v-if="bounce.checkedAt" class="hint">
-                Last checked <time :datetime="bounce.checkedAt">{{ formatDateTime(bounce.checkedAt) }}</time>.
-            </p>
-        </template>
+        <div v-if="bounce && view" class="records">
+            <CnameRecord :record="view.record" :note="view.note" :checked-at="bounce.checkedAt" />
+        </div>
         <template v-else>
-            <p class="hint">
-                Mail from {{ domain.name }} uses Thinpost's standard bounce address. To use your own, such as <code>{{ suggestBounceName(domain.name) }}</code
-                >, add a bounce domain and point one CNAME record at Thinpost.
-            </p>
-            <p v-if="!appActive" class="hint">This app is paused, so its bounce domain can't be changed.</p>
+            <p v-if="inherited" class="hint" data-testid="bounce-empty">Uses {{ inherited.name }} from {{ inherited.from }}. Add your own to override.</p>
+            <p v-else class="hint" data-testid="bounce-empty">Uses Thinpost's bounce address. Add your own to align SPF.</p>
+            <p v-if="!appActive" class="hint">This app is paused, so this can't be changed.</p>
         </template>
 
         <BounceDomainModal v-if="isModalOpen" :sender="domain.name" :current="bounce?.name ?? null" :is-submitting="isSaving" :error="modalError" @close="closeModal" @submit="save" />
@@ -76,13 +54,12 @@ import { showConfirm, showToast } from '@zyno-io/vue-foundation';
 import { computed, onBeforeUnmount, ref, useId } from 'vue';
 
 import { describeApiError, InvalidResponseError, type ApiErrorDescription } from '@/api-errors';
-import { bounceStatus, parseBounceDomain, parseCnameTarget, suggestBounceName } from '@/bounce-domains';
-import { formatDateTime } from '@/format';
+import { bounceView, parseBounceDomain, parseCnameTarget, suggestBounceName } from '@/bounce-domains';
 import { DefaultApi, type Domain } from '@/openapi-client-generated';
 
 import ApiErrorNotice from './api-error-notice.vue';
 import BounceDomainModal from './bounce-domain-modal.vue';
-import CopyField from './copy-field.vue';
+import CnameRecord from './cname-record.vue';
 import HelpButton from './help-button.vue';
 
 const props = defineProps<{
@@ -92,6 +69,8 @@ const props = defineProps<{
     canAct: boolean;
     /** A verified sending domain. */
     domain: Domain;
+    /** The parent sending domain whose bounce domain this one's mail uses, when it has none of its own. */
+    inherited?: { from: string; name: string } | null;
 }>();
 
 const emit = defineEmits<{
@@ -102,7 +81,7 @@ const emit = defineEmits<{
 const id = useId();
 const bounce = computed(() => parseBounceDomain(props.domain.bounce_domain));
 const target = computed(() => parseCnameTarget(props.domain));
-const status = computed(() => (bounce.value ? bounceStatus(bounce.value, props.domain.name, target.value) : null));
+const view = computed(() => (bounce.value ? bounceView(bounce.value, target.value) : null));
 
 const busy = ref<'check' | 'remove' | null>(null);
 const isModalOpen = ref(false);
@@ -232,19 +211,8 @@ async function remove() {
     gap: 8px;
 }
 
-.line {
+.records {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-}
-
-.name {
-    overflow-wrap: anywhere;
-}
-
-.record {
-    display: grid;
-    gap: 12px;
+    flex-direction: column;
 }
 </style>

@@ -70,7 +70,7 @@ const rows = computed(() =>
         .filter(d => d.active)
         .map(d => {
             const view = parseTrackingDomain(d.tracking_domain);
-            const status = view ? trackingStatus(view, d.name, { available: true, cnameTarget: null }) : null;
+            const status = view ? trackingStatus(view, { available: true, cnameTarget: null }) : null;
             return { sender: d.name, view, label: view ? trackingSummaryLine(view) : '', tone: status?.tone ?? 'warning' };
         })
 );

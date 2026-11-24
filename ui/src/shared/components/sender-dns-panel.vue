@@ -44,12 +44,13 @@
                             <span class="fix-label">{{ view.dmarc.fix.kind === 'add' ? 'Add:' : 'Update:' }}</span>
                             <span class="fix-value"
                                 ><span v-if="view.dmarc.fix.kind === 'add'" class="fix-name mono">{{ view.dmarc.fix.name }}</span
-                                ><code data-testid="dmarc-fix-value">{{ view.dmarc.fix.value }}</code></span
+                                ><code ref="dmarcFixValue" data-testid="dmarc-fix-value">{{ view.dmarc.fix.value }}</code></span
                             >
                             <button type="button" class="btn sm" data-testid="dmarc-fix-copy" @click="copyFix(view.dmarc.fix.value)">
                                 <i class="fa-solid fa-copy" aria-hidden="true" />
                                 Copy<span class="sr-only"> DMARC record</span>
                             </button>
+                            <span class="sr-only" role="status" aria-live="polite" data-testid="dmarc-copy-status">{{ copyStatus }}</span>
                             <span v-if="view.dmarc.fix.kind === 'update' && view.dmarc.fix.warning" class="fix-warning" data-testid="dmarc-fix-warning">{{ view.dmarc.fix.warning }}</span>
                         </template>
                     </div>
@@ -76,11 +77,11 @@
 
 <script setup lang="ts">
 import { showToast } from '@zyno-io/vue-foundation';
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, useId } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useId } from 'vue';
 
 import { describeApiError, type ApiErrorDescription } from '@/api-errors';
 import { authState } from '@/auth';
-import { copyText } from '@/format';
+import { copyText, selectElementText } from '@/format';
 import { DefaultApi, type Domain, type SenderDomainDnsCheck } from '@/openapi-client-generated';
 import { dmarcView, parseSenderDnsCheck, senderDnsSummary, spfView } from '@/sender-dns';
 
@@ -100,9 +101,17 @@ const isChecking = ref(false);
 const isSignedIn = computed(() => authState.status === 'signed-in');
 const view = computed(() => (result.value ? { summary: senderDnsSummary(result.value), dmarc: dmarcView(result.value), spf: spfView(result.value) } : null));
 
+const dmarcFixValue = ref<HTMLElement>();
+const copyStatus = ref('');
+
 async function copyFix(value: string) {
     const ok = await copyText(value);
     showToast({ message: ok ? 'Copied DMARC record' : "Couldn't copy", durationSecs: 2 });
+    // Cleared first so a repeat of the same result is announced again.
+    copyStatus.value = '';
+    await nextTick();
+    copyStatus.value = ok ? 'Copied' : "Couldn't copy";
+    if (!ok) selectElementText(dmarcFixValue.value);
 }
 
 let seq = 0;

@@ -160,7 +160,7 @@
 
             <div v-if="verifiedDomains.length && !domainsError" class="card-body domain-panels">
                 <div v-for="domain in verifiedDomains" :key="domain.name" role="group" :aria-label="`Settings for ${domain.name}`" class="panel-group">
-                    <BounceDomainPanel :app-id="app.id" :app-active="app.active" :can-act="canAct" :domain="domain" @changed="reloadDomains" />
+                    <BounceDomainPanel :app-id="app.id" :app-active="app.active" :can-act="canAct" :domain="domain" :inherited="inheritedBounce(domain)" @changed="reloadDomains" />
                     <SenderDnsPanel v-if="domain.active_key" :app-id="app.id" :domain="domain" />
                     <TrackingDomainPanel
                         v-if="hasTrackingPanel(domain)"
@@ -169,6 +169,7 @@
                         :can-act="canAct"
                         :domain="domain"
                         :support="trackingSupport"
+                        :inherited="inheritedTracking(domain)"
                         @changed="reloadDomains"
                     />
                 </div>
@@ -197,6 +198,7 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { apiErrorReason, apiErrorStatus, describeApiError, InvalidResponseError, type ApiErrorDescription } from '@/api-errors';
 import { useAppContext } from '@/app-context';
 import { authState } from '@/auth';
+import { inheritedFrom, parseBounceDomain } from '@/bounce-domains';
 import { parseDkimKey, type DkimKeyView } from '@/dkim';
 import { formatDateTime } from '@/format';
 import { DefaultApi, type Domain } from '@/openapi-client-generated';
@@ -211,6 +213,7 @@ import Loader from '@/shared/components/loader.vue';
 import TestMessageModal from '@/shared/components/test-message-modal.vue';
 import TrackingDomainPanel from '@/shared/components/tracking-domain-panel.vue';
 import { useTestSend } from '@/test-send';
+import { parseTrackingDomain } from '@/tracking-domains';
 
 type Action = 'verify' | 'switch' | 'cancel' | 'create';
 
@@ -239,6 +242,12 @@ const canAct = computed(() => isSignedIn.value && !busy.value && !isRequesting.v
 
 /** Verified domains each get a bounce-domain panel. */
 const verifiedDomains = computed(() => (domains.value ?? []).filter(d => d.active));
+
+/** The parent domain whose active bounce domain this domain's mail uses, as the server picks it. */
+const inheritedBounce = (domain: Domain) => inheritedFrom(domain.name, domains.value ?? [], d => (parseBounceDomain(d.bounce_domain)?.state === 'active' ? parseBounceDomain(d.bounce_domain)!.name : null));
+/** The same for tracking: the parent must be verified too. */
+const inheritedTracking = (domain: Domain) =>
+    inheritedFrom(domain.name, domains.value ?? [], d => (d.active && parseTrackingDomain(d.tracking_domain)?.state === 'active' ? parseTrackingDomain(d.tracking_domain)!.name : null));
 
 /** What the deployment offers for custom tracking addresses; unknown until the runtime report loads. */
 const trackingSupport = computed(() => ({ available: runtimeTracking.value?.custom_domains === true, cnameTarget: runtimeTracking.value?.cname_target || null }));
