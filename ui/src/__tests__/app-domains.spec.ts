@@ -36,6 +36,7 @@ vi.mock('@zyno-io/vue-foundation', async importOriginal => {
 
 const { authState } = await import('@/auth');
 const { default: AppDomains } = await import('@/screens/app-domains.vue');
+const { formatDate, formatDateTime } = await import('@/format');
 const { resetRuntimeFeatures } = await import('@/runtime-features');
 
 const APP_ID = '0123456789abcdef0123456789abcdef';
@@ -68,6 +69,25 @@ function button(label: string) {
 
 function hasButton(label: string) {
     return wrapper!.findAll('button').some(b => b.text().includes(label));
+}
+
+async function openRowMenu(name = 'mail.example.com') {
+    await wrapper!.find(`button[aria-label="More actions for ${name}"]`).trigger('click');
+    await flushPromises();
+}
+
+function menuItems() {
+    return wrapper!.findAll('[role="menuitem"]');
+}
+
+function menuItem(label: string) {
+    const match = menuItems().find(b => b.text().includes(label));
+    if (!match) throw new Error(`menu item "${label}" not found`);
+    return match;
+}
+
+function hasMenuItem(label: string) {
+    return menuItems().some(b => b.text().includes(label));
 }
 
 function inputValues() {
@@ -125,10 +145,12 @@ describe('sending domains screen', () => {
         expect(text).toContain('thinpost1');
         // The selector and "in use" are separate words, not run together.
         expect(wrapper!.find('td.key-cell').text()).toBe('thinpost1 in use');
-        // A verified domain with a key offers a test send and a rotation, not verification.
-        expect(hasButton('Send test')).toBe(true);
-        expect(hasButton('Rotate key')).toBe(true);
+        // A verified domain with a key offers a test send and a rotation in its menu, not verification.
+        expect(hasButton('Send test')).toBe(false);
         expect(hasButton('Verify')).toBe(false);
+        await openRowMenu();
+        expect(hasMenuItem('Send test')).toBe(true);
+        expect(hasMenuItem('Rotate key')).toBe(true);
     });
 
     it('adds a domain and shows its persistent DKIM record with a split-strings copy option', async () => {
@@ -240,7 +262,11 @@ describe('sending domains screen', () => {
 
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(wrapper!.text()).toContain('No DKIM key yet');
-        expect(hasButton('Send test')).toBe(false);
+        await openRowMenu();
+        expect(hasMenuItem('Send test')).toBe(false);
+        expect(hasMenuItem('Rotate key')).toBe(false);
+        expect(hasMenuItem('Show record')).toBe(false);
+        await menuItem('Remove domain').trigger('keydown', { key: 'Escape' });
         await button('Create DKIM key').trigger('click');
         await flushPromises();
 
@@ -263,12 +289,14 @@ describe('sending domains screen', () => {
         await mountAt(`/apps/${APP_ID}/domains`);
 
         vf.showConfirm.mockResolvedValueOnce(false);
-        await button('Rotate key').trigger('click');
+        await openRowMenu();
+        await menuItem('Rotate key').trigger('click');
         await flushPromises();
         expect(api.createAppDomainDkimKey).not.toHaveBeenCalled();
 
         vf.showConfirm.mockResolvedValueOnce(true);
-        await button('Rotate key').trigger('click');
+        await openRowMenu();
+        await menuItem('Rotate key').trigger('click');
         await flushPromises();
         expect(api.createAppDomainDkimKey).toHaveBeenCalledTimes(1);
         expect(wrapper!.text()).toContain('New DKIM record for mail.example.com');
@@ -287,6 +315,35 @@ describe('sending domains screen', () => {
         expect(api.activateAppDomainDkimKey).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com', selector: 'thinpost2' } });
         expect(wrapper!.text()).toContain('Old record thinpost1 can stay in DNS until');
         expect(hasButton('Switch')).toBe(false);
+    });
+
+    it('shows Rotating… beside the menu while a key rotates', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        let finish!: (v: unknown) => void;
+        api.createAppDomainDkimKey.mockReturnValue(new Promise(r => (finish = r)));
+        vf.showConfirm.mockResolvedValueOnce(true);
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.find('td.actions .rotating').exists()).toBe(false);
+        await openRowMenu();
+        await menuItem('Rotate key').trigger('click');
+        await flushPromises();
+        expect(wrapper!.find('td.actions .rotating').text()).toBe('Rotating…');
+        finish({ data: { domain: rotating, dns_name: keyTwo.dns_name, dns_value: keyTwo.dns_value } });
+        await flushPromises();
+        expect(wrapper!.find('td.actions .rotating').exists()).toBe(false);
+    });
+
+    it('scrolls the record card below the sticky headers', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        const scroll = vi.fn();
+        Element.prototype.scrollIntoView = scroll;
+        await openRowMenu();
+        await menuItem('Show record').trigger('click');
+        await flushPromises();
+        const card = wrapper!.find('article.record').element as HTMLElement;
+        expect(parseFloat(card.style.scrollMarginTop)).toBeGreaterThanOrEqual(46);
+        expect(scroll).toHaveBeenCalled();
     });
 
     it('does not switch when the new record is not in DNS yet', async () => {
@@ -322,9 +379,14 @@ describe('sending domains screen', () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(inputValues()).toEqual([]);
-        await button('Show record').trigger('click');
+        await openRowMenu();
+        await menuItem('Show record').trigger('click');
+        await flushPromises();
         expect(inputValues()).toEqual([keyOne.dns_name, LONG_VALUE]);
-        await button('Hide record').trigger('click');
+        // The menu closed and focus went back to its trigger.
+        expect(menuItems()).toHaveLength(0);
+        await openRowMenu();
+        await menuItem('Hide record').trigger('click');
         expect(inputValues()).toEqual([]);
     });
 
@@ -358,7 +420,8 @@ describe('sending domains screen', () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [verified, { ...noKey, name: 'b.example.com' }] } });
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(button('Add domain').attributes('disabled')).toBeDefined();
-        expect(button('Rotate key').attributes('disabled')).toBeDefined();
+        await openRowMenu();
+        expect(menuItem('Rotate key').attributes('aria-disabled')).toBe('true');
         expect(button('Create DKIM key').attributes('disabled')).toBeDefined();
     });
 
@@ -376,6 +439,178 @@ describe('sending domains screen', () => {
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(wrapper!.text()).toContain("something the console didn't understand");
         expect(wrapper!.text()).not.toContain('No sending domains');
+    });
+});
+
+describe('domain row actions', () => {
+    const labels = () => menuItems().map(i => i.text().replace(/\s+/g, ' '));
+
+    it('shows only the menu trigger for a verified domain, with the menu in a fixed order', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        const cell = wrapper!.find('td.actions');
+        expect(cell.findAll('button')).toHaveLength(1);
+        await openRowMenu();
+        expect(labels()).toEqual(['Send test from mail.example.com', 'Show record for mail.example.com', 'Rotate key for mail.example.com', 'Remove domain']);
+        expect(wrapper!.find('[role="menu"] [role="separator"]').exists()).toBe(true);
+        // The separator sits right before Remove domain.
+        const children = Array.from(wrapper!.find('[role="menu"]').element.children);
+        expect(children[children.length - 2]!.getAttribute('role')).toBe('separator');
+    });
+
+    it('keeps the next step inline during a rotation and moves the rest into the menu', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [rotating] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        const inline = wrapper!.find('td.actions').findAll('button:not([aria-haspopup])').map(b => b.text());
+        expect(inline.map(t => t.split(' ')[0])).toEqual(['Check', 'Switch', 'Cancel']);
+        await openRowMenu();
+        expect(labels()).toEqual(['Send test from mail.example.com', 'Remove domain']);
+    });
+
+    it('keeps Verify inline and offers only Remove in the menu for a domain waiting for its first record', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [pending] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(hasButton('Verify')).toBe(true);
+        await openRowMenu();
+        expect(labels()).toEqual(['Remove domain']);
+        expect(wrapper!.find('[role="separator"]').exists()).toBe(false);
+    });
+
+    it('disables the menu items for a paused app or a missing session, and ignores clicks on them', async () => {
+        api.listApps.mockResolvedValue({ data: { apps: [{ ...app, active: false }] } });
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await openRowMenu();
+        expect(menuItem('Send test').attributes('aria-disabled')).toBe('true');
+        expect(menuItem('Rotate key').attributes('aria-disabled')).toBe('true');
+        expect(menuItem('Show record').attributes('aria-disabled')).toBeUndefined();
+        await menuItem('Rotate key').trigger('click');
+        await flushPromises();
+        expect(vf.showConfirm).not.toHaveBeenCalled();
+        expect(api.createAppDomainDkimKey).not.toHaveBeenCalled();
+    });
+
+    it('disables Send test and Rotate key without a session', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        authState.status = 'signed-out';
+        await flushPromises();
+        await openRowMenu();
+        expect(menuItem('Send test').attributes('aria-disabled')).toBe('true');
+        expect(menuItem('Rotate key').attributes('aria-disabled')).toBe('true');
+    });
+
+    it('opens the test message dialog from the menu', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await openRowMenu();
+        await menuItem('Send test').trigger('click');
+        await flushPromises();
+        expect(wrapper!.text()).toContain('Send test message');
+        expect(menuItems()).toHaveLength(0);
+    });
+
+    it('has no Verified column; the Added date carries both times in a tip', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified, { ...pending, name: 'new.example.com' }] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.findAll('thead th').map(th => th.text())).toEqual(['Domain', 'Status', 'DKIM key', 'Added', 'Actions']);
+        const cells = wrapper!.findAll('td.added');
+        expect(cells[0]!.find('.hover-tip > time').text()).toBe(formatDate(verified.created_at));
+        const tip0 = cells[0]!.find('[role="tooltip"]');
+        expect(tip0.text()).toContain(`Added ${formatDateTime(verified.created_at)}`);
+        expect(tip0.text()).toContain(`Verified ${formatDateTime(verified.verified_at)}`);
+        const trigger = cells[0]!.find('.hover-tip');
+        expect(trigger.attributes('tabindex')).toBe('0');
+        expect(trigger.attributes('aria-describedby')).toBe(tip0.attributes('id'));
+        expect(cells[1]!.find('[role="tooltip"]').text()).toContain('Not verified yet');
+        expect(cells[1]!.find('[role="tooltip"]').text()).not.toContain('Verified ');
+    });
+
+    it('shows the tip on focus and hides it on Escape', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        const trigger = wrapper!.find('td.added .hover-tip');
+        const tip = wrapper!.find('td.added [role="tooltip"]');
+        expect(tip.classes()).not.toContain('shown');
+        await trigger.trigger('focus');
+        expect(tip.classes()).toContain('shown');
+        await trigger.trigger('keydown', { key: 'Escape' });
+        expect(tip.classes()).not.toContain('shown');
+        await trigger.trigger('mouseenter');
+        expect(tip.classes()).toContain('shown');
+        await trigger.trigger('mouseleave');
+        await vi.waitFor(() => expect(tip.classes()).not.toContain('shown'));
+    });
+
+    function mockRects(trigger: Element, rect: Partial<DOMRect>, tipEl: Element, size: { width: number; height: number }) {
+        const full = { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, ...rect };
+        vi.spyOn(trigger, 'getBoundingClientRect').mockImplementation(() => full as DOMRect);
+        vi.spyOn(tipEl, 'getBoundingClientRect').mockImplementation(() => size as DOMRect);
+    }
+
+    it('dismisses a hover-opened tip with Escape from anywhere, and the pointer can reach the tip', async () => {
+        vi.useFakeTimers();
+        try {
+            api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+            await mountAt(`/apps/${APP_ID}/domains`);
+            const trigger = wrapper!.find('td.added .hover-tip');
+            const tip = wrapper!.find('td.added [role="tooltip"]');
+            await trigger.trigger('mouseenter');
+            expect(tip.classes()).toContain('shown');
+            await trigger.trigger('mouseleave');
+            await tip.trigger('mouseenter');
+            vi.advanceTimersByTime(500);
+            await flushPromises();
+            expect(tip.classes()).toContain('shown');
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+            await flushPromises();
+            expect(tip.classes()).not.toContain('shown');
+            await trigger.trigger('mouseenter');
+            await trigger.trigger('mouseleave');
+            vi.advanceTimersByTime(500);
+            await flushPromises();
+            expect(tip.classes()).not.toContain('shown');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('repositions on scroll instead of hiding, and hides when the trigger leaves the viewport', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        const trigger = wrapper!.find('td.added .hover-tip');
+        const tip = wrapper!.find('td.added [role="tooltip"]');
+        vi.stubGlobal('innerHeight', 800);
+        vi.stubGlobal('innerWidth', 1200);
+        mockRects(trigger.element, { top: 100, bottom: 120, left: 50, right: 120 }, tip.element, { width: 200, height: 50 });
+        await trigger.trigger('focus');
+        await flushPromises();
+        expect(tip.attributes('style')).toContain('top: 126px');
+        mockRects(trigger.element, { top: 300, bottom: 320, left: 50, right: 120 }, tip.element, { width: 200, height: 50 });
+        window.dispatchEvent(new Event('scroll'));
+        await flushPromises();
+        expect(tip.classes()).toContain('shown');
+        expect(tip.attributes('style')).toContain('top: 326px');
+        mockRects(trigger.element, { top: -80, bottom: -60, left: 50, right: 120 }, tip.element, { width: 200, height: 50 });
+        window.dispatchEvent(new Event('scroll'));
+        await flushPromises();
+        expect(tip.classes()).not.toContain('shown');
+        vi.unstubAllGlobals();
+    });
+
+    it('flips the tip above near the bottom of the viewport and clamps it horizontally', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        const trigger = wrapper!.find('td.added .hover-tip');
+        const tip = wrapper!.find('td.added [role="tooltip"]');
+        vi.stubGlobal('innerHeight', 600);
+        vi.stubGlobal('innerWidth', 400);
+        mockRects(trigger.element, { top: 560, bottom: 580, left: 350, right: 390 }, tip.element, { width: 200, height: 50 });
+        await trigger.trigger('mouseenter');
+        await flushPromises();
+        expect(tip.attributes('style')).toContain('top: 504px');
+        expect(tip.attributes('style')).toContain('left: 192px');
+        vi.unstubAllGlobals();
     });
 });
 
@@ -886,7 +1121,8 @@ describe('SPF and DMARC panel', () => {
         expect(wrapper!.text()).toContain('Checking what receivers find for mail.example.com…');
         expect(checkButton().text()).toContain('Checking…');
         expect(checkButton().attributes('disabled')).toBeDefined();
-        expect(button('Rotate key').attributes('disabled')).toBeUndefined();
+        await openRowMenu();
+        expect(menuItem('Rotate key').attributes('aria-disabled')).toBeUndefined();
         finish({ data: goodCheck });
         await flushPromises();
         expect(checkButton().text()).toContain('Check again');
@@ -948,7 +1184,7 @@ describe('removing a domain', () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [verified, pending] } });
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(wrapper!.findAll('td.actions button[aria-label^="More actions for"]')).toHaveLength(2);
-        expect(wrapper!.findAll('thead th')).toHaveLength(6);
+        expect(wrapper!.findAll('thead th')).toHaveLength(5);
         const help = await openHelp(wrapper!, 'sending domains');
         expect(help).not.toContain("can't be removed");
         expect(help).toContain('Remove domain');
