@@ -50,14 +50,18 @@ publicNetwork:
 | `replicas` | `0` or `1`. The journal volume is single-writer. The release renders but runs no pod at `0`. |
 | `workerId` | The worker's stable identifier. Equals `worker-id` in the control plane's `thinpost-edge-binding`. |
 | `controllerIdentity` | The one SPIFFE URI the edge accepts from the control plane. See [Control PKI](/deploy/control-pki). |
-| `controlClientCidrs` | Exact IPv4 `/32` addresses allowed to open the control port. Required for `replicas: 1`; any other prefix fails the render. |
+| `controlClientCidrs` | IPv4 `/24` networks or exact `/32` addresses allowed to open the control port. Required for `replicas: 1`; any other prefix fails the render. |
 | `addresses` | Every public sending address, 1 to 16 entries. Required. The first entry is the main IP. See [Sending addresses](#sending-addresses). |
 | `publicNetwork.*` | The direct public interface; see [Direct public networking](/deploy/direct-public-networking). |
 | `journalCapacity`, `journalReserveBytes`, `clockMargin`, `smtpRate.*` | Journal and SMTP limits. The defaults suit most installs. See the [Helm values reference](/reference/helm-values). |
 
 The chart has no default addresses and refuses to render the edge without them. Its other network defaults, such as `192.0.2.254` for the gateway, are placeholders: set your own. The edge also rejects documentation, private and other special-purpose ranges as sending sources when it runs.
 
-`controlClientCidrs` are the source addresses the edge sees on control connections, after any NAT between the zones. They must be **stable**: the edge's NetworkPolicy drops every other source, so pod IPs that change on each control rollout cut the control stream after the next upgrade. Route control traffic through something with fixed addresses, such as the router or gateway between the trusted and edge zones (SNAT to its own addresses) or an egress gateway, and list those addresses here. Because they are fixed, you know them before either release is installed. The edge still requires the control plane's mTLS identity on every connection.
+`controlClientCidrs` lists the IPv4 sources the Edge sees after any NAT.
+For direct routing, list the control client's stable Trusted `/24` subnet so
+a change of node stays within the allowlist. For a path that uses SNAT, list
+the gateway's exact `/32` addresses. The Edge still requires the control
+plane's mTLS identity on every connection.
 
 ## External resources
 
