@@ -237,7 +237,7 @@
     },
     "controlClientCidrs": {
       "type": "array",
-      "description": "CIDRs the control client may connect from.",
+      "description": "IPv4 /24 source networks and /32 relay addresses allowed to reach Edge control.",
       "items": {
         "type": "string"
       }

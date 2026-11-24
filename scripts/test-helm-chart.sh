@@ -26,6 +26,16 @@ helm lint "$chart" --set workload=control --set control.image=$image --set contr
 
 render control --set workload=control --set control.image=$image
 render edge --set workload=edge -f "$base"
+# A Trusted IPv4 subnet can coexist with an exact transit relay.
+render edge_control_sources --set workload=edge -f "$base" --set 'controlClientCidrs={192.0.2.0/24,198.51.100.2/32}'
+grep -q 'cidr: "192.0.2.0/24"' "$tmp/edge_control_sources.yaml" || fail "omitted the control client subnet"
+grep -q 'cidr: "198.51.100.2/32"' "$tmp/edge_control_sources.yaml" || fail "omitted the control client relay"
+for invalid in 0.0.0.0/0 192.0.0.0/16 192.0.2.10/24; do
+  if helm template thinpost "$chart" --set workload=edge -f "$base" --set "controlClientCidrs[0]=$invalid" >/dev/null 2>&1; then
+    fail "accepted invalid control client CIDR: $invalid"
+  fi
+done
+
 render disabled --set workload=control --set control.image=$image --set control.migrations.enabled=false
 render scaled_down --set workload=control --set control.image=$image --set control.replicas=0
 render bootstrap --set workload=control
