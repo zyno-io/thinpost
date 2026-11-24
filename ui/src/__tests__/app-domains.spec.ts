@@ -715,10 +715,15 @@ describe('SPF and DMARC panel', () => {
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(api.checkAppDomainDns).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' } });
         expect(wrapper!.find('[data-testid="sender-dns-summary"]').text()).toBe('Needs attention');
-        expect(wrapper!.find('[data-testid="dmarc-result"]').text()).toContain("There's no DMARC record for mail.example.com or example.com");
-        expect(wrapper!.find('[data-testid="spf-result"]').text()).toContain("SPF doesn't pass for smtp.example.net");
+        expect(wrapper!.find('[data-testid="dmarc-tag"]').text()).toBe('Missing');
+        expect(wrapper!.find('[data-testid="dmarc-fix"]').text()).toContain('Add:');
+        expect(wrapper!.find('[data-testid="dmarc-fix"]').text()).toContain('TXT _dmarc.example.com');
+        expect(wrapper!.find('[data-testid="dmarc-fix-value"]').text()).toBe('v=DMARC1; p=none');
+        expect(wrapper!.find('[data-testid="spf-tag"]').text()).toBe('Fails');
+        expect(wrapper!.find('[data-testid="spf-envelope"]').text()).toBe('smtp.example.net');
+        expect(wrapper!.find('[data-testid="spf-note"]').text()).toBe('Set by your Thinpost administrator, not on mail.example.com.');
         expect(checkButton().text()).toContain('Check again');
-        expect(wrapper!.text()).toContain('This check only reads DNS and never changes how mail is sent.');
+        expect(wrapper!.text()).not.toContain('This check only reads DNS');
     });
 
     it('says all good, with the record shown, and checks again on request', async () => {
@@ -726,10 +731,37 @@ describe('SPF and DMARC panel', () => {
         api.checkAppDomainDns.mockResolvedValue({ data: goodCheck });
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(wrapper!.find('[data-testid="sender-dns-summary"]').text()).toBe('All good');
-        expect(wrapper!.find('[data-testid="dmarc-result"]').text()).toContain('Currently: v=DMARC1; p=reject');
+        expect(wrapper!.find('[data-testid="dmarc-tag"]').text()).toBe('Enforced');
+        expect(wrapper!.find('[data-testid="dmarc-location"]').text()).toBe('_dmarc.example.com');
+        expect(wrapper!.find('[data-testid="dmarc-record"]').text()).toBe('v=DMARC1; p=reject');
+        expect(wrapper!.find('[data-testid="dmarc-fix"]').exists()).toBe(false);
+        expect(wrapper!.find('[data-testid="spf-alignment"]').text()).toContain('Not aligned');
         await checkButton().trigger('click');
         await flushPromises();
         expect(api.checkAppDomainDns).toHaveBeenCalledTimes(2);
+    });
+
+    it('marks the problem parts, offers the corrected record, and copies it', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.checkAppDomainDns.mockResolvedValue({ data: { ...goodCheck, dmarc: { status: 'invalid', org_domain: 'example.com', record_domain: 'example.com', record: 'v=DMARC1; p=block; rua=mailto:d@example.com' } } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        const parts = wrapper!.findAll('[data-testid="dmarc-record"] .part');
+        expect(parts.map(p => p.attributes('data-state'))).toEqual(['ok', 'problem', 'ok']);
+        expect(parts[1]?.attributes('title')).toBe('p must be none, quarantine or reject');
+        expect(wrapper!.find('[data-testid="dmarc-fix"]').text()).toContain('Update:');
+        expect(wrapper!.find('[data-testid="dmarc-fix-value"]').text()).toBe('v=DMARC1; p=none; rua=mailto:d@example.com');
+        await wrapper!.find('[data-testid="dmarc-fix-copy"]').trigger('click');
+        expect(writeText).toHaveBeenCalledWith('v=DMARC1; p=none; rua=mailto:d@example.com');
+    });
+
+    it('lists duplicate DMARC records', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.checkAppDomainDns.mockResolvedValue({ data: { ...goodCheck, dmarc: { status: 'multiple', org_domain: 'example.com', record_domain: 'example.com', records: ['v=DMARC1; p=none', 'v=DMARC1; p=reject'] } } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.findAll('[data-testid="dmarc-records"] li')).toHaveLength(2);
+        expect(wrapper!.find('[data-testid="dmarc-fix"]').text()).toBe('Keep one; delete the others.');
     });
 
     it('explains an unavailable check', async () => {

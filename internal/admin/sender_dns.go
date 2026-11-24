@@ -27,6 +27,7 @@ type MailAuthResolver interface {
 const (
 	senderDNSCheckTimeout = 8 * time.Second
 	maxDMARCRecordBytes   = 1024
+	maxDMARCRecords       = 5
 )
 
 // DMARC statuses, SPF's extra result and envelope kinds, as the API reports
@@ -58,8 +59,13 @@ type SenderDomainDMARC struct {
 	OrgDomain    string `json:"org_domain"`
 	RecordDomain string `json:"record_domain,omitempty"`
 	Record       string `json:"record,omitempty"`
-	Policy       string `json:"policy,omitempty"`
-	SPFAlignment string `json:"aspf,omitempty"`
+	// RecordTruncated is set when Record is shorter than the record found, so a
+	// reader knows it holds only the start.
+	RecordTruncated bool   `json:"record_truncated,omitempty"`
+	Policy          string `json:"policy,omitempty"`
+	SPFAlignment    string `json:"aspf,omitempty"`
+	// Records are the competing records of a multiple status.
+	Records []string `json:"records,omitempty"`
 }
 
 // SenderDomainSPF is the SPF result of the app's sending IP at the envelope
@@ -155,10 +161,14 @@ func lookupDMARC(ctx context.Context, dns MailAuthResolver, name, domain, org st
 	case 1:
 	default:
 		out.Status, out.RecordDomain = DMARCMultiple, name
+		for _, record := range records[:min(len(records), maxDMARCRecords)] {
+			out.Records = append(out.Records, cutRecord(record))
+		}
 		return out
 	}
 	out.RecordDomain = name
 	out.Record = cutRecord(records[0])
+	out.RecordTruncated = out.Record != records[0]
 	p, sp, aspf, ok := parseDMARC(records[0])
 	if !ok {
 		out.Status = DMARCInvalid

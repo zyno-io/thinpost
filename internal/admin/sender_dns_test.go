@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -149,7 +150,7 @@ func TestSenderDomainDNSCheck(t *testing.T) {
 			dns: fakeMailDNS{txt: merge(spfOK, map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject"}})},
 			check: func(t *testing.T, c SenderDomainDNSCheck, _ *fakeMailDNS) {
 				want := SenderDomainDMARC{Status: DMARCOK, OrgDomain: "example.com", RecordDomain: "example.com", Record: "v=DMARC1; p=reject", Policy: "reject", SPFAlignment: "r"}
-				if c.DMARC != want {
+				if !reflect.DeepEqual(c.DMARC, want) {
 					t.Fatalf("%+v", c.DMARC)
 				}
 				if c.SPF != (SenderDomainSPF{Result: "pass", EnvelopeDomain: "smtp.example.net", EnvelopeKind: EnvelopeStandard}) {
@@ -185,10 +186,26 @@ func TestSenderDomainDNSCheck(t *testing.T) {
 				if c.DMARC.Status != DMARCMultiple || c.DMARC.RecordDomain != "mail.example.com" || c.DMARC.Record != "" {
 					t.Fatalf("%+v", c.DMARC)
 				}
+				if want := []string{"v=DMARC1; p=none", "v=DMARC1; p=reject"}; !reflect.DeepEqual(c.DMARC.Records, want) {
+					t.Fatalf("records %q", c.DMARC.Records)
+				}
 				for _, name := range f.asked {
 					if name == "_dmarc.example.com" {
 						t.Fatal("looked past multiple records")
 					}
+				}
+			},
+		},
+		{
+			name: "multiple lists at most five records, each cut", domain: "mail.example.com", target: target,
+			dns: fakeMailDNS{txt: map[string][]string{
+				"_dmarc.mail.example.com": {
+					"v=DMARC1; p=none; rua=" + strings.Repeat("a", 2000), "v=DMARC1; p=none", "v=DMARC1; p=none", "v=DMARC1; p=none", "v=DMARC1; p=none", "v=DMARC1; p=none", "v=DMARC1; p=none",
+				},
+			}},
+			check: func(t *testing.T, c SenderDomainDNSCheck, _ *fakeMailDNS) {
+				if c.DMARC.Status != DMARCMultiple || len(c.DMARC.Records) != 5 || len(c.DMARC.Records[0]) != maxDMARCRecordBytes {
+					t.Fatalf("%d records, first %d bytes", len(c.DMARC.Records), len(c.DMARC.Records[0]))
 				}
 			},
 		},
@@ -219,7 +236,7 @@ func TestSenderDomainDNSCheck(t *testing.T) {
 		{
 			name: "missing everywhere", domain: "mail.example.com", target: target,
 			check: func(t *testing.T, c SenderDomainDNSCheck, _ *fakeMailDNS) {
-				if c.DMARC != (SenderDomainDMARC{Status: DMARCMissing, OrgDomain: "example.com"}) {
+				if !reflect.DeepEqual(c.DMARC, SenderDomainDMARC{Status: DMARCMissing, OrgDomain: "example.com"}) {
 					t.Fatalf("%+v", c.DMARC)
 				}
 			},
@@ -240,8 +257,26 @@ func TestSenderDomainDNSCheck(t *testing.T) {
 			name: "a long record is cut", domain: "example.com", target: target,
 			dns: fakeMailDNS{txt: map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=none; rua=mailto:" + strings.Repeat("a", 1500) + "@example.com"}}},
 			check: func(t *testing.T, c SenderDomainDNSCheck, _ *fakeMailDNS) {
-				if c.DMARC.Status != DMARCMonitoring || len(c.DMARC.Record) != maxDMARCRecordBytes {
-					t.Fatalf("%s %d", c.DMARC.Status, len(c.DMARC.Record))
+				if c.DMARC.Status != DMARCMonitoring || len(c.DMARC.Record) != maxDMARCRecordBytes || !c.DMARC.RecordTruncated {
+					t.Fatalf("%s %d %v", c.DMARC.Status, len(c.DMARC.Record), c.DMARC.RecordTruncated)
+				}
+			},
+		},
+		{
+			name: "a cut record keeps the status of the whole record", domain: "example.com", target: target,
+			dns: fakeMailDNS{txt: map[string][]string{"_dmarc.example.com": {"v=DMARC1; rua=mailto:" + strings.Repeat("a", 1500) + "@example.com; p=reject"}}},
+			check: func(t *testing.T, c SenderDomainDNSCheck, _ *fakeMailDNS) {
+				if c.DMARC.Status != DMARCOK || c.DMARC.Policy != "reject" || !c.DMARC.RecordTruncated || strings.Contains(c.DMARC.Record, "p=reject") {
+					t.Fatalf("%+v", c.DMARC)
+				}
+			},
+		},
+		{
+			name: "a short record is not marked cut", domain: "example.com", target: target,
+			dns: fakeMailDNS{txt: map[string][]string{"_dmarc.example.com": {"v=DMARC1; p=reject"}}},
+			check: func(t *testing.T, c SenderDomainDNSCheck, _ *fakeMailDNS) {
+				if c.DMARC.RecordTruncated {
+					t.Fatalf("%+v", c.DMARC)
 				}
 			},
 		},

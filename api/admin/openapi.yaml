@@ -2800,8 +2800,14 @@ components:
         org_domain: { type: string, description: The organizational domain; equal to domain when it is one. }
         record_domain: { type: string, description: Where the record was found. Absent for missing and unavailable. }
         record: { type: string, maxLength: 1024, description: The record text, cut at 1024 bytes. Present for ok, monitoring and invalid. }
+        record_truncated: { type: boolean, description: 'True when record is shorter than the record found (it was cut, so it holds only the start). The status was set from the full record.' }
         policy: { type: string, enum: [none, quarantine, reject], description: The policy for mail from the domain (sp= when the record is the organizational domain's and has one). Present for ok and monitoring. }
         aspf: { type: string, enum: [r, s], description: Present for ok and monitoring. }
+        records:
+          type: array
+          maxItems: 5
+          items: { type: string, maxLength: 1024 }
+          description: The v=DMARC1 records found, each cut at 1024 bytes, at most 5. Present for multiple.
     SenderDomainSpf:
       type: object
       required: [result, aligned]
