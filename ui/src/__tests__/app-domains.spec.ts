@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
     listAppDomains: vi.fn(),
     requestAppDomain: vi.fn(),
     verifyAppDomain: vi.fn(),
+    checkAppDomainDns: vi.fn(),
     createAppDomainDkimKey: vi.fn(),
     activateAppDomainDkimKey: vi.fn(),
     cancelAppDomainDkimKey: vi.fn(),
@@ -79,6 +80,14 @@ async function submitDomain(value: string) {
     await flushPromises();
 }
 
+function senderDnsCheck(domain: string) {
+    return {
+        domain,
+        dmarc: { status: 'ok', org_domain: 'example.com', record_domain: 'example.com', record: 'v=DMARC1; p=reject', policy: 'reject', aspf: 'r' },
+        spf: { result: 'pass', envelope_domain: 'smtp.example.net', envelope_kind: 'standard', aligned: false }
+    };
+}
+
 beforeEach(() => {
     Object.values(api).forEach(fn => fn.mockReset());
     Object.values(vf).forEach(fn => fn.mockReset());
@@ -87,6 +96,7 @@ beforeEach(() => {
     sessionStorage.clear();
     resetRuntimeFeatures();
     api.listApps.mockResolvedValue({ data: { apps: [app] } });
+    api.checkAppDomainDns.mockImplementation(async ({ path }: { path: { domain: string } }) => ({ data: senderDnsCheck(path.domain) }));
 });
 
 afterEach(() => {
@@ -106,11 +116,14 @@ describe('sending domains screen', () => {
         await mountAt(`/apps/${APP_ID}/domains`);
         const help = await openHelp(wrapper!, 'sending domains');
         expect(help).toContain('Verified means Thinpost can see your DKIM record');
-        expect(help).toContain("Verifying doesn't set up or check SPF, DMARC or reverse DNS");
+        expect(help).toContain("Verifying doesn't set up SPF, DMARC or reverse DNS");
+        expect(help).toContain('The SPF and DMARC panel under each verified domain');
         expect(help).not.toContain('_thinpost');
         const text = wrapper!.text();
         expect(text).toContain('Verified');
         expect(text).toContain('thinpost1');
+        // The selector and "in use" are separate words, not run together.
+        expect(wrapper!.find('td.key-cell').text()).toBe('thinpost1 in use');
         // A verified domain with a key offers a test send and a rotation, not verification.
         expect(hasButton('Send test')).toBe(true);
         expect(hasButton('Rotate key')).toBe(true);
@@ -380,11 +393,10 @@ describe('bounce domains', () => {
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(wrapper!.find('[data-testid="bounce-mail.example.com"]').exists()).toBe(false);
         expect(wrapper!.find('[data-testid="bounce-ok.example.com"]').exists()).toBe(true);
-        expect(wrapper!.text()).toContain("Mail from ok.example.com uses Thinpost's standard bounce address");
+        expect(wrapper!.find('[data-testid="bounce-ok.example.com"]').text()).toContain("Uses Thinpost's bounce address. Add your own to align SPF.");
         const help = await openHelp(wrapper!, 'bounce domains');
         expect(help).toContain('DNS only, not proxied');
-        expect(help).toContain('aspf=s');
-        expect(help).toContain('different IP');
+        expect(help).toContain('SPF passes for your domain');
     });
 
     it('adds a bounce domain after checking the name against the sending domain', async () => {
@@ -407,9 +419,8 @@ describe('bounce domains', () => {
         expect(vf.showToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Bounce domain saved for mail.example.com' }));
         // The list is read again and the CNAME to add is shown, DNS only.
         expect(api.listAppDomains).toHaveBeenCalledTimes(2);
-        expect(bouncePanel().text()).toContain('Waiting for DNS record');
-        expect(inputValues()).toContain('smtp.example.net');
-        expect(inputValues()).toContain('bounces.mail.example.com');
+        expect(bouncePanel().find('[data-testid="bounce-status"]').text()).toBe('Waiting for DNS record');
+        expect(bouncePanel().find('[data-testid="cname-fix"]').text()).toContain('Add: CNAME bounces.mail.example.com smtp.example.net');
         expect(bouncePanel().text()).toContain('DNS only, not proxied');
     });
 
@@ -433,9 +444,71 @@ describe('bounce domains', () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [withBounce({ state: 'active', result: 'ok', checked_at: '2026-11-21T12:30:00Z' })] } });
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(bouncePanel().find('[data-testid="bounce-status"]').text()).toBe('In use');
-        expect(bouncePanel().find('[data-testid="bounce-message"]').text()).toContain('SPF passes for your domain too');
-        expect(inputValues()).toEqual([]);
-        expect(bouncePanel().text()).toContain('Last checked');
+        expect(bouncePanel().find('[data-testid="cname-record"]').text()).toBe('CNAME bounces.mail.example.com → smtp.example.net');
+        expect(bouncePanel().find('[data-testid="cname-fix"]').exists()).toBe(false);
+        expect(bouncePanel().find('[data-testid="cname-note"]').exists()).toBe(false);
+        expect(bouncePanel().find('[data-testid="cname-checked"]').text()).toContain('Checked');
+    });
+
+    it('shows a record that points elsewhere as a problem, with an Update line that copies', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withBounce({ state: 'failing', result: 'wrong_target', observed_target: 'cdn.other.example' })] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(bouncePanel().find('[data-testid="cname-record"]').text()).toBe('CNAME bounces.mail.example.com → cdn.other.example (Points at the wrong name)');
+        expect(bouncePanel().find('[data-state="problem"]').text()).toContain('cdn.other.example');
+        expect(bouncePanel().find('[data-testid="cname-fix"]').text()).toContain('Update: CNAME bounces.mail.example.com smtp.example.net');
+        const copy = vi.fn().mockResolvedValue(undefined);
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText: copy }, configurable: true });
+        await bouncePanel().find('[data-testid="cname-fix-copy-target"]').trigger('click');
+        await flushPromises();
+        expect(copy).toHaveBeenCalledWith('smtp.example.net');
+        expect(vf.showToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Copied CNAME target' }));
+    });
+
+    it('shows a missing CNAME as an insertion with an Add line', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withBounce({ state: 'failing', result: 'missing' })] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(bouncePanel().find('[data-state="missing"]').text()).toContain('smtp.example.net');
+        expect(bouncePanel().find('[data-testid="cname-fix"]').text()).toContain('Add: CNAME bounces.mail.example.com smtp.example.net');
+    });
+
+    it('says a subdomain uses its parent\'s bounce domain, until it has its own', async () => {
+        const parent = { ...verified, name: 'example.com', ...TARGET, bounce_domain: { name: 'bounces.example.com', state: 'active', checking: false, result: 'ok', created_at: 'x' } };
+        api.listAppDomains.mockResolvedValue({ data: { domains: [parent, none] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(bouncePanel().find('[data-testid="bounce-empty"]').text()).toBe('Uses bounces.example.com from example.com. Add your own to override.');
+        expect(wrapper!.find(`[data-testid="bounce-${'example'}.com"]`).text()).not.toContain('Uses bounces.example.com from');
+        expect(await openHelp(wrapper!, 'bounce domains')).toContain("Also covers verified subdomains that don't have their own.");
+    });
+
+    it('does not borrow a parent\'s bounce domain that is not active', async () => {
+        const parent = { ...verified, name: 'example.com', ...TARGET, bounce_domain: { name: 'bounces.example.com', state: 'failing', checking: false, created_at: 'x' } };
+        api.listAppDomains.mockResolvedValue({ data: { domains: [parent, none] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(bouncePanel().find('[data-testid="bounce-empty"]').text()).toBe("Uses Thinpost's bounce address. Add your own to align SPF.");
+    });
+
+    it('shows an active bounce domain that mail is not using as Not in use with an Update line', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withBounce({ state: 'active', result: 'ok', observed_target: 'smtp.old.example.net', last_ok_at: new Date().toISOString() })] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(bouncePanel().find('[data-testid="bounce-status"]').text()).toBe('Not in use');
+        expect(bouncePanel().find('[data-state="problem"]').text()).toContain('smtp.old.example.net');
+        expect(bouncePanel().find('[data-testid="cname-fix"]').text()).toContain('Update: CNAME bounces.mail.example.com smtp.example.net');
+    });
+
+    it('announces the copy result to screen readers, and selects the value when copying fails', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withBounce({ state: 'failing', result: 'missing' })] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        const status = () => bouncePanel().find('[data-testid="cname-copy-status"]');
+        expect(status().attributes('role')).toBe('status');
+        expect(status().attributes('aria-live')).toBe('polite');
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true });
+        await bouncePanel().find('[data-testid="cname-fix-copy-target"]').trigger('click');
+        await flushPromises();
+        expect(status().text()).toBe('Copied');
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) }, configurable: true });
+        await bouncePanel().find('[data-testid="cname-fix-copy-name"]').trigger('click');
+        await flushPromises();
+        expect(status().text()).toBe("Couldn't copy");
     });
 
     it('checks now and reads the list again', async () => {
@@ -464,13 +537,14 @@ describe('bounce domains', () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [{ ...withBounce({ state: 'failing', result: 'other_ip' }), cname_target: 'smtp2.example.net' }] } });
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(bouncePanel().find('[data-testid="bounce-status"]').text()).toBe('Not in use');
-        expect(bouncePanel().find('[data-testid="bounce-message"]').text()).toContain('Point the CNAME at smtp2.example.net.');
+        expect(bouncePanel().find('[data-testid="cname-note"]').text()).toBe('This app now sends from a different IP.');
+        expect(bouncePanel().find('[data-testid="cname-fix"]').text()).toContain('Update: CNAME bounces.mail.example.com smtp2.example.net');
         wrapper!.unmount();
 
         api.listAppDomains.mockResolvedValue({ data: { domains: [{ ...verified, cname_target_status: 'dns_unconfirmed', bounce_domain: bounce({ state: 'failing', result: 'missing' }) }] } });
         await mountAt(`/apps/${APP_ID}/domains`);
-        expect(bouncePanel().find('[data-testid="bounce-message"]').text()).toContain("can't confirm the name to point at");
-        expect(inputValues()).toEqual([]);
+        expect(bouncePanel().find('[data-testid="cname-note"]').text()).toContain("Can't confirm the name to point at");
+        expect(bouncePanel().find('[data-testid="cname-fix"]').exists()).toBe(false);
     });
 
     it('removes a bounce domain only after confirming', async () => {
@@ -489,7 +563,7 @@ describe('bounce domains', () => {
         await flushPromises();
         expect(vf.showConfirm).toHaveBeenLastCalledWith('Remove the bounce domain?', expect.stringContaining("standard bounce address"));
         expect(api.deleteAppBounceDomain).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' } });
-        expect(bouncePanel().text()).toContain("uses Thinpost's standard bounce address");
+        expect(bouncePanel().find('[data-testid="bounce-empty"]').exists()).toBe(true);
     });
 
     it('does not let a paused app change its bounce domain', async () => {
@@ -522,10 +596,10 @@ describe('tracking domains', () => {
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(wrapper!.find('[data-testid="tracking-mail.example.com"]').exists()).toBe(false);
         expect(wrapper!.find('[data-testid="tracking-ok.example.com"]').exists()).toBe(true);
-        expect(wrapper!.text()).toContain("use Thinpost's standard tracking address");
+        expect(wrapper!.find('[data-testid="tracking-ok.example.com"]').text()).toContain("Uses Thinpost's tracking address. Add your own for branded links.");
         const help = await openHelp(wrapper!, 'tracking domains');
         expect(help).toContain('Cloudflare');
-        expect(help).toContain('One-click unsubscribe');
+        expect(help).toContain('unsubscribe');
         expect(help).toContain('certificate');
     });
 
@@ -556,15 +630,14 @@ describe('tracking domains', () => {
         expect(panelButton('Remove')).toBeDefined();
         // Even an active row is not in use, and no record to add is offered.
         expect(trackingPanel().find('[data-testid="tracking-status"]').text()).toBe('Not in use');
-        expect(trackingPanel().find('[data-testid="tracking-message"]').text()).toContain("this installation doesn't use your own tracking address right now");
-        expect(inputValues()).toEqual([]);
-        expect(trackingPanel().text()).not.toContain('CNAME record');
+        expect(trackingPanel().find('[data-testid="cname-note"]').text()).toBe('Not turned on for this installation. Ask your Thinpost administrator.');
+        expect(trackingPanel().find('[data-testid="cname-fix"]').exists()).toBe(false);
         wrapper!.unmount();
         resetRuntimeFeatures();
         api.listAppDomains.mockResolvedValue({ data: { domains: [withTracking({ state: 'pending' })] } });
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(trackingPanel().find('[data-testid="tracking-status"]').text()).toBe('Not in use');
-        expect(inputValues()).toEqual([]);
+        expect(trackingPanel().find('[data-testid="cname-fix"]').exists()).toBe(false);
     });
 
     it('adds a tracking domain after checking the name against the sending domain', async () => {
@@ -587,9 +660,8 @@ describe('tracking domains', () => {
         expect(vf.showToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Tracking domain saved for mail.example.com' }));
         expect(api.listAppDomains).toHaveBeenCalledTimes(2);
         // The record to add shows the deployment's tracking host.
-        expect(trackingPanel().text()).toContain('Waiting for DNS record');
-        expect(inputValues()).toContain('links.example.net');
-        expect(inputValues()).toContain('links.mail.example.com');
+        expect(trackingPanel().find('[data-testid="tracking-status"]').text()).toBe('Waiting for DNS record');
+        expect(trackingPanel().find('[data-testid="cname-fix"]').text()).toContain('Add: CNAME links.mail.example.com links.example.net');
     });
 
     it.each([
@@ -611,10 +683,10 @@ describe('tracking domains', () => {
     it('tells the waiting-for-a-secure-connection story once the DNS record is right', async () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [withTracking({ dns_result: 'ok', https_result: 'certificate' })] } });
         await mountAt(`/apps/${APP_ID}/domains`);
-        expect(trackingPanel().find('[data-testid="tracking-status"]').text()).toBe('Waiting for a secure connection');
-        const message = trackingPanel().find('[data-testid="tracking-message"]').text();
-        expect(message).toContain('Your DNS record is right; your Thinpost administrator still needs to finish setting up this address.');
-        expect(message).toContain('Links will start using it on their own once it works.');
+        expect(trackingPanel().find('[data-testid="tracking-status"]').text()).toBe('Waiting for HTTPS');
+        expect(trackingPanel().find('[data-testid="cname-fix"]').exists()).toBe(false);
+        expect(trackingPanel().find('[data-testid="tracking-https"]').text()).toBe('No valid certificate');
+        expect(trackingPanel().find('[data-testid="tracking-https-note"]').text()).toBe('Your Thinpost administrator issues it.');
     });
 
     it('shows an active domain as in use, with its certificate expiry, without the record to add', async () => {
@@ -622,10 +694,47 @@ describe('tracking domains', () => {
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(trackingPanel().find('[data-testid="tracking-status"]').text()).toBe('In use');
         // A proxied name never matches the DNS record and is still in use.
-        expect(trackingPanel().find('[data-testid="tracking-message"]').text()).toContain("One-click unsubscribe links keep using Thinpost's standard address");
-        expect(inputValues()).toEqual([]);
-        expect(trackingPanel().text()).toContain('certificate expires');
-        expect(trackingPanel().text()).toContain('Last checked');
+        expect(trackingPanel().find('[data-testid="cname-fix"]').exists()).toBe(false);
+        expect(trackingPanel().find('[data-testid="tracking-https"]').text()).toBe('Secure');
+        expect(trackingPanel().text()).toContain('Certificate expires');
+        expect(trackingPanel().find('[data-testid="cname-checked"]').text()).toContain('Checked');
+    });
+
+    it('says a subdomain uses its verified parent\'s tracking domain, until it has its own', async () => {
+        const parentTracking = { name: 'links.example.com', state: 'active', checking: false, created_at: 'x' };
+        const parent = { ...verified, name: 'example.com', tracking_domain: parentTracking };
+        api.listAppDomains.mockResolvedValue({ data: { domains: [parent, verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(trackingPanel().find('[data-testid="tracking-empty"]').text()).toBe('Uses links.example.com from example.com. Add your own to override.');
+        expect(await openHelp(wrapper!, 'tracking domains')).toContain("Also covers verified subdomains that don't have their own.");
+
+        api.listAppDomains.mockResolvedValue({ data: { domains: [{ ...parent, active: false }, verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(trackingPanel().find('[data-testid="tracking-empty"]').text()).toContain("Uses Thinpost's tracking address");
+    });
+
+    it('shows a dangling CNAME as a problem with an Update line', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withTracking({ dns_result: 'missing', https_result: 'not_found', observed_target: 'gone.example.org' })] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(trackingPanel().find('[data-testid="cname-record"]').text()).toContain("Points at a name that doesn't resolve");
+        expect(trackingPanel().find('[data-testid="cname-fix"]').text()).toContain('Update: CNAME links.mail.example.com');
+    });
+
+    it('keeps the certificate expiry when custom tracking is turned off for the installation', async () => {
+        api.getRuntime.mockResolvedValue(runtime({ custom_domains: false }));
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withTracking({ state: 'active', https_result: 'ok', certificate_expires_at: '2027-01-02T03:04:05Z' })] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(trackingPanel().find('[data-testid="tracking-status"]').text()).toBe('Not in use');
+        expect(trackingPanel().text()).toContain('Certificate expires');
+    });
+
+    it('shows a record that points elsewhere as a problem, with an Update line', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withTracking({ state: 'failing', dns_result: 'wrong_target', https_result: 'unreachable', observed_target: 'cdn.example.org' })] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(trackingPanel().find('[data-testid="tracking-status"]').text()).toBe('Not in use');
+        expect(trackingPanel().find('[data-state="problem"]').text()).toContain('cdn.example.org');
+        expect(trackingPanel().find('[data-testid="cname-fix"]').text()).toContain('Update: CNAME links.mail.example.com links.example.net');
+        expect(trackingPanel().find('[data-testid="tracking-https"]').text()).toBe("Can't connect");
     });
 
     it('checks now and reads the list again', async () => {
@@ -666,7 +775,7 @@ describe('tracking domains', () => {
         expect(vf.showConfirm).toHaveBeenLastCalledWith('Remove the tracking domain?', expect.stringContaining('Links already sent keep working only while the DNS record'));
         expect(vf.showConfirm.mock.lastCall?.[1]).toContain('New mail will use the standard tracking address');
         expect(api.deleteAppTrackingDomain).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' } });
-        expect(trackingPanel().text()).toContain("use Thinpost's standard tracking address");
+        expect(trackingPanel().find('[data-testid="tracking-empty"]').exists()).toBe(true);
     });
 
     it('does not let a paused app change its tracking domain', async () => {
@@ -674,5 +783,119 @@ describe('tracking domains', () => {
         api.listAppDomains.mockResolvedValue({ data: { domains: [withTracking()] } });
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(panelButton('Change').attributes('disabled')).toBeDefined();
+    });
+});
+
+describe('SPF and DMARC panel', () => {
+    const goodCheck = senderDnsCheck('mail.example.com');
+    const badCheck = {
+        ...goodCheck,
+        dmarc: { status: 'missing', org_domain: 'example.com' },
+        spf: { result: 'fail', envelope_domain: 'smtp.example.net', envelope_kind: 'standard', aligned: false }
+    };
+    const checkButton = () => wrapper!.find('[data-testid="check-sender-dns"]');
+
+    it('appears only for a verified domain with a key', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [pending, noKey, { ...verified, name: 'ok.example.com' }] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.findAll('[data-testid^="sender-dns-ok"]')).toHaveLength(1);
+        expect(wrapper!.find('[data-testid="sender-dns-ok.example.com"]').text()).toContain('SPF and DMARC for ok.example.com');
+        expect(wrapper!.findAll('[data-testid="check-sender-dns"]')).toHaveLength(1);
+        expect(api.checkAppDomainDns).toHaveBeenCalledTimes(1);
+        expect(checkButton().text()).toContain('SPF and DMARC for ok.example.com');
+    });
+
+    it('checks on mount and shows the summary and both results', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.checkAppDomainDns.mockResolvedValue({ data: badCheck });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(api.checkAppDomainDns).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: 'mail.example.com' } });
+        expect(wrapper!.find('[data-testid="sender-dns-summary"]').text()).toBe('Needs attention');
+        expect(wrapper!.find('[data-testid="dmarc-tag"]').text()).toBe('Missing');
+        expect(wrapper!.find('[data-testid="dmarc-fix"]').text()).toContain('Add:');
+        expect(wrapper!.find('[data-testid="dmarc-fix"]').text()).toContain('TXT _dmarc.example.com');
+        expect(wrapper!.find('[data-testid="dmarc-fix-value"]').text()).toBe('v=DMARC1; p=none');
+        expect(wrapper!.find('[data-testid="spf-tag"]').text()).toBe('Fails');
+        expect(wrapper!.find('[data-testid="spf-envelope"]').text()).toBe('smtp.example.net');
+        expect(wrapper!.find('[data-testid="spf-note"]').text()).toBe('Set by your Thinpost administrator, not on mail.example.com.');
+        expect(checkButton().text()).toContain('Check again');
+        expect(wrapper!.text()).not.toContain('This check only reads DNS');
+    });
+
+    it('says all good, with the record shown, and checks again on request', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.checkAppDomainDns.mockResolvedValue({ data: goodCheck });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.find('[data-testid="sender-dns-summary"]').text()).toBe('All good');
+        expect(wrapper!.find('[data-testid="dmarc-tag"]').text()).toBe('Enforced');
+        expect(wrapper!.find('[data-testid="dmarc-location"]').text()).toBe('_dmarc.example.com');
+        expect(wrapper!.find('[data-testid="dmarc-record"]').text()).toBe('v=DMARC1; p=reject');
+        expect(wrapper!.find('[data-testid="dmarc-fix"]').exists()).toBe(false);
+        expect(wrapper!.find('[data-testid="spf-alignment"]').text()).toContain('Not aligned');
+        await checkButton().trigger('click');
+        await flushPromises();
+        expect(api.checkAppDomainDns).toHaveBeenCalledTimes(2);
+    });
+
+    it('marks the problem parts, offers the corrected record, and copies it', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.checkAppDomainDns.mockResolvedValue({ data: { ...goodCheck, dmarc: { status: 'invalid', org_domain: 'example.com', record_domain: 'example.com', record: 'v=DMARC1; p=block; rua=mailto:d@example.com' } } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        const parts = wrapper!.findAll('[data-testid="dmarc-record"] .part');
+        expect(parts.map(p => p.attributes('data-state'))).toEqual(['ok', 'problem', 'ok']);
+        expect(parts[1]?.attributes('title')).toBe('p must be none, quarantine or reject');
+        expect(wrapper!.find('[data-testid="dmarc-fix"]').text()).toContain('Update:');
+        expect(wrapper!.find('[data-testid="dmarc-fix-value"]').text()).toBe('v=DMARC1; p=none; rua=mailto:d@example.com');
+        await wrapper!.find('[data-testid="dmarc-fix-copy"]').trigger('click');
+        expect(writeText).toHaveBeenCalledWith('v=DMARC1; p=none; rua=mailto:d@example.com');
+        await flushPromises();
+        const status = wrapper!.find('[data-testid="dmarc-copy-status"]');
+        expect(status.attributes('role')).toBe('status');
+        expect(status.text()).toBe('Copied');
+
+        Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) }, configurable: true });
+        await wrapper!.find('[data-testid="dmarc-fix-copy"]').trigger('click');
+        await flushPromises();
+        expect(wrapper!.find('[data-testid="dmarc-copy-status"]').text()).toBe("Couldn't copy");
+    });
+
+    it('lists duplicate DMARC records', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.checkAppDomainDns.mockResolvedValue({ data: { ...goodCheck, dmarc: { status: 'multiple', org_domain: 'example.com', record_domain: 'example.com', records: ['v=DMARC1; p=none', 'v=DMARC1; p=reject'] } } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.findAll('[data-testid="dmarc-records"] li')).toHaveLength(2);
+        expect(wrapper!.find('[data-testid="dmarc-fix"]').text()).toBe('Keep one; delete the others.');
+    });
+
+    it('explains an unavailable check', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.checkAppDomainDns.mockRejectedValue(httpError(503));
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.text()).toContain("Thinpost couldn't look up DNS just now");
+        expect(wrapper!.find('[data-testid="sender-dns-summary"]').exists()).toBe(false);
+    });
+
+    it('does not block the DKIM actions while it runs', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        let finish!: (value: unknown) => void;
+        api.checkAppDomainDns.mockReturnValue(new Promise(resolve => (finish = resolve)));
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.text()).toContain('Checking what receivers find for mail.example.com…');
+        expect(checkButton().text()).toContain('Checking…');
+        expect(checkButton().attributes('disabled')).toBeDefined();
+        expect(button('Rotate key').attributes('disabled')).toBeUndefined();
+        finish({ data: goodCheck });
+        await flushPromises();
+        expect(checkButton().text()).toContain('Check again');
+    });
+
+    it('treats an answer for another domain as invalid', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.checkAppDomainDns.mockResolvedValue({ data: { ...goodCheck, domain: 'other.example.com' } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.text()).toContain("something the console didn't understand");
+        expect(wrapper!.find('[data-testid="sender-dns-summary"]').exists()).toBe(false);
     });
 });

@@ -1,4 +1,4 @@
-import type { BounceNameInput as NameInput, Tone } from './bounce-domains';
+import { LOOKUP_NOTE, MATCHES_NOTE, type BounceNameInput as NameInput, type CnameRecordView, type StatusTag } from './bounce-domains';
 import { normalizeDomain } from './validation';
 
 /** The longest tracking domain Thinpost accepts. */
@@ -53,94 +53,109 @@ export interface TrackingSupport {
     cnameTarget: string | null;
 }
 
-export interface TrackingStatus {
-    label: string;
-    tone: Tone;
-    /** Plain-language explanation for app developers and support staff. */
-    message: string;
+export type TrackingStatus = StatusTag;
+
+/** The HTTPS row: whether Thinpost can open the name securely, and the certificate's expiry. */
+export interface HttpsView {
+    tag: StatusTag;
+    /** One short line, only for a problem someone must act on. */
+    line: string | null;
+    expiresAt: string | null;
 }
 
-/** Why Thinpost can't use the address yet, in one sentence, from the HTTPS check. */
-function connectionProblem(view: TrackingView): string {
-    const name = view.name;
-    switch (view.httpsResult) {
-        case 'certificate':
-            return `${name} doesn't have a valid security certificate yet.`;
-        case 'redirected':
-            return `${name} sends visitors somewhere else instead of passing tracking links through.`;
-        case 'not_thinpost':
-            return `${name} answers, but not from this Thinpost installation.`;
-        case 'not_found':
-            return `Thinpost can't find ${name} in DNS.`;
-        case 'unreachable':
-            return `Thinpost couldn't reach ${name} over a secure connection.`;
-        default:
-            return '';
-    }
+export interface TrackingPanelView {
+    tag: StatusTag;
+    record: CnameRecordView;
+    https: HttpsView | null;
+    /** One short line, only when it says something to act on. */
+    note: string | null;
+}
+
+const HTTPS_PROBLEMS: Record<Exclude<TrackingHttpsResult, 'ok'>, { label: string; line: string | null }> = {
+    certificate: { label: 'No valid certificate', line: 'Your Thinpost administrator issues it.' },
+    unreachable: { label: "Can't connect", line: 'Your Thinpost administrator finishes setup.' },
+    redirected: { label: 'Redirects', line: 'Links must pass through, not redirect.' },
+    not_thinpost: { label: 'Not this installation', line: 'The name answers from somewhere else.' },
+    not_found: { label: 'Not in DNS', line: null }
+};
+
+/** What is wrong with the DNS record, if anything. A name behind a proxy never matches the record and still works, so only a name that cannot be reached counts. */
+function dnsFault(view: TrackingView): 'add' | 'update' | null {
+    if (!view.httpsResult) return 'add';
+    if (view.dnsResult === 'missing') return 'add';
+    if (view.dnsResult === 'wrong_target' && view.httpsResult === 'unreachable') return 'update';
+    return null;
 }
 
 /**
- * What to tell a person about a tracking domain. The DNS result is advice only: a name behind a proxy such as
- * Cloudflare never matches the record Thinpost looks for and still works. What decides is the secure connection.
+ * The short tag for a tracking domain. The DNS result is advice only: what decides is the secure connection.
  */
-export function trackingStatus(view: TrackingView, sender: string, support: TrackingSupport): TrackingStatus {
-    const name = view.name;
-    const to = support.cnameTarget ?? 'the name shown below';
-    const fallback = "New links use Thinpost's standard tracking address in the meantime. Nothing is lost.";
-    if (!support.available) {
-        // Preparation ignores tracking domains here, whatever the row's state says.
-        return {
-            label: 'Not in use',
-            tone: 'warning',
-            message: `Not in use: this installation doesn't use your own tracking address right now. ${name} is kept, and new links use Thinpost's standard tracking address. Ask your Thinpost administrator if you'd like it.`
-        };
-    }
-    if (view.state === 'active') {
-        const note = view.httpsResult && view.httpsResult !== 'ok' ? " The last check couldn't finish, so Thinpost will look again shortly." : '';
-        return {
-            label: 'In use',
-            tone: 'success',
-            message: `In use. Tracked links and the open-tracking image in mail from ${sender} use ${name}. One-click unsubscribe links keep using Thinpost's standard address.${note}`
-        };
-    }
-    const failing = view.state === 'failing';
-    const lead = failing ? 'Not in use. ' : '';
-    if (!view.httpsResult) {
-        return {
-            label: 'Waiting for DNS record',
-            tone: 'warning',
-            message: `Add a CNAME record for ${name} pointing at ${to}, then choose Check now. Thinpost also checks on its own. ${fallback}`
-        };
-    }
-    const dnsOk = view.dnsResult === 'ok';
-    if (dnsOk || (view.httpsResult !== 'unreachable' && view.dnsResult !== 'missing')) {
-        // The record is right, or the name answers some other way (a proxy): what is missing is the secure connection.
-        const dns = dnsOk ? 'Your DNS record is right; your Thinpost administrator' : 'Your Thinpost administrator';
-        return {
-            label: failing ? 'Not in use' : 'Waiting for a secure connection',
-            tone: 'warning',
-            message: `${lead}Waiting for a secure connection. ${dns} still needs to finish setting up this address. ${connectionProblem(view)} Links will start using it on their own once it works. ${fallback}`
-        };
-    }
-    if (view.dnsResult === 'missing') {
-        return {
-            label: failing ? 'Not in use' : 'Waiting for DNS record',
-            tone: 'warning',
-            message: `${lead}Thinpost can't find ${name} in DNS. Add a CNAME record for it pointing at ${to}. ${fallback}`
-        };
-    }
-    if (view.dnsResult === 'wrong_target') {
-        return {
-            label: failing ? 'Not in use' : 'Waiting for DNS record',
-            tone: 'warning',
-            message: `${lead}${name} points at ${view.observedTarget ?? 'another name'}, not ${to}, and Thinpost couldn't reach it over a secure connection. Change the CNAME to point at ${to}. If a proxy such as Cloudflare is meant to be in front, ask your Thinpost administrator to check the address is set up. ${fallback}`
-        };
-    }
+export function trackingStatus(view: TrackingView, support: TrackingSupport): TrackingStatus {
+    if (!support.available) return { label: 'Not in use', tone: 'warning' };
+    if (view.state === 'active') return { label: 'In use', tone: 'success' };
+    if (view.state === 'removed') return { label: 'Removed', tone: 'warning' };
+    if (view.state === 'failing') return { label: 'Not in use', tone: 'warning' };
+    return { label: dnsFault(view) ? 'Waiting for DNS record' : 'Waiting for HTTPS', tone: 'warning' };
+}
+
+function httpsView(view: TrackingView): HttpsView | null {
+    if (view.httpsResult === 'ok') return { tag: { label: 'Secure', tone: 'success' }, line: null, expiresAt: view.certificateExpiresAt };
+    if (!view.httpsResult) return null;
+    const problem = HTTPS_PROBLEMS[view.httpsResult];
+    const settled = view.state === 'active';
     return {
-        label: failing ? 'Not in use' : 'Waiting for a secure connection',
-        tone: 'warning',
-        message: `${lead}Thinpost couldn't check ${name} just now. It will try again on its own. ${fallback}`
+        tag: { label: settled ? 'Last check failed' : problem.label, tone: 'warning' },
+        line: settled ? "Last check didn't finish. Thinpost will retry." : problem.line,
+        expiresAt: view.certificateExpiresAt
     };
+}
+
+/** What the Record and HTTPS rows of a tracking domain show. Why it helps is in the help text. */
+export function trackingView(view: TrackingView, support: TrackingSupport): TrackingPanelView {
+    const tag = trackingStatus(view, support);
+    const point = support.cnameTarget;
+    const record: CnameRecordView = { name: view.name, target: point, observed: null, fix: null };
+    const https = httpsView(view);
+    if (!support.available) {
+        // Switched off for the installation, but the certificate's expiry is still worth seeing.
+        return { tag, record, https: view.certificateExpiresAt ? https : null, note: 'Not turned on for this installation. Ask your Thinpost administrator.' };
+    }
+    if (view.state === 'removed') return { tag, record, https: null, note: 'No longer used for new mail.' };
+
+    const settled = view.state === 'active';
+    const seen = view.observedTarget;
+    const dangling = view.dnsResult === 'missing' && !!seen;
+    const elsewhere = view.dnsResult === 'wrong_target' && (!!seen || (!settled && view.httpsResult === 'unreachable'));
+    let note: string | null = null;
+    if (point && seen === point && view.dnsResult === 'wrong_target') {
+        // The last result is old news: the record has since been set to what is wanted.
+        note = MATCHES_NOTE;
+    } else if (dangling || elsewhere) {
+        const proxied = elsewhere && (settled || view.httpsResult === 'ok');
+        record.observed = {
+            state: 'problem',
+            text: seen ?? 'another name',
+            hint: dangling ? "Points at a name that doesn't resolve" : proxied ? 'Fine only behind a proxy' : 'Points at the wrong name'
+        };
+        if (point && !settled && !proxied && seen !== point) {
+            record.fix = { kind: 'update', host: view.name, value: point };
+            if (elsewhere) note = 'Behind a proxy such as Cloudflare? Then only HTTPS must work.';
+        }
+    } else if (!settled) {
+        const lookupFailed = view.dnsResult === 'lookup_failed' && view.httpsResult !== 'ok';
+        if (dnsFault(view) === 'add' || lookupFailed) {
+            if (!point) {
+                note = 'Name to point at not known yet. Ask your Thinpost administrator.';
+            } else {
+                if (!lookupFailed) record.observed = { state: 'missing', text: point, hint: view.dnsResult === 'missing' ? 'Not found in DNS' : 'Not added yet' };
+                record.fix = { kind: 'add', host: view.name, value: point };
+            }
+        }
+        if (!note && view.dnsResult === 'lookup_failed') note = LOOKUP_NOTE;
+    }
+    // DNS comes first: no point telling the administrator to finish setup while the record is wrong.
+    if (record.fix && https?.line && view.httpsResult === 'unreachable') https.line = null;
+    return { tag, record, https, note };
 }
 
 /** Mirrors the API's rules: a strict subdomain of the sending domain, at most 253 characters. The server decides. */

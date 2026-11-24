@@ -34,6 +34,16 @@ export async function copyText(value: string): Promise<boolean> {
     }
 }
 
+/** Selects an element's text, so a failed copy can be finished by hand. */
+export function selectElementText(el: Element | null | undefined): void {
+    const selection = window.getSelection();
+    if (!el || !selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    selection.removeAllRanges();
+    selection.addRange(range);
+}
+
 /** Leading characters of an opaque ID for compact display; the full ID stays in titles and labels. */
 export function shortId(id: string, length = 12): string {
     return id.length > length ? id.slice(0, length) : id;

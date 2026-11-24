@@ -17,7 +17,8 @@
                             with that key, so DKIM passes and lines up with DMARC.
                         </p>
                         <p>
-                            Verifying doesn't set up or check SPF, DMARC or reverse DNS, so it doesn't promise mail will reach inboxes. To change a
+                            Verifying doesn't set up SPF, DMARC or reverse DNS, so it doesn't promise mail will reach inboxes. The SPF and DMARC
+                            panel under each verified domain shows what receivers find; it only reads DNS and never changes how mail is sent. To change a
                             domain's key, choose Rotate key: add the new record first, then switch, so there's no gap. Domains can't be removed here.
                         </p>
                         <p>
@@ -96,8 +97,7 @@
                             </td>
                             <td class="key-cell">
                                 <template v-if="domain.active_key">
-                                    <code>{{ domain.active_key.selector }}</code>
-                                    <span class="muted">in use</span>
+                                    <code>{{ domain.active_key.selector }}</code> <span class="muted">in use</span>
                                 </template>
                                 <span v-else-if="!domain.pending_key" class="muted">No DKIM key yet</span>
                                 <p v-if="domain.pending_key" class="key-note">{{ pendingNote(domain) }}</p>
@@ -158,21 +158,21 @@
                 </table>
             </div>
 
-            <div v-if="verifiedDomains.length && !domainsError" class="card-body bounce-panels" role="group" aria-label="Bounce domains">
-                <BounceDomainPanel v-for="domain in verifiedDomains" :key="domain.name" :app-id="app.id" :app-active="app.active" :can-act="canAct" :domain="domain" @changed="reloadDomains" />
-            </div>
-
-            <div v-if="trackingPanelDomains.length && !domainsError" class="card-body bounce-panels" role="group" aria-label="Tracking domains">
-                <TrackingDomainPanel
-                    v-for="domain in trackingPanelDomains"
-                    :key="domain.name"
-                    :app-id="app.id"
-                    :app-active="app.active"
-                    :can-act="canAct"
-                    :domain="domain"
-                    :support="trackingSupport"
-                    @changed="reloadDomains"
-                />
+            <div v-if="verifiedDomains.length && !domainsError" class="card-body domain-panels">
+                <div v-for="domain in verifiedDomains" :key="domain.name" role="group" :aria-label="`Settings for ${domain.name}`" class="panel-group">
+                    <BounceDomainPanel :app-id="app.id" :app-active="app.active" :can-act="canAct" :domain="domain" :inherited="inheritedBounce(domain)" @changed="reloadDomains" />
+                    <SenderDnsPanel v-if="domain.active_key" :app-id="app.id" :domain="domain" />
+                    <TrackingDomainPanel
+                        v-if="hasTrackingPanel(domain)"
+                        :app-id="app.id"
+                        :app-active="app.active"
+                        :can-act="canAct"
+                        :domain="domain"
+                        :support="trackingSupport"
+                        :inherited="inheritedTracking(domain)"
+                        @changed="reloadDomains"
+                    />
+                </div>
             </div>
         </section>
 
@@ -198,6 +198,7 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { apiErrorReason, apiErrorStatus, describeApiError, InvalidResponseError, type ApiErrorDescription } from '@/api-errors';
 import { useAppContext } from '@/app-context';
 import { authState } from '@/auth';
+import { inheritedFrom, parseBounceDomain } from '@/bounce-domains';
 import { parseDkimKey, type DkimKeyView } from '@/dkim';
 import { formatDateTime } from '@/format';
 import { DefaultApi, type Domain } from '@/openapi-client-generated';
@@ -206,11 +207,13 @@ import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import BounceDomainPanel from '@/shared/components/bounce-domain-panel.vue';
 import DkimRecord from '@/shared/components/dkim-record.vue';
 import HelpButton from '@/shared/components/help-button.vue';
+import SenderDnsPanel from '@/shared/components/sender-dns-panel.vue';
 import DomainModal from '@/shared/components/domain-modal.vue';
 import Loader from '@/shared/components/loader.vue';
 import TestMessageModal from '@/shared/components/test-message-modal.vue';
 import TrackingDomainPanel from '@/shared/components/tracking-domain-panel.vue';
 import { useTestSend } from '@/test-send';
+import { parseTrackingDomain } from '@/tracking-domains';
 
 type Action = 'verify' | 'switch' | 'cancel' | 'create';
 
@@ -240,10 +243,18 @@ const canAct = computed(() => isSignedIn.value && !busy.value && !isRequesting.v
 /** Verified domains each get a bounce-domain panel. */
 const verifiedDomains = computed(() => (domains.value ?? []).filter(d => d.active));
 
+/** The parent domain whose active bounce domain this domain's mail uses, as the server picks it. */
+const inheritedBounce = (domain: Domain) => inheritedFrom(domain.name, domains.value ?? [], d => (parseBounceDomain(d.bounce_domain)?.state === 'active' ? parseBounceDomain(d.bounce_domain)!.name : null));
+/** The same for tracking: the parent must be verified too. */
+const inheritedTracking = (domain: Domain) =>
+    inheritedFrom(domain.name, domains.value ?? [], d => (d.active && parseTrackingDomain(d.tracking_domain)?.state === 'active' ? parseTrackingDomain(d.tracking_domain)!.name : null));
+
 /** What the deployment offers for custom tracking addresses; unknown until the runtime report loads. */
 const trackingSupport = computed(() => ({ available: runtimeTracking.value?.custom_domains === true, cnameTarget: runtimeTracking.value?.cname_target || null }));
 /** Tracking panels appear only where tracking exists: for every verified domain when apps may add their own address, else only for one that already has it. */
-const trackingPanelDomains = computed(() => (runtimeTracking.value ? verifiedDomains.value.filter(d => trackingSupport.value.available || d.tracking_domain) : []));
+function hasTrackingPanel(domain: Domain) {
+    return !!runtimeTracking.value && (trackingSupport.value.available || !!domain.tracking_domain);
+}
 void loadRuntimeFeatures();
 
 /** Domains with a record card: a pending key always, an active key when asked for. */
@@ -528,11 +539,16 @@ async function cancelKey(domain: Domain) {
 </script>
 
 <style lang="scss" scoped>
-.bounce-panels {
+.domain-panels {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+}
+
+.panel-group {
     display: flex;
     flex-direction: column;
     gap: 12px;
-    border-top: 1px solid var(--border);
 }
 
 .domains-body {
@@ -576,7 +592,11 @@ async function cancelKey(domain: Domain) {
 
 .name {
     font-weight: 600;
-    overflow-wrap: anywhere;
+}
+
+/* The shared table style lets row headers wrap; a domain name stays on one line (the table scrolls instead). */
+table.data th[scope='row'].name {
+    white-space: nowrap;
 }
 
 .key-cell {

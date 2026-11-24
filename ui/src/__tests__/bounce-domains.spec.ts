@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { bounceStatus, parseBounceDomain, parseCnameTarget, validateBounceName, type BounceView } from '@/bounce-domains';
+import { bounceStatus, bounceView, inheritedFrom, parseBounceDomain, parseCnameTarget, validateBounceName, type BounceView } from '@/bounce-domains';
 
 const view = (patch: Partial<BounceView> = {}): BounceView => ({
     name: 'bounces.example.com',
@@ -9,6 +9,7 @@ const view = (patch: Partial<BounceView> = {}): BounceView => ({
     result: null,
     observedTarget: null,
     checkedAt: null,
+    lastOkAt: null,
     verifiedAt: null,
     ...patch
 });
@@ -16,13 +17,14 @@ const target = { status: 'ok', target: 'smtp.example.net' } as const;
 
 describe('parseBounceDomain', () => {
     it('reads a bounce domain', () => {
-        expect(parseBounceDomain({ name: 'b.example.com', state: 'active', checking: true, result: 'ok', observed_target: 'smtp.example.net', checked_at: '2026-11-21T12:00:00Z', created_at: 'x' })).toEqual({
+        expect(parseBounceDomain({ name: 'b.example.com', state: 'active', checking: true, result: 'ok', observed_target: 'smtp.example.net', checked_at: '2026-11-21T12:00:00Z', last_ok_at: '2026-11-21T11:00:00Z', created_at: 'x' })).toEqual({
             name: 'b.example.com',
             state: 'active',
             checking: true,
             result: 'ok',
             observedTarget: 'smtp.example.net',
             checkedAt: '2026-11-21T12:00:00Z',
+            lastOkAt: '2026-11-21T11:00:00Z',
             verifiedAt: null
         });
     });
@@ -48,55 +50,131 @@ describe('parseCnameTarget', () => {
 });
 
 describe('bounceStatus', () => {
-    it('says what an active domain does and how DMARC sees it', () => {
-        const s = bounceStatus(view({ state: 'active', result: 'ok' }), 'example.com', target);
-        expect(s).toMatchObject({ label: 'In use', tone: 'success' });
-        expect(s.message).toContain('Bounces for mail from example.com come back to bounces.example.com, so SPF passes for your domain too');
-        expect(s.message).toContain('aspf=s');
-        expect(s.message).not.toContain("couldn't finish");
+    it('is a short tag per state', () => {
+        expect(bounceStatus(view({ state: 'active', result: 'ok' }), target)).toEqual({ label: 'In use', tone: 'success' });
+        expect(bounceStatus(view(), target)).toEqual({ label: 'Waiting for DNS record', tone: 'warning' });
+        expect(bounceStatus(view({ state: 'failing', result: 'lookup_failed' }), target).label).toBe('Not in use');
+        expect(bounceStatus(view({ result: 'missing' }), target).label).toBe('Not in use');
+        expect(bounceStatus(view({ state: 'failing' }), { status: 'not_reported', target: null }).label).toBe('Not in use');
+        expect(bounceStatus(view(), { status: 'not_reported', target: null }).label).toBe('Waiting for DNS record');
+    });
+});
+
+describe('bounceView', () => {
+    it('shows an active domain as the record alone', () => {
+        const v = bounceView(view({ state: 'active', result: 'ok' }), target);
+        expect(v.tag.label).toBe('In use');
+        expect(v.record).toEqual({ name: 'bounces.example.com', target: 'smtp.example.net', observed: null, fix: null });
+        expect(v.note).toBeNull();
     });
 
-    it('keeps an active domain in use after a check that could not finish, and says so', () => {
-        const s = bounceStatus(view({ state: 'active', result: 'lookup_failed' }), 'example.com', target);
-        expect(s.label).toBe('In use');
-        expect(s.message).toContain("couldn't finish");
+    it('keeps an active domain in use after a check that could not finish, and says so briefly', () => {
+        const v = bounceView(view({ state: 'active', result: 'lookup_failed' }), target);
+        expect(v.tag.label).toBe('In use');
+        expect(v.note).toBe("Last check didn't finish. Thinpost will retry.");
+        expect(v.record.fix).toBeNull();
     });
 
-    it('asks for the CNAME, DNS only, while waiting', () => {
-        const s = bounceStatus(view(), 'example.com', target);
-        expect(s.label).toBe('Waiting for DNS record');
-        expect(s.message).toContain('CNAME record for bounces.example.com pointing at smtp.example.net (DNS only, not proxied)');
-        expect(s.message).toContain("standard bounce address");
+    it('asks to add the CNAME while waiting, and when it is missing', () => {
+        for (const result of [null, 'missing'] as const) {
+            const v = bounceView(view({ result }), target);
+            expect(v.record.observed).toMatchObject({ state: 'missing', text: 'smtp.example.net' });
+            expect(v.record.fix).toEqual({ kind: 'add', host: 'bounces.example.com', value: 'smtp.example.net' });
+            expect(v.note).toBe('DNS only, not proxied.');
+        }
     });
 
     it.each([
-        ['missing', "can't find bounces.example.com in DNS"],
-        ['not_cname', "isn't a CNAME"],
-        ['other_ip', 'This app now sends from a different IP. Point the CNAME at smtp.example.net.'],
-        ['wrong_target', 'points at cdn.other.example, not smtp.example.net']
-    ] as const)('explains a failing domain with result %s', (result, expected) => {
-        const s = bounceStatus(view({ state: 'failing', result, observedTarget: 'cdn.other.example' }), 'example.com', target);
-        expect(s).toMatchObject({ label: 'Not in use', tone: 'warning' });
-        expect(s.message).toContain(expected);
-        expect(s.message).toContain('Nothing is lost.');
+        ['not_cname', 'not a CNAME', 'Turn off any proxy (orange cloud).'],
+        ['other_ip', 'cdn.other.example', 'This app now sends from a different IP.'],
+        ['wrong_target', 'cdn.other.example', 'DNS only, not proxied.']
+    ] as const)('shows what was found and asks to update for result %s', (result, observed, note) => {
+        const v = bounceView(view({ state: 'failing', result, observedTarget: 'cdn.other.example' }), target);
+        expect(v.tag).toEqual({ label: 'Not in use', tone: 'warning' });
+        expect(v.record.observed).toMatchObject({ state: 'problem', text: observed });
+        expect(v.record.fix).toEqual({ kind: 'update', host: 'bounces.example.com', value: 'smtp.example.net' });
+        expect(v.note).toBe(note);
     });
 
-    it('tells a proxied record to be turned off', () => {
-        expect(bounceStatus(view({ state: 'failing', result: 'not_cname' }), 'example.com', target).message).toContain('orange cloud');
-        expect(bounceStatus(view({ state: 'failing', result: 'not_cname' }), 'example.com', target).message).toContain('DNS only, not proxied');
+    it('names another name when none was observed', () => {
+        expect(bounceView(view({ state: 'failing', result: 'wrong_target' }), target).record.observed?.text).toBe('another name');
     });
 
-    it('does not tell anyone to check DNS when Thinpost could not', () => {
-        const s = bounceStatus(view({ state: 'failing', result: 'lookup_failed' }), 'example.com', target);
-        expect(s.message).toContain("couldn't check DNS just now");
+    it.each(['lookup_failed', 'no_sending_ip'] as const)('keeps the Add line, with a retry note, when Thinpost could not check (%s)', result => {
+        const v = bounceView(view({ state: 'pending', result }), target);
+        expect(v.record.observed).toBeNull();
+        expect(v.record.fix).toEqual({ kind: 'add', host: 'bounces.example.com', value: 'smtp.example.net' });
+        expect(v.note).toBe("Couldn't check DNS. Thinpost will retry.");
+        expect(bounceView(view({ state: 'failing', result }), target).record.fix?.kind).toBe('add');
+    });
+
+    it('does not claim the record is absent when a check could not run but a name was seen', () => {
+        const v = bounceView(view({ state: 'failing', result: 'lookup_failed', observedTarget: 'cdn.other.example' }), target);
+        expect(v.record.fix).toEqual({ kind: 'update', host: 'bounces.example.com', value: 'smtp.example.net' });
     });
 
     it('never invents a name to point at', () => {
-        const unconfirmed = bounceStatus(view({ state: 'failing', result: 'missing' }), 'example.com', { status: 'dns_unconfirmed', target: null });
-        expect(unconfirmed.message).toContain("can't confirm the name to point at");
-        const unreported = bounceStatus(view(), 'example.com', { status: 'not_reported', target: null });
-        expect(unreported.message).toContain("hasn't reported in");
-        expect(unreported.message).not.toContain('undefined');
+        const unconfirmed = bounceView(view({ state: 'failing', result: 'missing' }), { status: 'dns_unconfirmed', target: null });
+        expect(unconfirmed.note).toContain("Can't confirm the name to point at");
+        expect(unconfirmed.record).toEqual({ name: 'bounces.example.com', target: null, observed: null, fix: null });
+        const unreported = bounceView(view(), { status: 'not_reported', target: null });
+        expect(unreported.note).toContain('not known yet');
+        expect(JSON.stringify(unreported)).not.toContain('undefined');
+    });
+});
+
+describe('bounceView against what mail is using', () => {
+    const NOW = Date.parse('2026-11-21T12:00:00Z');
+    const fresh = '2026-11-21T10:00:00Z';
+
+    it('is in use while the passing check is fresh and the record matches', () => {
+        const v = bounceView(view({ state: 'active', result: 'ok', observedTarget: 'smtp.example.net', lastOkAt: fresh }), target, NOW);
+        expect(v.tag.label).toBe('In use');
+        expect(v.record.fix).toBeNull();
+    });
+
+    it('is Not in use, with an Update line, when active but the record points at another name now', () => {
+        const row = view({ state: 'active', result: 'ok', observedTarget: 'smtp.old.example.net', lastOkAt: fresh });
+        const v = bounceView(row, target, NOW);
+        expect(v.tag).toEqual({ label: 'Not in use', tone: 'warning' });
+        expect(bounceStatus(row, target, NOW).label).toBe('Not in use');
+        expect(v.record.observed).toMatchObject({ state: 'problem', text: 'smtp.old.example.net' });
+        expect(v.record.fix).toEqual({ kind: 'update', host: 'bounces.example.com', value: 'smtp.example.net' });
+    });
+
+    it('is Not in use, with a retry note, when the last pass is 3 hours old or older', () => {
+        const v = bounceView(view({ state: 'active', result: 'ok', observedTarget: 'smtp.example.net', lastOkAt: '2026-11-21T09:00:00Z' }), target, NOW);
+        expect(v.tag.label).toBe('Not in use');
+        expect(v.note).toBe("Last check didn't finish. Thinpost will retry.");
+        expect(v.record.fix).toBeNull();
+        expect(bounceView(view({ state: 'active', result: 'ok', lastOkAt: '2026-11-21T09:00:01Z' }), target, NOW).tag.label).toBe('In use');
+    });
+
+    it('does not apply freshness when the API gave no last pass', () => {
+        expect(bounceView(view({ state: 'active', result: 'ok' }), target, NOW).tag.label).toBe('In use');
+    });
+
+    it.each(['other_ip', 'wrong_target'] as const)('asks for nothing when the stale result %s names what is wanted now', result => {
+        const v = bounceView(view({ state: 'failing', result, observedTarget: 'smtp.example.net' }), target, NOW);
+        expect(v.record.fix).toBeNull();
+        expect(v.record.observed).toBeNull();
+        expect(v.note).toBe('Matches now. Choose Check now.');
+    });
+});
+
+describe('inheritedFrom', () => {
+    const domains = [{ name: 'example.com', own: 'bounces.example.com' }, { name: 'a.example.com', own: null }, { name: 'b.a.example.com', own: 'b.bounces.example.com' }];
+    const pick = (d: { own: string | null }) => d.own;
+
+    it('finds the nearest parent in the list with one in use', () => {
+        expect(inheritedFrom('c.a.example.com', domains, pick)).toEqual({ from: 'example.com', name: 'bounces.example.com' });
+        expect(inheritedFrom('x.b.a.example.com', domains, pick)).toEqual({ from: 'b.a.example.com', name: 'b.bounces.example.com' });
+    });
+
+    it('is null for a top domain, an unrelated name, or a lookalike', () => {
+        expect(inheritedFrom('example.com', domains, pick)).toBeNull();
+        expect(inheritedFrom('mail.example.org', domains, pick)).toBeNull();
+        expect(inheritedFrom('mail' + 'example.com', domains, pick)).toBeNull();
     });
 });
 

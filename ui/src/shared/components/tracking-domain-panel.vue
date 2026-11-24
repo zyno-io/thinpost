@@ -5,19 +5,14 @@
                 <h3 :id="`${id}-title`">Tracking domain for {{ domain.name }}</h3>
                 <HelpButton topic="tracking domains">
                     <p>
-                        When you track opens and clicks, the links and the tiny image in your emails point at a web address. By default that is Thinpost's own. A tracking domain is a name of yours,
-                        such as <code>{{ suggestTrackingName(domain.name) }}</code
-                        >, that Thinpost uses instead, so recipients see your domain.
+                        Tracked links and the open-tracking image point at a web address, normally Thinpost's. A tracking domain is a name of yours, such as <code>{{ suggestTrackingName(domain.name) }}</code
+                        >, used instead, so recipients see your domain.
                     </p>
-                    <ul>
-                        <li>You add a DNS record for it (a CNAME pointing at the name shown here), and your Thinpost administrator finishes setting up the address with a security certificate.</li>
-                        <li>New mail uses it only once Thinpost can open it over a secure connection. Until then, and whenever that stops working, links use Thinpost's standard address. Nothing is lost.</li>
-                        <li>You can put a proxy such as Cloudflare in front of it. Thinpost only needs the secure connection to work.</li>
-                        <li>One-click unsubscribe links keep using Thinpost's standard address, so they don't depend on your DNS.</li>
-                        <li>Links already sent keep working only while the DNS record and the certificate stay in place. Keep them for as long as old emails matter.</li>
-                        <li>It also covers mail from verified subdomains of {{ domain.name }}, using the most specific one that is in use.</li>
-                    </ul>
+                    <p>Add a CNAME to the target shown. A proxy such as Cloudflare is fine. Your Thinpost administrator finishes setup with a security certificate.</p>
+                    <p>New mail uses it only once Thinpost can open it over HTTPS. Otherwise it uses Thinpost's address, and nothing is lost. Links already sent need the record and certificate to stay in place, and one-click unsubscribe links always use Thinpost's address.</p>
+                    <p>Also covers verified subdomains that don't have their own.</p>
                 </HelpButton>
+                <span v-if="view" class="tag" :class="view.tag.tone" data-testid="tracking-status">{{ view.tag.label }}</span>
             </div>
             <div v-if="tracking" class="buttons">
                 <button type="button" class="btn sm" :disabled="!canAct || busy !== null" @click="check">
@@ -41,34 +36,22 @@
 
         <ApiErrorNotice v-if="error" :error="error" />
 
-        <template v-if="tracking && status">
-            <p class="line">
-                <strong class="name">{{ tracking.name }}</strong>
-                <span class="tag" :class="status.tone" data-testid="tracking-status">{{ status.label }}</span>
-            </p>
-            <p class="hint" data-testid="tracking-message">{{ status.message }}</p>
-            <div v-if="support.available && support.cnameTarget && tracking.state !== 'active'" class="record">
-                <CopyField label="CNAME record name" :value="tracking.name" />
-                <CopyField label="CNAME record value" :value="support.cnameTarget" />
-                <p class="hint">
-                    Add it as a CNAME record. DNS changes can take a while to spread, so Thinpost checks again every 10 minutes for the first 48 hours, then every 6 hours. Choose Check now to look
-                    straight away.
+        <div v-if="tracking && view" class="records">
+            <CnameRecord :record="view.record" :note="view.note" :checked-at="tracking.checkedAt" />
+            <DnsRow v-if="view.https" label="HTTPS">
+                <p class="line">
+                    <span class="tag" :class="view.https.tag.tone" data-testid="tracking-https">{{ view.https.tag.label }}</span>
+                    <span v-if="view.https.expiresAt" class="muted"
+                        >Certificate expires <time :datetime="view.https.expiresAt">{{ formatDateTime(view.https.expiresAt) }}</time></span
+                    >
                 </p>
-            </div>
-            <p v-if="tracking.certificateExpiresAt" class="hint">
-                Its security certificate expires <time :datetime="tracking.certificateExpiresAt">{{ formatDateTime(tracking.certificateExpiresAt) }}</time>.
-            </p>
-            <p v-if="tracking.checkedAt" class="hint">
-                Last checked <time :datetime="tracking.checkedAt">{{ formatDateTime(tracking.checkedAt) }}</time>.
-            </p>
-        </template>
+                <p v-if="view.https.line" class="muted" data-testid="tracking-https-note">{{ view.https.line }}</p>
+            </DnsRow>
+        </div>
         <template v-else>
-            <p class="hint">
-                Tracked links and the open-tracking image in mail from {{ domain.name }} use Thinpost's standard tracking address.
-                <template v-if="support.available">To use your own, such as <code>{{ suggestTrackingName(domain.name) }}</code>, add a tracking domain.</template>
-                <template v-else>Using your own address isn't turned on for this Thinpost installation. Ask your Thinpost administrator.</template>
-            </p>
-            <p v-if="support.available && !appActive" class="hint">This app is paused, so its tracking domain can't be changed.</p>
+            <p v-if="inherited" class="hint" data-testid="tracking-empty">Uses {{ inherited.name }} from {{ inherited.from }}. Add your own to override.</p>
+            <p v-else class="hint" data-testid="tracking-empty">Uses Thinpost's tracking address. Add your own for branded links.</p>
+            <p v-if="!appActive" class="hint">This app is paused, so this can't be changed.</p>
         </template>
 
         <TrackingDomainModal v-if="isModalOpen" :sender="domain.name" :current="tracking?.name ?? null" :is-submitting="isSaving" :error="modalError" @close="closeModal" @submit="save" />
@@ -82,10 +65,11 @@ import { computed, onBeforeUnmount, ref, useId } from 'vue';
 import { describeApiError, InvalidResponseError, type ApiErrorDescription } from '@/api-errors';
 import { formatDateTime } from '@/format';
 import { DefaultApi, type Domain } from '@/openapi-client-generated';
-import { parseTrackingDomain, suggestTrackingName, trackingStatus, type TrackingSupport } from '@/tracking-domains';
+import { parseTrackingDomain, suggestTrackingName, trackingView, type TrackingSupport } from '@/tracking-domains';
 
 import ApiErrorNotice from './api-error-notice.vue';
-import CopyField from './copy-field.vue';
+import CnameRecord from './cname-record.vue';
+import DnsRow from './dns-row.vue';
 import HelpButton from './help-button.vue';
 import TrackingDomainModal from './tracking-domain-modal.vue';
 
@@ -98,6 +82,8 @@ const props = defineProps<{
     domain: Domain;
     /** What the deployment offers (from the runtime report). */
     support: TrackingSupport;
+    /** The parent sending domain whose tracking domain this one's mail uses, when it has none of its own. */
+    inherited?: { from: string; name: string } | null;
 }>();
 
 const emit = defineEmits<{
@@ -107,7 +93,7 @@ const emit = defineEmits<{
 
 const id = useId();
 const tracking = computed(() => parseTrackingDomain(props.domain.tracking_domain));
-const status = computed(() => (tracking.value ? trackingStatus(tracking.value, props.domain.name, props.support) : null));
+const view = computed(() => (tracking.value ? trackingView(tracking.value, props.support) : null));
 
 const busy = ref<'check' | 'remove' | null>(null);
 const isModalOpen = ref(false);
@@ -237,19 +223,21 @@ async function remove() {
     gap: 8px;
 }
 
+.records {
+    display: flex;
+    flex-direction: column;
+}
+
 .line {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    min-height: 19px;
 }
 
-.name {
-    overflow-wrap: anywhere;
-}
-
-.record {
-    display: grid;
-    gap: 12px;
+.muted {
+    color: var(--text-3);
+    font-size: 12px;
 }
 </style>
