@@ -60,7 +60,7 @@ A domain that was still waiting for its old `_thinpost` challenge when you upgra
 
 Rotation never leaves a gap, and you decide when it switches:
 
-1. **Create the next key.** Choose **Rotate key** (API: `POST .../domains/{domain}/dkim-keys`). Thinpost makes `thinpostN` and shows its record. The current key keeps signing.
+1. **Create the next key.** Choose **Rotate key** in the domain's **More actions** menu (API: `POST .../domains/{domain}/dkim-keys`). Thinpost makes `thinpostN` and shows its record. The current key keeps signing.
 2. **Publish the new record** at its own name, then choose **Check record** (the same verify call). When Thinpost sees it, the key shows as ready to switch.
 3. **Switch.** Choose **Switch** (API: `POST .../dkim-keys/{selector}/activate`). Thinpost checks DNS again, then in one step makes the new key the signing key and retires the old one. The old private key is deleted from the database (older copies in backups stay sealed, and need the keyring to open).
 4. **Keep the old record.** Leave the old selector's TXT record in DNS until the date the console shows, which is at least seven days, and at least the [retry policy](/operations/recovery)'s maximum message age plus two days. Mail signed with the old key can still be waiting to be retried, and receivers need the record to verify it.
@@ -94,6 +94,8 @@ A bounce domain is a name under your sending domain, such as `bounces.example.co
 - the CNAME still points at the HELO name of the IP that delivery is sent from, so changing the app's sending IP stops using the domain at once, until the CNAME is updated;
 - the name is not a receiving domain, and not the name of any of the sending worker's addresses;
 - the sending worker accepts bounces at any domain.
+
+**In the console.** The panel shows the CNAME the domain needs. A wrong target is underlined in red, and a missing one is shown as a dashed `+` insertion; an **Add:** or **Update:** line then gives the record to set, with **Copy name** and **Copy target**. A verified subdomain without its own bounce domain uses its nearest parent's, and its panel says which.
 
 If a record is removed or changed, mail falls back to the standard bounce address on its own and nothing is lost. A domain whose checks keep failing shows **Not in use** with the reason, and is checked again every 10 minutes for a day, then hourly. After you change the app's sending IP the console shows the new name to point at, and the domain is rechecked within about a minute.
 
