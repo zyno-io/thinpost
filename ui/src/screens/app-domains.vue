@@ -81,18 +81,21 @@
                                 </h3>
                                 <HelpButton topic="DKIM records">
                                     <p>
-                                        This is a TXT record at your DNS provider. Thinpost made the key, and the record holds only its public half. Keep exactly
-                                        one record at this name. It stays here for you to copy until the domain is set up.
+                                        Thinpost signs your mail with this key, so DKIM passes and lines up with DMARC. Keep exactly one record at this name.
+                                    </p>
+                                    <p>
+                                        Some DNS providers only take TXT values in pieces of 255 characters or fewer. Turn on Split into 255-character strings if yours
+                                        refuses the value.
                                     </p>
                                 </HelpButton>
+                                <span class="tag" :class="recordTag(domain).tone" data-testid="dkim-status">{{ recordTag(domain).label }}</span>
                             </div>
                             <button v-if="domain.active_key && !domain.pending_key" type="button" class="btn sm" @click="hideRecord(domain.name)">
                                 Hide
                                 <span class="sr-only">DKIM record for {{ domain.name }}</span>
                             </button>
                         </div>
-                        <p class="hint">{{ recordHint(domain) }}</p>
-                        <DkimRecord :name="shownKey(domain)!.dnsName" :value="shownKey(domain)!.dnsValue" />
+                        <DkimRecord :name="shownKey(domain)!.dnsName" :value="shownKey(domain)!.dnsValue" :note="recordNote(domain)" />
                     </article>
                 </div>
             </div>
@@ -387,14 +390,17 @@ function recordTitle(domain: Domain) {
     return `DKIM record for ${domain.name}`;
 }
 
-function recordHint(domain: Domain) {
-    if (domain.pending_key && domain.active_key) {
-        return `This is the next key for ${domain.name}. Add it as a new record (it has its own name, so the current one keeps working), then choose Check record. When Thinpost can see it, choose Switch.`;
-    }
-    if (domain.pending_key) {
-        return `Add this TXT record at your DNS provider, then choose Verify. Mail from ${domain.name} is signed with this key, so DKIM passes and lines up with DMARC. Keep exactly one record at this name.`;
-    }
-    return `This record is published for ${domain.name}. Keep exactly one record at this name.`;
+function recordTag(domain: Domain): { label: string; tone: 'success' | 'warning' } {
+    if (!domain.pending_key) return { label: 'In use', tone: 'success' };
+    if (domain.active_key && parseDkimKey(domain.pending_key)?.published) return { label: 'Ready to switch', tone: 'success' };
+    return { label: 'Waiting for DNS record', tone: 'warning' };
+}
+
+function recordNote(domain: Domain) {
+    if (!domain.pending_key) return null;
+    if (!domain.active_key) return 'Add this record at your DNS provider, then choose Verify.';
+    if (parseDkimKey(domain.pending_key)?.published) return 'Keep the current record until you switch.';
+    return 'Add this as a new record, then choose Check record. Keep the current record until you switch.';
 }
 
 function pendingNote(domain: Domain) {
@@ -732,10 +738,16 @@ async function cancelKey(domain: Domain) {
     justify-content: space-between;
     gap: 8px;
 
+    /* The title wraps between words; help and the status tag move to the next line when they don't fit. */
+    .heading-with-help {
+        flex-wrap: wrap;
+    }
+
     h3 {
+        min-width: 0;
         font-size: 14px;
         font-weight: 600;
-        overflow-wrap: anywhere;
+        overflow-wrap: break-word;
     }
 }
 
