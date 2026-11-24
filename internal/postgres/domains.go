@@ -48,7 +48,7 @@ func (r *Repository) ListDomains(ctx context.Context, appID string) ([]admin.Dom
 
 // loadDomains reads an app's sender domains (or just one) with their keys.
 func loadDomains(ctx context.Context, q queryer, appID, only string) ([]admin.Domain, error) {
-	rows, err := q.QueryContext(ctx, `SELECT domain,active,created_at,verified_at FROM sender_domains WHERE app_id=$1 AND ($2='' OR domain=$2) ORDER BY domain`, appID, only)
+	rows, err := q.QueryContext(ctx, `SELECT domain,active,created_at,verified_at FROM sender_domains WHERE app_id=$1 AND ($2='' OR domain=$2) AND removed_at IS NULL ORDER BY domain`, appID, only)
 	if err != nil {
 		return nil, err
 	}
@@ -162,12 +162,14 @@ func (r *Repository) newKeyTx(ctx context.Context, actor, appID, domain string, 
 		return admin.DomainChallenge{}, err
 	}
 	if request {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO sender_domains(app_id,domain,active) VALUES ($1,$2,false) ON CONFLICT (app_id,domain) DO NOTHING`, appID, domain); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO sender_domains(app_id,domain,active) VALUES ($1,$2,false)
+			ON CONFLICT (app_id,domain) DO UPDATE SET removed_at=NULL,verified_at=NULL,created_at=clock_timestamp() WHERE sender_domains.removed_at IS NOT NULL`, appID, domain); err != nil {
 			return admin.DomainChallenge{}, err
 		}
 	}
-	// The domain row serializes key changes for this (app, domain).
-	err = tx.QueryRowContext(ctx, `SELECT true FROM sender_domains WHERE app_id=$1 AND domain=$2 FOR UPDATE`, appID, domain).Scan(&exists)
+	// The domain row serializes key changes for this (app, domain). A removed
+	// domain only comes back through RequestDomain's upsert above.
+	err = tx.QueryRowContext(ctx, `SELECT true FROM sender_domains WHERE app_id=$1 AND domain=$2 AND removed_at IS NULL FOR UPDATE`, appID, domain).Scan(&exists)
 	if errors.Is(err, sql.ErrNoRows) {
 		return admin.DomainChallenge{}, admin.ErrNotFound
 	}
@@ -247,6 +249,15 @@ func insertPendingKey(ctx context.Context, tx *sql.Tx, sealer dkimkey.Sealer, ap
 	return err
 }
 
+// keepRetiredRecord is how long a key retired now keeps its DNS record.
+func keepRetiredRecord(ctx context.Context, tx *sql.Tx) (time.Duration, error) {
+	policy, err := deliveryRetryPolicy(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	return max(minKeepRecord, policy.MaxAge+keepRecordSlack), nil
+}
+
 // PendingDKIMKey returns the key whose record the caller should look for in
 // DNS. An empty selector means the domain's only pending key.
 func (r *Repository) PendingDKIMKey(ctx context.Context, appID, domain, selector string) (admin.DKIMKeyRef, error) {
@@ -256,7 +267,7 @@ func (r *Repository) PendingDKIMKey(ctx context.Context, appID, domain, selector
 		return ref, admin.ErrInvalidInput
 	}
 	var exists bool
-	err := r.DB.QueryRowContext(ctx, `SELECT true FROM sender_domains WHERE app_id=$1 AND domain=$2`, appID, domain).Scan(&exists)
+	err := r.DB.QueryRowContext(ctx, `SELECT true FROM sender_domains WHERE app_id=$1 AND domain=$2 AND removed_at IS NULL`, appID, domain).Scan(&exists)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ref, admin.ErrNotFound
 	}
@@ -303,7 +314,7 @@ func (r *Repository) ActivateDKIMKey(ctx context.Context, actor, appID, domain s
 	}
 	defer tx.Rollback()
 	var domainActive bool
-	err = tx.QueryRowContext(ctx, `SELECT active FROM sender_domains WHERE app_id=$1 AND domain=$2 FOR UPDATE`, appID, domain).Scan(&domainActive)
+	err = tx.QueryRowContext(ctx, `SELECT active FROM sender_domains WHERE app_id=$1 AND domain=$2 AND removed_at IS NULL FOR UPDATE`, appID, domain).Scan(&domainActive)
 	if errors.Is(err, sql.ErrNoRows) {
 		return admin.Domain{}, admin.ErrNotFound
 	}
@@ -332,11 +343,10 @@ func (r *Repository) ActivateDKIMKey(ctx context.Context, actor, appID, domain s
 		}
 	default:
 		if hasActive {
-			policy, policyErr := deliveryRetryPolicy(ctx, tx)
-			if policyErr != nil {
-				return admin.Domain{}, policyErr
+			keep, keepErr := keepRetiredRecord(ctx, tx)
+			if keepErr != nil {
+				return admin.Domain{}, keepErr
 			}
-			keep := max(minKeepRecord, policy.MaxAge+keepRecordSlack)
 			// Retire first: the shredding CHECK ties the state to the missing
 			// private key, and only one key may be active at a time.
 			if _, err = tx.ExecContext(ctx, `UPDATE dkim_keys SET state='retired',sealed_private_key=NULL,retired_at=clock_timestamp(),keep_record_until=clock_timestamp()+$2*interval '1 millisecond' WHERE id=$1`,
@@ -396,4 +406,136 @@ func (r *Repository) CancelDKIMKey(ctx context.Context, actor, appID, domain, se
 		return err
 	}
 	return tx.Commit()
+}
+
+// DeleteDomain removes a sender domain from an app: a soft delete, because
+// dkim_keys, bounce_domains and tracking_domains reference the row, tracking
+// tombstones must outlive it, and retired keys must keep reserving their
+// selectors. In one transaction the domain row becomes inactive with
+// removed_at set, the active key is retired exactly as a rotation retires it
+// (private key shredded, record kept for keep_record_until), a pending key is
+// deleted as Cancel deletes it, the bounce domain is deleted and the tracking
+// domain becomes a tombstone.
+//
+// Left alone on purpose: messages and deliveries. New mail is refused because
+// admission needs an active domain row; mail not yet signed fails at
+// preparation; deliveries already prepared are signed, never look at the
+// domain row and keep draining under the retired key's record window (their
+// Return-Path falls back to the HELO name, as the bounce row is gone).
+//
+// The apps row is locked FOR SHARE first, then the domain FOR UPDATE: the order
+// newKeyTx and SetSMTPSettings use. That also makes the SMTP From policy check
+// race-free, since SetSMTPSettings takes apps FOR UPDATE.
+func (r *Repository) DeleteDomain(ctx context.Context, actor, appID, domain string) (admin.DomainRemoval, error) {
+	var removal admin.DomainRemoval
+	normalized, ok := admin.NormalizeDomain(domain)
+	if !ok || normalized != domain || !opaqueID(appID) || !adminText(actor, 256) {
+		return removal, admin.ErrInvalidInput
+	}
+	tx, err := r.beginRuntime(ctx)
+	if err != nil {
+		return removal, err
+	}
+	defer tx.Rollback()
+	var smtpDomain, smtpAddress sql.NullString
+	err = tx.QueryRowContext(ctx, `SELECT smtp_from_domain,smtp_from_address FROM apps WHERE id=$1 AND deleted_at IS NULL FOR SHARE`, appID).Scan(&smtpDomain, &smtpAddress)
+	if errors.Is(err, sql.ErrNoRows) {
+		return removal, admin.ErrNotFound
+	}
+	if err != nil {
+		return removal, err
+	}
+	var exists bool
+	err = tx.QueryRowContext(ctx, `SELECT true FROM sender_domains WHERE app_id=$1 AND domain=$2 AND removed_at IS NULL FOR UPDATE`, appID, domain).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return removal, admin.ErrNotFound
+	}
+	if err != nil {
+		return removal, err
+	}
+	if (smtpDomain.Valid && smtpDomain.String == domain) || (smtpAddress.Valid && admin.SMTPAddressDomain(smtpAddress.String) == domain) {
+		return removal, admin.ErrDomainInSMTPPolicy
+	}
+	keep, err := keepRetiredRecord(ctx, tx)
+	if err != nil {
+		return removal, err
+	}
+	var retiredSelector, cancelledSelector sql.NullString
+	err = tx.QueryRowContext(ctx, `UPDATE dkim_keys SET state='retired',sealed_private_key=NULL,retired_at=clock_timestamp(),keep_record_until=clock_timestamp()+$3*interval '1 millisecond'
+		WHERE app_id=$1 AND domain=$2 AND state='active' RETURNING selector`, appID, domain, keep.Milliseconds()).Scan(&retiredSelector)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return removal, err
+	}
+	err = tx.QueryRowContext(ctx, `DELETE FROM dkim_keys WHERE app_id=$1 AND domain=$2 AND state='pending' RETURNING selector`, appID, domain).Scan(&cancelledSelector)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return removal, err
+	}
+	removal.Name = domain
+	removal.DKIMRecords = []admin.RemovedDKIMRecord{}
+	rows, err := tx.QueryContext(ctx, `SELECT selector,keep_record_until FROM dkim_keys WHERE app_id=$1 AND domain=$2 AND state='retired' AND keep_record_until>clock_timestamp() ORDER BY keep_record_until DESC,selector`, appID, domain)
+	if err != nil {
+		return removal, err
+	}
+	for rows.Next() {
+		var selector string
+		var until time.Time
+		if err = rows.Scan(&selector, &until); err != nil {
+			rows.Close()
+			return removal, err
+		}
+		removal.DKIMRecords = append(removal.DKIMRecords, admin.RemovedDKIMRecord{Selector: selector, DNSName: dkimkey.RecordName(selector, domain), KeepUntil: &until})
+		if removal.KeepRecordsUntil == nil {
+			removal.KeepRecordsUntil = &until
+		}
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return removal, err
+	}
+	rows.Close()
+	if cancelledSelector.Valid {
+		removal.DKIMRecords = append(removal.DKIMRecords, admin.RemovedDKIMRecord{Selector: cancelledSelector.String, DNSName: dkimkey.RecordName(cancelledSelector.String, domain)})
+	}
+	var bounceName string
+	err = tx.QueryRowContext(ctx, `DELETE FROM bounce_domains WHERE app_id=$1 AND sender_domain=$2 RETURNING domain`, appID, domain).Scan(&bounceName)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return removal, err
+	}
+	if err == nil {
+		removal.BounceDomain = &bounceName
+		if err = recordAudit(ctx, tx, actor, appID, "bounce_domain.removed", bounceName); err != nil {
+			return removal, err
+		}
+	}
+	var trackingID, trackingName string
+	err = tx.QueryRowContext(ctx, `SELECT id,domain FROM tracking_domains WHERE app_id=$1 AND sender_domain=$2 AND state<>'removed' FOR UPDATE`, appID, domain).Scan(&trackingID, &trackingName)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return removal, err
+	}
+	if err == nil {
+		if err = tombstoneTrackingDomain(ctx, tx, trackingID); err != nil {
+			return removal, err
+		}
+		removal.TrackingDomain = &trackingName
+		if err = recordAudit(ctx, tx, actor, appID, "tracking_domain.removed", trackingName); err != nil {
+			return removal, err
+		}
+	}
+	if err = tx.QueryRowContext(ctx, `UPDATE sender_domains SET active=false,removed_at=clock_timestamp() WHERE app_id=$1 AND domain=$2 RETURNING removed_at`, appID, domain).Scan(&removal.RemovedAt); err != nil {
+		return removal, err
+	}
+	auditID, err := newOpaqueID()
+	if err != nil {
+		return removal, err
+	}
+	// Null details values mean the key or domain was not there.
+	if _, err = tx.ExecContext(ctx, `INSERT INTO audit_events(id,actor_id,app_id,action,resource_id,details)
+		VALUES ($1,$2,$3,'domain.removed',$4,jsonb_build_object('retired_key',$5::text,'cancelled_key',$6::text,'bounce_domain_removed',$7::boolean,'tracking_domain_removed',$8::boolean))`,
+		auditID, actor, appID, domain, retiredSelector, cancelledSelector, removal.BounceDomain != nil, removal.TrackingDomain != nil); err != nil {
+		return removal, err
+	}
+	if err = tx.Commit(); err != nil {
+		return removal, err
+	}
+	return removal, nil
 }

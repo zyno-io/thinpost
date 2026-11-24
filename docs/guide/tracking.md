@@ -60,7 +60,7 @@ By default, tracked links and the open-tracking image point at your deployment's
 
 **States.** `pending` (no passing check yet), `active`, `failing` (it was active and its checks failed: an HTTPS check that is definitive, such as `certificate`, `redirected`, `not_thinpost` or `not_found`, fails it at once; `unreachable` only after two in a row; new mail uses the deployment's origin meanwhile) and `removed`. Changes of state are in the audit trail as `tracking_domain.added`, `activated`, `failing` and `removed`.
 
-**Removing it** (API: `DELETE .../tracking-domain`) sends the next message with the deployment's origin. The row stays as a *removed* tombstone that is still checked once a day and listed for operators, because links already sent keep working only while the name's DNS, route and certificate stay in place. Keep them for as long as old emails matter. Adding the same name again revives it as pending.
+**Removing it** (API: `DELETE .../tracking-domain`) sends the next message with the deployment's origin. The row stays as a *removed* tombstone that is still checked once a day and listed for operators, because links already sent keep working only while the name's DNS, route and certificate stay in place. Keep them for as long as old emails matter. Adding the same name again revives it as pending. [Removing the sending domain](/guide/domains#remove-a-domain) removes its tracking domain the same way.
 
 Links are not bound to a hostname, so a link sent earlier opens at any name that still routes to the deployment, before and after a domain is added or removed.
 

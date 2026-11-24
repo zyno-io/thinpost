@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
     createAppDomainDkimKey: vi.fn(),
     activateAppDomainDkimKey: vi.fn(),
     cancelAppDomainDkimKey: vi.fn(),
+    deleteAppDomain: vi.fn(),
     setAppBounceDomain: vi.fn(),
     checkAppBounceDomain: vi.fn(),
     deleteAppBounceDomain: vi.fn(),
@@ -897,5 +898,227 @@ describe('SPF and DMARC panel', () => {
         await mountAt(`/apps/${APP_ID}/domains`);
         expect(wrapper!.text()).toContain("something the console didn't understand");
         expect(wrapper!.find('[data-testid="sender-dns-summary"]').exists()).toBe(false);
+    });
+});
+
+describe('removing a domain', () => {
+    const NAME = 'mail.example.com';
+    const withBounce = { ...verified, bounce_domain: { name: 'bounces.mail.example.com', state: 'active', checking: false, created_at: '2026-11-21T12:00:00Z' } };
+    const withTracking = { ...withBounce, tracking_domain: { name: 'links.mail.example.com', state: 'active', checking: false, created_at: '2026-11-21T12:00:00Z' } };
+    const sub = { ...base, name: 'news.mail.example.com', active: true, verified_at: '2026-10-03T12:00:00Z', active_key: { ...keyOne, selector: 'thinpost3' } };
+    const RECEIPT = {
+        name: NAME,
+        removed_at: '2026-11-23T12:00:00Z',
+        dkim_records: [
+            { selector: 'thinpost2', dns_name: 'thinpost2._domainkey.mail.example.com', keep_until: '2026-12-01T12:00:00Z' },
+            { selector: 'thinpost3', dns_name: 'thinpost3._domainkey.mail.example.com' }
+        ],
+        bounce_domain: 'bounces.mail.example.com',
+        tracking_domain: 'links.mail.example.com',
+        keep_records_until: '2026-12-01T12:00:00Z'
+    };
+    const dialog = () => wrapper!.find('[role="alertdialog"][data-remove-domain]');
+
+    function menuTrigger(name = NAME) {
+        return wrapper!.find(`button[aria-label="More actions for ${name}"]`);
+    }
+
+    async function openMenuItem(name = NAME) {
+        await menuTrigger(name).trigger('click');
+        await flushPromises();
+        const item = wrapper!.findAll('[role="menuitem"]').find(b => b.text().includes('Remove domain'));
+        if (!item) throw new Error('menu item not found');
+        return item;
+    }
+
+    async function openModal(name = NAME) {
+        await (await openMenuItem(name)).trigger('click');
+        await flushPromises();
+        expect(dialog().exists()).toBe(true);
+        return dialog();
+    }
+
+    async function confirm(name = NAME) {
+        await dialog().find('input[type="text"]').setValue(name);
+        await wrapper!.find('form').trigger('submit');
+        await flushPromises();
+    }
+
+    it('puts the menu in the actions cell and the help text points to it', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified, pending] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        expect(wrapper!.findAll('td.actions button[aria-label^="More actions for"]')).toHaveLength(2);
+        expect(wrapper!.findAll('thead th')).toHaveLength(6);
+        const help = await openHelp(wrapper!, 'sending domains');
+        expect(help).not.toContain("can't be removed");
+        expect(help).toContain('Remove domain');
+    });
+
+    it('enables the menu item for a paused app', async () => {
+        api.listApps.mockResolvedValue({ data: { apps: [{ ...app, active: false }] } });
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        const item = await openMenuItem();
+        expect(item.attributes('aria-disabled')).toBeUndefined();
+        await item.trigger('click');
+        await flushPromises();
+        expect(dialog().exists()).toBe(true);
+    });
+
+    it('disables the menu item without a session', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        authState.status = 'signed-out';
+        await flushPromises();
+        const item = await openMenuItem();
+        expect(item.attributes('aria-disabled')).toBe('true');
+        await item.trigger('click');
+        await flushPromises();
+        expect(dialog().exists()).toBe(false);
+    });
+
+    it('lists the bounce and tracking names and the subdomains that rely on them', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [withTracking, sub] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        const text = (await openModal()).text();
+        expect(text).toContain('bounces.mail.example.com');
+        expect(text).toContain('links.mail.example.com');
+        expect(text).toContain('news.mail.example.com');
+        expect(text).toContain('Other apps that use mail.example.com');
+        expect(text).toContain('deleted for good');
+    });
+
+    it('asks to type the name for a verified domain only', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified, pending] } });
+        api.deleteAppDomain.mockResolvedValue({ data: { ...RECEIPT, dkim_records: [], bounce_domain: undefined, tracking_domain: undefined, keep_records_until: undefined } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        // verified: the button waits for the exact name
+        await openModal();
+        const submit = dialog().find('button[type="submit"]');
+        expect(submit.attributes('disabled')).toBeDefined();
+        await dialog().find('input[type="text"]').setValue('Mail.example.com');
+        expect(submit.attributes('disabled')).toBeDefined();
+        await wrapper!.find('form').trigger('submit');
+        await flushPromises();
+        expect(api.deleteAppDomain).not.toHaveBeenCalled();
+        await dialog().find('input[type="text"]').setValue(NAME);
+        expect(submit.attributes('disabled')).toBeUndefined();
+        await dialog().findAll('button').find(b => b.text() === 'Cancel')!.trigger('click');
+        await flushPromises();
+        // not verified: no field, the button is ready
+        api.listAppDomains.mockResolvedValue({ data: { domains: [pending] } });
+        wrapper!.unmount();
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await openModal();
+        expect(dialog().find('input[type="text"]').exists()).toBe(false);
+        expect(dialog().find('button[type="submit"]').attributes('disabled')).toBeUndefined();
+    });
+
+    it('removes the domain, shows a persistent cleanup notice and reloads', async () => {
+        api.listAppDomains.mockResolvedValueOnce({ data: { domains: [withTracking] } }).mockResolvedValue({ data: { domains: [] } });
+        api.deleteAppDomain.mockResolvedValue({ data: RECEIPT });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await openModal();
+        await confirm();
+        expect(api.deleteAppDomain).toHaveBeenCalledWith({ path: { appId: APP_ID, domain: NAME } });
+        expect(dialog().exists()).toBe(false);
+        expect(vf.showToast).toHaveBeenCalledWith(expect.objectContaining({ message: `${NAME} removed` }));
+        expect(api.listAppDomains).toHaveBeenCalledTimes(2);
+        const notice = wrapper!.find('[data-removal-notice]');
+        expect(notice.exists()).toBe(true);
+        const text = notice.text();
+        expect(text).toContain('thinpost2._domainkey.mail.example.com');
+        expect(text).toMatch(/keep until .*2026/);
+        expect(text).toContain('thinpost3._domainkey.mail.example.com');
+        expect(text).toContain('never used, delete now');
+        expect(text).toContain('delete the CNAME after');
+        expect(text).toContain('links.mail.example.com');
+        expect(text).toContain('SPF and DMARC records are yours');
+        // The list is empty now, but the notice stays until dismissed.
+        expect(wrapper!.text()).toContain('No sending domains yet');
+        expect(wrapper!.find('[data-removal-notice]').exists()).toBe(true);
+        await notice.findAll('button').find(b => b.text() === 'Dismiss')!.trigger('click');
+        expect(wrapper!.find('[data-removal-notice]').exists()).toBe(false);
+    });
+
+    it('keeps one notice per removed domain and drops one when that domain is added again', async () => {
+        const OTHER = 'other.example.com';
+        api.listAppDomains
+            .mockResolvedValueOnce({ data: { domains: [verified, { ...verified, name: OTHER }] } })
+            .mockResolvedValueOnce({ data: { domains: [{ ...verified, name: OTHER }] } })
+            .mockResolvedValue({ data: { domains: [] } });
+        api.deleteAppDomain
+            .mockResolvedValueOnce({ data: RECEIPT })
+            .mockResolvedValueOnce({ data: { ...RECEIPT, name: OTHER, dkim_records: [], bounce_domain: undefined, tracking_domain: undefined, keep_records_until: undefined } });
+        api.requestAppDomain.mockResolvedValue({ data: CHALLENGE });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await openModal();
+        await confirm();
+        await openModal(OTHER);
+        await confirm(OTHER);
+        const names = () => wrapper!.findAll('[data-removal-notice] strong').map(s => s.text());
+        expect(names()).toEqual([`${OTHER} was removed.`, `${NAME} was removed.`]);
+        // The re-added domain may get back a selector its notice said to delete.
+        await submitDomain(NAME);
+        expect(names()).toEqual([`${OTHER} was removed.`]);
+    });
+
+    it('explains an SMTP From policy conflict with a link to the SMTP tab', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.deleteAppDomain.mockRejectedValue(httpError(409, { error: 'Conflict', reason: 'smtp_from_policy' }));
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await openModal();
+        await confirm();
+        expect(dialog().exists()).toBe(true);
+        expect(dialog().text()).toContain('The SMTP From policy sends mail as mail.example.com');
+        expect(dialog().find('a').attributes('href')).toBe(`/apps/${APP_ID}/smtp`);
+        expect(wrapper!.find('[data-removal-notice]').exists()).toBe(false);
+    });
+
+    it('says the domain was already removed on a 404 and reloads', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.deleteAppDomain.mockRejectedValue(httpError(404));
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await openModal();
+        await confirm();
+        expect(dialog().text()).toContain('already removed');
+        expect(api.listAppDomains).toHaveBeenCalledTimes(2);
+    });
+
+    it('warns that the outcome is unknown when no answer arrives', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.deleteAppDomain.mockRejectedValue(networkError());
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await openModal();
+        await confirm();
+        expect(dialog().text()).toContain("can't tell whether the change went through");
+        expect(wrapper!.find('[data-removal-notice]').exists()).toBe(false);
+    });
+
+    it('reports a malformed 200 as an invalid response and still reloads', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        api.deleteAppDomain.mockResolvedValue({ data: { name: NAME, removed_at: 'not a date', dkim_records: [] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await openModal();
+        await confirm();
+        expect(dialog().exists()).toBe(false);
+        expect(wrapper!.text()).toContain("something the console didn't understand");
+        expect(wrapper!.find('[data-removal-notice]').exists()).toBe(false);
+        expect(api.listAppDomains).toHaveBeenCalledTimes(2);
+    });
+
+    it('does nothing on Cancel or Escape', async () => {
+        api.listAppDomains.mockResolvedValue({ data: { domains: [verified] } });
+        await mountAt(`/apps/${APP_ID}/domains`);
+        await openModal();
+        await dialog().findAll('button').find(b => b.text() === 'Cancel')!.trigger('click');
+        await flushPromises();
+        expect(dialog().exists()).toBe(false);
+        await openModal();
+        await dialog().trigger('keydown', { key: 'Escape' });
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        await flushPromises();
+        expect(api.deleteAppDomain).not.toHaveBeenCalled();
+        expect(api.listAppDomains).toHaveBeenCalledTimes(1);
     });
 });

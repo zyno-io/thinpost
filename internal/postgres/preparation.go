@@ -33,7 +33,7 @@ func (r *Repository) ClaimPreparation(ctx context.Context, token string, ttl tim
 	var expiredAttempts int
 	err = tx.QueryRowContext(ctx, `SELECT id,app_id,prepare_token,prepare_attempts FROM messages WHERE state='preparing' AND prepare_until<=clock_timestamp() ORDER BY prepare_until,id FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&expiredID, &expiredApp, &expiredToken, &expiredAttempts)
 	if err == nil {
-		terminal, failErr := finishPreparationFailure(ctx, tx, expiredID, expiredToken, expiredAttempts, "lease_expired")
+		terminal, failErr := finishPreparationFailure(ctx, tx, expiredID, expiredToken, expiredAttempts, "lease_expired", false)
 		if failErr != nil {
 			return claim, failErr
 		}
@@ -106,14 +106,16 @@ func (r *Repository) FailPreparation(ctx context.Context, claim preparation.Clai
 	}
 	defer tx.Rollback()
 	var attempts int
-	err = tx.QueryRowContext(ctx, `SELECT prepare_attempts FROM messages WHERE id=$1 AND app_id=$2 AND object_key=$3 AND state='preparing' AND prepare_token=$4 AND prepare_until>clock_timestamp() FOR UPDATE`, claim.MessageID, claim.AppID, claim.SourceKey, claim.Token).Scan(&attempts)
+	var removed bool
+	err = tx.QueryRowContext(ctx, `SELECT prepare_attempts,EXISTS (SELECT 1 FROM sender_domains s WHERE s.app_id=messages.app_id AND s.domain=messages.sender_domain AND s.removed_at IS NOT NULL)
+		FROM messages WHERE id=$1 AND app_id=$2 AND object_key=$3 AND state='preparing' AND prepare_token=$4 AND prepare_until>clock_timestamp() FOR UPDATE`, claim.MessageID, claim.AppID, claim.SourceKey, claim.Token).Scan(&attempts, &removed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, preparation.ErrLostLease
 	}
 	if err != nil {
 		return false, err
 	}
-	terminal, err := finishPreparationFailure(ctx, tx, claim.MessageID, claim.Token, attempts, reason)
+	terminal, err := finishPreparationFailure(ctx, tx, claim.MessageID, claim.Token, attempts, reason, reason == "signing_key" && removed)
 	if err != nil {
 		return false, err
 	}
@@ -132,12 +134,14 @@ func preparationFailureReason(reason string) bool {
 	}
 }
 
-func finishPreparationFailure(ctx context.Context, tx *sql.Tx, id, token string, attempts int, reason string) (bool, error) {
+// final ends the message now instead of requeueing it: the failure cannot
+// clear by itself (the sender domain was removed).
+func finishPreparationFailure(ctx context.Context, tx *sql.Tx, id, token string, attempts int, reason string, final bool) (bool, error) {
 	if attempts < 1 || attempts > maxPreparationAttempts || !preparationFailureReason(reason) {
 		return false, errors.New("invalid persisted preparation claim")
 	}
 	state := "queued"
-	if attempts == maxPreparationAttempts {
+	if attempts == maxPreparationAttempts || final {
 		state = "preparation_failed"
 	}
 	delay := preparationRetryDelay(attempts, token)

@@ -136,6 +136,32 @@ func TestSigningUsesTheActiveDatabaseKeyAndRequiresItsRecord(t *testing.T) {
 	}
 }
 
+func TestSignerCacheIsDroppedWhenTheDomainHasNoKey(t *testing.T) {
+	ring := testRing(t)
+	st := &store{}
+	key := st.add(t, ring, app, "example.com", "thinpost1")
+	d := &dns{records: []string{dkimkey.RecordValue(key.PublicKey)}}
+	resolver, err := New(st, ring, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err = resolver.ForSender(ctx, app, "sender@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if len(resolver.signers) != 1 {
+		t.Fatal("signer not cached")
+	}
+	// The domain is removed: its key is retired and no longer active.
+	delete(st.keys, app+"|example.com")
+	if _, err = resolver.ForSender(ctx, app, "sender@example.com"); err == nil {
+		t.Fatal("signed without an active key")
+	}
+	if len(resolver.signers) != 0 {
+		t.Fatal("private key stayed in memory after the key was retired")
+	}
+}
+
 func TestRotationSwitchSignsWithTheNewKey(t *testing.T) {
 	ring := testRing(t)
 	st := &store{}

@@ -33,6 +33,8 @@ To back out before switching, **Cancel** deletes the pending key (`DELETE .../dk
 
 The private keys are sealed with the object keyring, so keep every keyring version that sealed a key you still use: a version that is missing makes that key unopenable and mail from the domain stops signing. When you [rotate the object keyring](#object-keyring), existing DKIM keys stay sealed under the version that was active when they were created; only a new key uses the new active version, so keep old versions until those keys are rotated out.
 
+[Removing a sender domain](/guide/domains#remove-a-domain) retires its active key the same way as a switch: the private key is deleted, the selector is never used again, and its record stays in DNS until the same keep date.
+
 See [Sender domains](/guide/domains#rotate-a-key) for the DNS records and the checks.
 
 ## Bounce keyring

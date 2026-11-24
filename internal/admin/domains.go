@@ -17,6 +17,9 @@ import (
 //	POST   dkim-keys/{selector}/activate  switch to the pending key once its record is in DNS
 //	DELETE dkim-keys/{selector}        cancel a pending key
 //
+// (DELETE /apps/{appId}/domains/{domain}, with nothing after the domain, is
+// domainRoute: it removes the domain.)
+//
 // rest is the path after "domains": the domain and what follows. It reports
 // false for a path it does not own.
 func (h *Handler) domainKeyRoute(w http.ResponseWriter, r *http.Request, actor, appID string, rest []string) bool {
@@ -71,6 +74,39 @@ func (h *Handler) domainKeyRoute(w http.ResponseWriter, r *http.Request, actor, 
 		h.activateKey(w, r, actor, appID, domain, selector, activate)
 	}
 	return true
+}
+
+// ErrDomainInSMTPPolicy is returned while the app's SMTP From policy sends as
+// the domain: every SMTP message would then be refused as temporarily failing.
+var ErrDomainInSMTPPolicy = errors.Join(ErrConflict, errors.New("domain is the SMTP From policy's target"))
+
+// domainRoute serves DELETE /apps/{appId}/domains/{domain}: 200 with the
+// removal receipt, 409 reason smtp_from_policy while the SMTP From policy
+// sends as the domain.
+func (h *Handler) domainRoute(w http.ResponseWriter, r *http.Request, actor, appID, name string) {
+	domain, ok := NormalizeDomain(name)
+	if !ok {
+		fail(w, http.StatusBadRequest)
+		return
+	}
+	if r.Method != http.MethodDelete {
+		method(w, http.MethodDelete)
+		return
+	}
+	if r.URL.RawQuery != "" || r.ContentLength > 0 || len(r.TransferEncoding) > 0 {
+		fail(w, http.StatusBadRequest)
+		return
+	}
+	removal, err := h.Store.DeleteDomain(r.Context(), actor, appID, domain)
+	if errors.Is(err, ErrDomainInSMTPPolicy) {
+		respond(w, http.StatusConflict, map[string]string{"error": http.StatusText(http.StatusConflict), "reason": "smtp_from_policy"})
+		return
+	}
+	if err != nil {
+		storeError(w, err)
+		return
+	}
+	respond(w, http.StatusOK, removal)
 }
 
 // activateKey checks the pending key's record in DNS and, when it is there,

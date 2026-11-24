@@ -153,6 +153,8 @@ Two things need to be in place for the target domain, or Thinpost answers `451 4
 
 The SMTP tab warns you when the chosen domain would not be signed yet.
 
+A sender domain that the policy sends as cannot be [removed](/guide/domains#remove-a-domain): the console and the API refuse (`409`, reason `smtp_from_policy`) until you change the policy. Otherwise every message would be answered with `451 4.3.5`. Once a domain is removed, a `From` on it is no longer verified: the default policy refuses it with `550 5.7.1`, and a rewriting policy that leaves verified addresses alone rewrites it like any other unverified address.
+
 ## Limits
 
 | Limit | Value |

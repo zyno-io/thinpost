@@ -122,6 +122,13 @@ func (r *Resolver) ForSender(parent context.Context, appID, from string) (prepar
 func (r *Resolver) verify(parent context.Context, appID, domain string, sign bool) (dkimkey.Stored, crypto.Signer, error) {
 	key, err := r.store.ActiveSigningKey(parent, appID, domain)
 	if err != nil {
+		if errors.Is(err, dkimkey.ErrNoKey) {
+			// A removed domain never signs again, so the lazy replacement of a
+			// cached key would never happen; drop its private key now.
+			r.mu.Lock()
+			delete(r.signers, appID+"|"+domain)
+			r.mu.Unlock()
+		}
 		return dkimkey.Stored{}, nil, errors.New(errNoSigningKey)
 	}
 	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
