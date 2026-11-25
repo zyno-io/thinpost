@@ -75,6 +75,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { describeApiError, invalidResponse, type ApiErrorDescription } from '@/api-errors';
+import { sortAppsByName } from '@/app-order';
 import { authState } from '@/auth';
 import { formatDateTime } from '@/format';
 import { DefaultApi, type App, type SendingIp } from '@/openapi-client-generated';
@@ -130,7 +131,7 @@ async function load() {
     try {
         const { data } = await DefaultApi.listApps();
         if (Array.isArray(data?.apps)) {
-            apps.value = data.apps;
+            apps.value = sortAppsByName(data.apps);
         } else {
             apps.value = null;
             loadError.value = invalidResponse();

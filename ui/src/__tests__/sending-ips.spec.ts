@@ -358,7 +358,8 @@ describe('apps list and create form', () => {
     it('has a Sending IP column that shows each IP as HELO name (address), or Unknown', async () => {
         await mountApps();
         const cells = wrapper!.findAll('[data-testid="sending-ip-cell"]').map(c => c.text());
-        expect(cells).toEqual([MAIN_LABEL, HOSTING_LABEL, 'Unknown']);
+        // Sorted by name: Billing, Gone, Hosted.
+        expect(cells).toEqual([MAIN_LABEL, 'Unknown', HOSTING_LABEL]);
     });
 
     it('says Unknown for a pinned app when the IP list cannot load, without blocking the list', async () => {

@@ -156,6 +156,16 @@ describe('app shell', () => {
         expect(router.currentRoute.value.fullPath).toBe(`/apps/${OTHER_ID}/messages`);
     });
 
+    it('lists switcher apps by name, ignoring case', async () => {
+        const zeta = { ...other, id: 'b'.repeat(32), name: 'zeta', active: true };
+        api.listApps.mockResolvedValue({ data: { apps: [zeta, other, billing] } });
+        await mountAt(`/apps/${APP_ID}`);
+        await wrapper!.find('.crumb-switcher').trigger('click');
+        await flushPromises();
+
+        expect(wrapper!.findAll('[role="menuitemradio"]').map(i => i.text())).toEqual(['Billing', 'MarketingPaused', 'zeta']);
+    });
+
     it('remounts a section when the app changes, not when the tab changes', async () => {
         const { router } = await mountAt(`/apps/${APP_ID}/domains`);
         expect(mounts).toHaveBeenCalledWith('domains', APP_ID);
