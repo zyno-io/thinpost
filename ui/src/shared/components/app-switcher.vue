@@ -9,7 +9,7 @@
             <div class="menu-label">Apps</div>
             <div v-if="!apps" class="menu-meta" role="status">Loading apps</div>
             <RouterLink
-                v-for="candidate in apps ?? []"
+                v-for="candidate in sortedApps"
                 :key="candidate.id"
                 :to="{ name: targetRoute, params: { appId: candidate.id } }"
                 class="menu-item"
@@ -30,18 +30,22 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 
+import { sortAppsByName } from '@/app-order';
 import { sectionInfo } from '@/app-sections';
 import type { App } from '@/openapi-client-generated';
 
 import DropdownMenu from './dropdown-menu.vue';
 
-defineProps<{
+const props = defineProps<{
     apps: readonly App[] | null;
     currentId: string;
     currentName: string | null;
 }>();
 
 const route = useRoute();
+
+// Sorted here so a rename re-sorts without a reload.
+const sortedApps = computed(() => sortAppsByName(props.apps ?? []));
 
 // Switching keeps the current section; the message detail maps to its list. Never carries query or state.
 const targetRoute = computed(() => sectionInfo(route.meta.section)?.route ?? 'app-keys');

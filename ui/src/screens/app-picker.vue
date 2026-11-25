@@ -37,6 +37,7 @@
 import { onMounted, ref, shallowRef } from 'vue';
 
 import { describeApiError, InvalidResponseError, type ApiErrorDescription } from '@/api-errors';
+import { sortAppsByName } from '@/app-order';
 import { DefaultApi, type App } from '@/openapi-client-generated';
 import ApiErrorNotice from '@/shared/components/api-error-notice.vue';
 import HelpButton from '@/shared/components/help-button.vue';
@@ -60,7 +61,7 @@ async function load() {
     try {
         const { data } = await DefaultApi.listApps();
         if (!Array.isArray(data?.apps)) throw new InvalidResponseError();
-        apps.value = data.apps;
+        apps.value = sortAppsByName(data.apps);
     } catch (err) {
         apps.value = null;
         loadError.value = describeApiError(err);
