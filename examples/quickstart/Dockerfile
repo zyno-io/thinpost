@@ -23,7 +23,7 @@ ENTRYPOINT ["/usr/local/bin/devidp"]
 # the `control` and `edge` build contexts that compose supplies) so that the
 # init steps run exactly the shipped commands.
 # postgres:18-alpine
-FROM postgres:18-alpine@sha256:b6972e1115a4ff8eba5d7f7d19184926d1e16d7d1136ae1e1a7ebf286da0f015 AS tools
+FROM postgres:18-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71 AS tools
 RUN apk add --no-cache openssl curl jq busybox-static su-exec py3-dkimpy iptables
 COPY --from=control /usr/local/bin/thinpost-control /usr/local/bin/thinpost-control
 COPY --from=edge /usr/local/bin/thinpost-edge /usr/local/bin/thinpost-edge
