@@ -4,7 +4,7 @@ import "testing"
 
 // The inbound mail host now comes from the Edge's report, and the Edge-identity
 // settings control used to read are gone. Old values must not stop a pod from
-// starting while a rollout replaces its neighbours.
+// starting while a rollout replaces its neighbors.
 func TestRemovedEdgeIdentityEnvIsIgnored(t *testing.T) {
 	values := env()
 	for _, name := range []string{"THINPOST_INBOUND_MX_HOST", "THINPOST_CONTROL_SMTP_SOURCE", "THINPOST_CONTROL_BOUNCE_DOMAIN"} {

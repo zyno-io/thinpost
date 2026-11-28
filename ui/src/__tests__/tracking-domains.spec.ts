@@ -217,7 +217,7 @@ describe('summary line', () => {
 });
 
 describe('validateTrackingName', () => {
-    it('accepts a strict subdomain of the sending domain, normalised', () => {
+    it('accepts a strict subdomain of the sending domain, normalized', () => {
         expect(validateTrackingName(' Links.Example.COM ', 'example.com')).toEqual({ name: 'links.example.com', error: null });
         expect(validateTrackingName('a.b.example.com', 'example.com').name).toBe('a.b.example.com');
         expect(suggestTrackingName('example.com')).toBe('links.example.com');

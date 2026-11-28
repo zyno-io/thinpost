@@ -119,7 +119,7 @@ const DNS_STATUS_TEXT: Record<string, { text: string; tone: DnsTone }> = {
     unavailable: { text: 'Couldn\'t check', tone: '' }
 };
 
-/** The words and colour for one DNS check result; an unknown value reads as "couldn't check". */
+/** The words and color for one DNS check result; an unknown value reads as "couldn't check". */
 export function dnsStatus(status: string): { text: string; tone: DnsTone } {
     return DNS_STATUS_TEXT[status] ?? { text: 'Couldn\'t check', tone: '' };
 }

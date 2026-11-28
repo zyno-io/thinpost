@@ -580,7 +580,7 @@ func TestClampConnModes(t *testing.T) {
 	_ = c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	start := time.Now()
 	if _, err := c.Read(make([]byte, 1)); err == nil || time.Since(start) > time.Second {
-		t.Fatalf("passthrough deadline not honoured: %v", err)
+		t.Fatalf("passthrough deadline not honored: %v", err)
 	}
 	// Authenticated clamps an absent or longer server deadline to the lifetime.
 	c.authenticate()
@@ -597,7 +597,7 @@ func TestClampConnModes(t *testing.T) {
 		_, _ = client.Write([]byte("x"))
 	}()
 	if n, err := c.Read(make([]byte, 1)); n != 1 || err != nil {
-		t.Fatalf("transaction mode honoured the server's deadline: %d %v", n, err)
+		t.Fatalf("transaction mode honored the server's deadline: %d %v", n, err)
 	}
 	// Drain closes the connection past the byte cap: the writer offers far more
 	// than the cap and must not get it all through.

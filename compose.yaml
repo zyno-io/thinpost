@@ -29,7 +29,7 @@ x-tools-image: &tools-image
 x-qs: &qs ./examples/quickstart:/qs:ro
 
 services:
-  # ---- one-shot initialisation ------------------------------------------
+  # ---- one-shot initialization ------------------------------------------
   pki-init:
     <<: *tools
     entrypoint: ["sh", "/qs/pki-init.sh"]

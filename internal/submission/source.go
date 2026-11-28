@@ -10,7 +10,7 @@ import (
 // SourceVersion is the stored-source version written for every message
 // accepted by this release. Version 1 sources (accepted earlier) are still
 // readable (version 3 is a raw MIME source, see raw.go); they keep the single-recipient To header for life and cannot carry
-// Cc or Bcc. Never reinterpret version 2: a change in header behaviour needs a
+// Cc or Bcc. Never reinterpret version 2: a change in header behavior needs a
 // new version.
 const SourceVersion = 2
 

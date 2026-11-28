@@ -6,7 +6,7 @@ export const OBJECT_URL_LIFETIME_MS = 30_000;
 
 /**
  * Fetches a received message as an .eml file (authenticated, like every other call) and saves it through a
- * transient anchor. The bytes are labelled `application/octet-stream`, so the browser can never render them in the
+ * transient anchor. The bytes are labeled `application/octet-stream`, so the browser can never render them in the
  * console origin. Nothing goes in the address bar or browser storage: the object URL exists only in memory and is
  * revoked 30 seconds after the click, and the caller also gets `revoke` to cancel it early (leaving the page).
  * Resolves false when `shouldProceed` said the page moved on, so nothing was saved.

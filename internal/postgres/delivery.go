@@ -129,7 +129,7 @@ func (r *Repository) claimDeliveryOnce(ctx context.Context, lease ControllerLeas
 	}
 	sourceAddress := source.Address.String()
 	claim.SourceAddress, claim.HeloName, claim.BounceDomain, claim.SourceName = sourceAddress, source.Hostname, source.Hostname, source.Hostname
-	// The Return-Path is the HELO name, today's behaviour, unless the app has a
+	// The Return-Path is the HELO name, today's behavior, unless the app has a
 	// custom bounce domain that every live condition allows right now. It is
 	// decided only here, from current rows (never from a cached state), and the
 	// provider re-checks it against the worker's report before anything is sent.

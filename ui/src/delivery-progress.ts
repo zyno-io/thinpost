@@ -80,7 +80,7 @@ const UNRECOGNIZED_OUTCOME: StateLabel = {
     description: 'This console doesn\'t recognize the reported outcome, so it isn\'t shown.'
 };
 
-/** Only outcomes this console knows are labelled; any other value is replaced by a generic label and never echoed. */
+/** Only outcomes this console knows are labeled; any other value is replaced by a generic label and never echoed. */
 export function attemptOutcome(value: unknown): StateLabel {
     const known = typeof value === 'string' && Object.hasOwn(OUTCOMES, value) ? OUTCOMES[value] : undefined;
     return known ? { label: known.label, tone: 'inactive', description: known.description } : { ...UNRECOGNIZED_OUTCOME };

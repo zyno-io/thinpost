@@ -42,8 +42,8 @@ The Edge worker listens on `127.0.0.1:8081` inside its pod for local probes.
 
 | Path | Success | Meaning |
 | --- | --- | --- |
-| `/livez` | `204` | The journal is healthy. A source-address neighbour that has not resolved yet never fails it. |
-| `/readyz` | `204` | The journal is healthy and the configured sending-IP neighbours resolved. |
+| `/livez` | `204` | The journal is healthy. A source-address neighbor that has not resolved yet never fails it. |
+| `/readyz` | `204` | The journal is healthy and the configured sending-IP neighbors resolved. |
 
 Because the endpoints are loopback-only, the image provides `thinpost-edge healthcheck` for readiness and `thinpost-edge healthcheck liveness` for liveness, to use as exec probes.
 
@@ -113,7 +113,7 @@ smtp_submission_admission admitted=<n> concurrent_source_limit=<n> source_rate_l
 smtp_submission_internal_admission admitted=<n> concurrent_source_limit=<n> ...
 ```
 
-The first admission line covers ports 465 and 587 and appears only when `THINPOST_EDGE_SUBMISSION=true`; the second appears only when the internal listener is configured. Failed TLS handshakes and dropped connections on these ports are counted (`connection_error`) and summarised in at most one `submission SMTP connection error` line a minute, so a port scan does not flood the log.
+The first admission line covers ports 465 and 587 and appears only when `THINPOST_EDGE_SUBMISSION=true`; the second appears only when the internal listener is configured. Failed TLS handshakes and dropped connections on these ports are counted (`connection_error`) and summarized in at most one `submission SMTP connection error` line a minute, so a port scan does not flood the log.
 
 A rising `auth_invalid` or `auth_blocked` points to a client with a wrong or revoked credential. `data_budget_timeout` means submissions waited for the edge's buffer budget.
 

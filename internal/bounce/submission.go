@@ -603,7 +603,7 @@ func (s *submissionSession) Data(r io.Reader) error {
 
 // submissionLogger receives go-smtp's internal error reports for the
 // submission servers. A failed TLS handshake or a dropped connection is routine
-// on a public port, so those are counted and summarised at most once a minute;
+// on a public port, so those are counted and summarized at most once a minute;
 // a panic is always logged at once. Nothing from the report (addresses, error
 // text, panic values) is kept.
 type submissionLogger struct {

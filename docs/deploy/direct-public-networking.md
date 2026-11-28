@@ -167,10 +167,10 @@ The gateways come from the chart in `THINPOST_EDGE_SOURCE_GATEWAYS`: a comma-sep
 
 This gates readiness:
 
-- **Ready** once every gateway has a complete neighbour entry. The container logs one fixed line, `source neighbours ready n=N`, never an address.
-- If 10 seconds pass first, the pod stays **not ready**, logs `source neighbours pending n=P of N` once and retries every 5 seconds. It is not restarted.
+- **Ready** once every gateway has a complete neighbor entry. The container logs one fixed line, `source neighbors ready n=N`, never an address.
+- If 10 seconds pass first, the pod stays **not ready**, logs `source neighbors pending n=P of N` once and retries every 5 seconds. It is not restarted.
 - Once ready, the worker repeats the announcement every 30 seconds.
-- **Liveness and startup probes check only the journal**, so an unresolved neighbour delays readiness but never restarts the worker.
+- **Liveness and startup probes check only the journal**, so an unresolved neighbor delays readiness but never restarts the worker.
 
 The datagram to port 9 may be dropped by the router. Only the ARP exchange matters. A source's own gateway must be reachable on the same network.
 
@@ -199,7 +199,7 @@ If a node dies without draining, the old pod stays `Terminating` and holds the j
    kubectl -n thinpost-edge delete pod <pod> --force --grace-period=0
    ```
 
-4. Remove the Whereabouts allocations that the pod held for each source, if they were not released, using your Whereabouts version's documented procedure. Then let the Deployment schedule the replacement and watch for `source neighbours ready`.
+4. Remove the Whereabouts allocations that the pod held for each source, if they were not released, using your Whereabouts version's documented procedure. Then let the Deployment schedule the replacement and watch for `source neighbors ready`.
 5. Remove the taint after the node is repaired and rejoined.
 
 ## Verify the routing
@@ -209,10 +209,10 @@ The repository includes a disposable local lab that checks, with synthetic addre
 In your cluster, look for the readiness line after an install and after each move:
 
 ```sh
-kubectl -n thinpost-edge logs deploy/thinpost-edge-worker | grep 'source neighbours'
+kubectl -n thinpost-edge logs deploy/thinpost-edge-worker | grep 'source neighbors'
 ```
 
-`source neighbours ready n=N` with N equal to the number of sending addresses means every gateway resolved. The edge image has no shell, so inspect the pod's network from a separate debug container if you need more. Then, from a host outside the cluster, connect to port 25 on each address and check the banner and the STARTTLS certificate.
+`source neighbors ready n=N` with N equal to the number of sending addresses means every gateway resolved. The edge image has no shell, so inspect the pod's network from a separate debug container if you need more. Then, from a host outside the cluster, connect to port 25 on each address and check the banner and the STARTTLS certificate.
 
 ## Next
 

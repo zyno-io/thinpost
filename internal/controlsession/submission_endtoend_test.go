@@ -812,7 +812,7 @@ func TestSubmissionDisconnectCases(t *testing.T) {
 	retryAfterLoss("drop after commit with a Message-ID", e2eMessage("client-8", "SMTP drop id"), "SMTP drop id", 1)
 	// Only a Date: the retry within 10 minutes is the same message.
 	retryAfterLoss("drop after commit with only a Date", e2eMessage("", "SMTP drop date", "Date: "+time.Now().UTC().Format(time.RFC1123Z)), "SMTP drop date", 1)
-	// Neither header: there is nothing to recognise the retry by.
+	// Neither header: there is nothing to recognize the retry by.
 	retryAfterLoss("drop after commit with neither", e2eMessage("", "SMTP drop neither"), "SMTP drop neither", 2)
 }
 

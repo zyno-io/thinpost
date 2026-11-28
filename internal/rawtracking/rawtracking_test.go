@@ -259,7 +259,7 @@ func TestPlanTopLevelHTMLGetsNewContentFields(t *testing.T) {
 				t.Fatalf("%s", leaves[0].decoded)
 			}
 			if name == "folded fields" && !bytes.Contains(msg, []byte("X-Last: y")) {
-				t.Fatal("neighbouring field lost")
+				t.Fatal("neighboring field lost")
 			}
 		})
 	}

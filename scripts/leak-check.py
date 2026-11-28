@@ -19,7 +19,7 @@ domains. It deliberately allows every non-global special-purpose address (the
 IANA special-purpose registries: private, shared, loopback, link-local,
 multicast, reserved, documentation, benchmarking, ULA, translation ranges and
 so on), because those carry no information a reader could use. Telling an
-organisation's own subnets apart from other private space is the private
+organization's own subnets apart from other private space is the private
 layer's job and is not attempted here.
 
 Source files (see code_extensions in the allow-list) only match bare host

@@ -114,7 +114,7 @@ func TestProviderSuppressionsPostgres(t *testing.T) {
 		if err != nil || more || len(page3) != 1 || page3[0].ID != ids[0] {
 			t.Fatal("last", page3, more, err)
 		}
-		// Before returns the newer neighbours, still newest first.
+		// Before returns the newer neighbors, still newest first.
 		back, more, err := repo.ListProviderSuppressions(ctx, app, submission.ProviderSuppressionFilter{Limit: 2, Before: ids[1]})
 		if err != nil || !more || len(back) != 2 || back[0].ID != ids[3] || back[1].ID != ids[2] {
 			t.Fatal("before", back, more, err)

@@ -18,7 +18,7 @@ COPY --from=devidp-build /out/devidp /usr/local/bin/devidp
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/devidp"]
 
-# Shell tooling for one-shot initialisation, the shared network namespace
+# Shell tooling for one-shot initialization, the shared network namespace
 # holder and the smoke test's helpers. It carries the release binaries (from
 # the `control` and `edge` build contexts that compose supplies) so that the
 # init steps run exactly the shipped commands.

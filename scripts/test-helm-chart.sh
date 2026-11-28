@@ -198,7 +198,7 @@ for forbidden in THINPOST_RECIPIENT THINPOST_EDGE_INFRASTRUCTURE_CIDRS THINPOST_
   if grep -q "$forbidden" "$tmp/edge.yaml" "$tmp/edge_extra.yaml"; then fail "the Edge must not render $forbidden"; fi
 done
 grep -q 'thinpost-recipient-allowlist' "$tmp/control.yaml" || fail "control must still render the recipient policy ConfigMap"
-# Liveness and startup check the journal only; readiness also waits for neighbours.
+# Liveness and startup check the journal only; readiness also waits for neighbors.
 [ "$(grep -c 'healthcheck, liveness\]' "$tmp/edge.yaml")" = 2 ] || fail "liveness and startup probes must use the journal-only check"
 grep -q 'type: Recreate' "$tmp/edge.yaml" || fail "the Edge must use the Recreate strategy"
 if helm template thinpost "$chart" --set workload=edge -f "$base" --set replicas=2 >/dev/null 2>&1; then fail "accepted more than one Edge replica"; fi
@@ -232,7 +232,7 @@ helm template thinpost "$chart" -n thinpost-control --set workload=control --set
   --set 'control.deploymentAnnotations.example\.test/keep=disabled' --show-only templates/control-deployment.yaml >"$tmp/control-annot2.yaml" || fail "annotations without reloader must render"
 grep -q 'example.test/keep: disabled' "$tmp/control-annot2.yaml" || fail "deployment annotation missing without reloader"
 if grep -q 'reloader.stakater.com' "$tmp/control-annot2.yaml"; then fail "reloader annotation present though disabled"; fi
-helm template thinpost "$chart" --set workload=control --set control.image=$image --set database.caConfigMap=other-ca | grep -q 'name: "other-ca"' || fail "database.caConfigMap not honoured"
+helm template thinpost "$chart" --set workload=control --set control.image=$image --set database.caConfigMap=other-ca | grep -q 'name: "other-ca"' || fail "database.caConfigMap not honored"
 if helm template thinpost "$chart" --set workload=control --set control.image=$image --set database.caConfigMap= >/dev/null 2>&1; then fail "accepted an empty database.caConfigMap"; fi
 
 # Control TLS listener: off by default; when on, a whole-directory Secret mount,
@@ -253,7 +253,7 @@ if grep -q 'subPath' "$tmp/control-tls.yaml"; then fail "TLS Secret must not use
 grep -q 'path: /operator-readyz' "$tmp/control-tls.yaml" || fail "readiness stays on the plain listener"
 helm template thinpost "$chart" -n thinpost-control --set workload=control --set control.image=$image --set control.tls.enabled=true \
   --set control.tls.port=9443 --set control.tls.secretName=other-tls --show-only templates/control-deployment.yaml >"$tmp/control-tls2.yaml" || fail "custom TLS values"
-grep -q 'value: ":9443"' "$tmp/control-tls2.yaml" && grep -q 'secretName: "other-tls"' "$tmp/control-tls2.yaml" || fail "custom TLS port/secret not honoured"
+grep -q 'value: ":9443"' "$tmp/control-tls2.yaml" && grep -q 'secretName: "other-tls"' "$tmp/control-tls2.yaml" || fail "custom TLS port/secret not honored"
 for bad in control.tls.port=8080 control.tls.port=0 control.tls.secretName= control.tls.secretName=Bad_Name; do
   if helm template thinpost "$chart" --set workload=control --set control.image=$image --set control.tls.enabled=true --set "$bad" >/dev/null 2>&1; then fail "accepted invalid $bad"; fi
 done

@@ -13,7 +13,7 @@ export function safeFilename(name: string, index: number): string {
 }
 
 /**
- * Fetches an attachment and saves it through a transient anchor. The bytes are always labelled
+ * Fetches an attachment and saves it through a transient anchor. The bytes are always labeled
  * `application/octet-stream`, so the browser can never render them in the console origin. The caller owns
  * the object URL and must revoke it (`register` hands it over). Never navigates or opens a window.
  */

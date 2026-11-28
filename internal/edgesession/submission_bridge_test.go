@@ -347,7 +347,7 @@ func TestSubmitRefusedWithoutASessionOrWhenInvalid(t *testing.T) {
 	}
 }
 
-func TestSubmitHonoursTheEdgeByteBudgetAndItemCap(t *testing.T) {
+func TestSubmitHonorsTheEdgeByteBudgetAndItemCap(t *testing.T) {
 	h := newBridgeHarness(t)
 	h.b.limit = 100
 	out, id := h.submitAsync(testMessage([]byte(strings.Repeat("x", 80))))

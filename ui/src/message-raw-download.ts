@@ -3,7 +3,7 @@ import { DefaultApi } from '@/openapi-client-generated';
 
 /**
  * Fetches the original message of a raw MIME submission and saves it as an .eml through a transient anchor. The
- * bytes are always labelled `application/octet-stream`, so the browser can never render them in the console
+ * bytes are always labeled `application/octet-stream`, so the browser can never render them in the console
  * origin. The caller owns the object URL and must revoke it (`register` hands it over). Never navigates or
  * opens a window.
  */

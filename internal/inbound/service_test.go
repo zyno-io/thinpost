@@ -306,7 +306,7 @@ func TestReceiveStoresAndCommits(t *testing.T) {
 		t.Fatalf("fields %+v", r)
 	}
 	if r.Helo != "mx.example.org" {
-		t.Fatalf("HELO was not sanitised: %q", r.Helo)
+		t.Fatalf("HELO was not sanitized: %q", r.Helo)
 	}
 	if r.Correlation == nil || r.Correlation.DeliveryID != del1 || r.Auth.SPF.Result != "none" || len(r.Fingerprints) != 1 {
 		t.Fatalf("correlation/auth %+v", r)
