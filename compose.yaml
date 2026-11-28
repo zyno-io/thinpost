@@ -121,7 +121,7 @@ services:
     restart: unless-stopped
 
   s3:
-    image: ministackorg/ministack:1.5.42@sha256:f215f6e18f314a772301a7bb64819d26d2b736739cce99ccc7b53048ffbb4b1f # ministack 1.5.42
+    image: ministackorg/ministack:1.5.43@sha256:4cc0701953855c59e1a18fa289888f0b7f2d99afe1417c3cc3b7fe43c373c771 # ministack 1.5.42
     network_mode: service:ctlnet
     environment:
       SERVICES: s3
