@@ -13,7 +13,7 @@ COPY examples/quickstart/devidp/ examples/quickstart/devidp/
 RUN CGO_ENABLED=0 go build -trimpath -o /out/devidp ./examples/quickstart/devidp
 
 # gcr.io/distroless/static-debian13:nonroot
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931 AS devidp
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5 AS devidp
 COPY --from=devidp-build /out/devidp /usr/local/bin/devidp
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/devidp"]
