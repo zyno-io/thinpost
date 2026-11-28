@@ -99,7 +99,7 @@ services:
     profiles: [tools]
 
   postgres:
-    image: postgres:18-alpine@sha256:b6972e1115a4ff8eba5d7f7d19184926d1e16d7d1136ae1e1a7ebf286da0f015 # postgres:18-alpine
+    image: postgres:18-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71 # postgres:18-alpine
     network_mode: service:ctlnet
     command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "log_parameter_max_length=0", "-c", "log_parameter_max_length_on_error=0"]
     environment:
