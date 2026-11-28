@@ -20,7 +20,7 @@ import (
 // source's gateway. The datagram needs no privilege (an ordinary UDP socket
 // bound to the source); the kernel ARPs for the gateway to send it, and the
 // request carries the source address and the node's MAC, which refreshes the
-// router's neighbour entry. The gateway's complete entry in this pod's
+// router's neighbor entry. The gateway's complete entry in this pod's
 // /proc/net/arp proves the exchange worked on the interface holding the source.
 const (
 	announcePort          = "9"
@@ -30,7 +30,7 @@ const (
 	announceRefresh       = 30 * time.Second
 	arpFlagComplete       = 0x2
 	announceProcARPPath   = "/proc/net/arp"
-	announceReadyLogLabel = "source neighbours ready n=%d"
+	announceReadyLogLabel = "source neighbors ready n=%d"
 )
 
 // arpEntry is one /proc/net/arp row.
@@ -42,7 +42,7 @@ type arpEntry struct {
 
 type sourceAnnouncer struct {
 	sources, gateways []netip.Addr
-	// dial sends one byte from source to gateway:9; arp lists the neighbour
+	// dial sends one byte from source to gateway:9; arp lists the neighbor
 	// table; ifaceOf names the interface holding a local address. All are
 	// injectable so tests need no network.
 	dial    func(source, gateway netip.Addr) error
@@ -106,7 +106,7 @@ func (a *sourceAnnouncer) complete(pending []bool) bool {
 func (a *sourceAnnouncer) sendPending(pending []bool) {
 	for i := range a.sources {
 		if pending[i] {
-			// A failed send is just a pending neighbour; the next round retries.
+			// A failed send is just a pending neighbor; the next round retries.
 			_ = a.dial(a.sources[i], a.gateways[i])
 		}
 	}
@@ -272,7 +272,7 @@ func allReady(checks ...func() bool) func() bool {
 
 // announcePendingLogLabel is logged once when the budget expires with sources
 // still unresolved; counts only, never addresses.
-const announcePendingLogLabel = "source neighbours pending n=%d of %d"
+const announcePendingLogLabel = "source neighbors pending n=%d of %d"
 
 func countTrue(v []bool) int {
 	n := 0

@@ -195,7 +195,7 @@ func testInbound(now time.Time) *InboundInput {
 }
 
 // The large fields of the payload (the two bodies and the base64 message) are
-// marshalled as short placeholders and spliced in afterwards, straight into one
+// marshaled as short placeholders and spliced in afterwards, straight into one
 // buffer of the final size: they are never held again as a second copy. Inside a
 // JSON string a quote is always escaped, so the exact text `"key":"@@NAME@@"`
 // can occur only as that field.

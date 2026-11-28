@@ -11,7 +11,7 @@ import (
 	"github.com/zyno-io/thinpost/internal/oplog"
 )
 
-// slowObjects delays every upload and honours cancellation like a real store.
+// slowObjects delays every upload and honors cancellation like a real store.
 type slowObjects struct {
 	*fakeObjects
 	delay time.Duration

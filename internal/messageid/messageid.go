@@ -1,4 +1,4 @@
-// Package messageid recognises the Message-ID headers Thinpost generates and
+// Package messageid recognizes the Message-ID headers Thinpost generates and
 // extracts message identifiers from In-Reply-To and References values. It is
 // the single parser behind ARF feedback correlation and inbound reply
 // correlation, so a change to the header shape is made here once.

@@ -9,7 +9,7 @@ import (
 )
 
 // MaxBytes is the largest inbound message. The Edge enforces it first; control
-// refuses anything larger as a second line of defence.
+// refuses anything larger as a second line of defense.
 const MaxBytes = 10 << 20
 
 // MaxRecipients bounds the envelope recipients of one message.
@@ -33,7 +33,7 @@ type Message struct {
 // TLSInfo is the TLS session of the SMTP connection, empty when not encrypted.
 type TLSInfo struct{ Version, Cipher string }
 
-// envelope is a Message after validation and sanitising.
+// envelope is a Message after validation and sanitizing.
 type envelope struct {
 	id       string
 	mailFrom string
@@ -113,7 +113,7 @@ func addressDomain(address string) string {
 	return address[strings.LastIndexByte(address, '@')+1:]
 }
 
-// normalize validates and sanitises the envelope. Recipients are deduplicated
+// normalize validates and sanitizes the envelope. Recipients are deduplicated
 // case-insensitively, keeping the first spelling, and at least one is required.
 func normalize(m Message) (envelope, error) {
 	var e envelope

@@ -9,7 +9,7 @@ The Edge receiver speaks SMTP through a patched copy of [emersion/go-smtp](https
 
 ## Why it is a copy
 
-Two upstream behaviours affect mail we accept, and neither can be fixed from the session side (a third patch adds an option the SMTP submission listeners need):
+Two upstream behaviors affect mail we accept, and neither can be fixed from the session side (a third patch adds an option the SMTP submission listeners need):
 
 - **BDAT worker isolation.** After `RSET`, a BDAT transaction's worker could still be running and could deliver its result to the next transaction's final reply, with data races on the connection state.
 - **Exact-limit DATA.** A DATA message of exactly the size limit was refused, while BDAT accepted it. A bounce of exactly the receiver's maximum size was therefore rejected.

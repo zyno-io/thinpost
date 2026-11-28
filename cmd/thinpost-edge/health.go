@@ -61,7 +61,7 @@ func healthHandler(ready func() bool) http.Handler {
 }
 
 // edgeHealthHandler serves /readyz from the full readiness (journal and source
-// neighbours) and /livez from the journal alone, so a neighbour that has not
+// neighbors) and /livez from the journal alone, so a neighbor that has not
 // resolved delays readiness but never restarts the process.
 func edgeHealthHandler(ready, live func() bool) http.Handler {
 	r, l := pathHealthHandler("/readyz", ready), pathHealthHandler("/livez", live)

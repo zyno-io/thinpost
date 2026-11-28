@@ -50,7 +50,7 @@ type fixture struct {
 }
 
 // suppressionStore is a fixed in-memory list for the Postmark SDK dump case.
-// It honours the reason and origin filters only; writes are not exercised.
+// It honors the reason and origin filters only; writes are not exercised.
 type suppressionStore struct {
 	items []submission.ProviderSuppression
 }

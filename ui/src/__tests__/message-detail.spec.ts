@@ -384,7 +384,7 @@ describe('message detail screen', () => {
         );
     });
 
-    it('copies the delivery ID from a labelled button and shows its short form', async () => {
+    it('copies the delivery ID from a labeled button and shows its short form', async () => {
         const writeText = vi.fn().mockResolvedValue(undefined);
         Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
         await mountAt(`/apps/${APP_ID}/messages/${MESSAGE_ID}`);

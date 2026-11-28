@@ -202,7 +202,7 @@ func isDMARCRecord(txt string) bool {
 
 // parseDMARC reads the tags the check reports, as a receiver would (RFC 7489
 // 6.3 and 6.6.3). Tag names and the values of p, sp and aspf are
-// case-insensitive. An invalid aspf is discarded in favour of relaxed. A
+// case-insensitive. An invalid aspf is discarded in favor of relaxed. A
 // record with no valid p, or with an invalid sp, counts as p=none when it has
 // a rua tag; without one, receivers apply no DMARC and ok is false.
 func parseDMARC(record string) (p, sp, aspf string, ok bool) {

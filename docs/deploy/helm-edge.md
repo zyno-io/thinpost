@@ -260,7 +260,7 @@ helm upgrade --install thinpost-edge zyno/thinpost --version <chart version> \
   --wait --timeout 10m
 ```
 
-The pod uses three probes. Startup and liveness run `thinpost-edge healthcheck liveness`, which checks only the journal, so an unresolved neighbour never restarts the worker. Readiness runs `thinpost-edge healthcheck`, which also waits for the router to resolve every source gateway; see [Direct public networking](/deploy/direct-public-networking#arp-refresh-and-readiness).
+The pod uses three probes. Startup and liveness run `thinpost-edge healthcheck liveness`, which checks only the journal, so an unresolved neighbor never restarts the worker. Readiness runs `thinpost-edge healthcheck`, which also waits for the router to resolve every source gateway; see [Direct public networking](/deploy/direct-public-networking#arp-refresh-and-readiness).
 
 The worker also exposes a health endpoint on `127.0.0.1:8081`, inside the pod only. It samples the journal every five seconds, and the sample expires after 15 seconds. The probe does not check free disk, public reachability, certificate validity or whether a controller is connected.
 

@@ -147,7 +147,7 @@
                             <p>Mail received for all apps since 00:00 UTC. It counts messages, never addresses or content.</p>
                             <ul>
                                 <li><strong>Received</strong>: messages accepted and handed to webhooks. <strong>Replies</strong> is how many of those answer an app's own message.</li>
-                                <li><strong>Repeats</strong>: a sender tried again and Thinpost recognised the message, so it was not stored twice.</li>
+                                <li><strong>Repeats</strong>: a sender tried again and Thinpost recognized the message, so it was not stored twice.</li>
                                 <li><strong>Asked to retry</strong>: messages the sender had already sent, which Thinpost then asked it to send again later. Mail refused before the sender sent the message (for example while an app has no inbound webhook or is paused) isn't counted here.</li>
                             </ul>
                         </HelpButton>

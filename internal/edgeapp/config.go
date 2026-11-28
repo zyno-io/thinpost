@@ -27,7 +27,7 @@ type Config struct {
 	// accepted at every listener name (see BounceDomains).
 	AdditionalSources []netip.Addr
 	// SourceGateways holds each source's gateway, in Sources() order. Empty
-	// means no neighbour announcement (and no readiness gate on it).
+	// means no neighbor announcement (and no readiness gate on it).
 	SourceGateways                         []netip.Addr
 	AdditionalHostnames                    []string
 	AdditionalCertRoot                     string

@@ -455,7 +455,7 @@ describe('webhook delivery replay', () => {
             expect(buttonIn(row, 'Send again').attributes('disabled')).toBeDefined();
             expect(row.text()).toContain(reason);
         }
-        // An ID missing from the endpoint list is labelled, not shown blank.
+        // An ID missing from the endpoint list is labeled, not shown blank.
         expect(deliveryRow(EVENT_QUEUED, DELETED).text()).toContain('Deleted webhook');
         expect(deliveryRow(EVENT_FAILED, SUB_DISABLED).text()).not.toContain('Deleted webhook');
         expect(history().findAll('th').map(th => th.text())).toContain('Webhook');

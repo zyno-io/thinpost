@@ -39,7 +39,7 @@ describe('downloadInboundMessage', () => {
         const done = await downloadInboundMessage({ appId: APP_ID, inboundId: ID });
         expect(done).toBe(true);
         expect(api.downloadInboundMessageRaw).toHaveBeenCalledWith({ path: { appId: APP_ID, inboundId: ID }, parseAs: 'blob' });
-        // The bytes are relabelled so the browser can never render them in the console origin.
+        // The bytes are relabeled so the browser can never render them in the console origin.
         expect((createObjectURL.mock.calls[0]![0] as Blob).type).toBe('application/octet-stream');
         expect(clickSpy).toHaveBeenCalledTimes(1);
         expect(linkAtClick).toMatchObject({ href: 'blob:eml-1', download: `inbound-${ID}.eml`, rel: 'noopener' });

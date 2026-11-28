@@ -20,7 +20,7 @@ describe('help button', () => {
         });
     }
 
-    it('shows only the button until pressed, then the explanation in a labelled dialog', async () => {
+    it('shows only the button until pressed, then the explanation in a labeled dialog', async () => {
         const wrapper = mountButton();
         const button = wrapper.get('button[aria-label="About Widgets"]');
         expect(button.attributes('aria-haspopup')).toBe('dialog');

@@ -4,7 +4,7 @@ import process from 'node:process';
 // Dev-only browser checks. Not part of `npm test`, `npm run build` or CI.
 //
 // Projects:
-//  - dev: the Vite dev server (no CSP), for UI behaviour, layout and theme checks.
+//  - dev: the Vite dev server (no CSP), for UI behavior, layout and theme checks.
 //  - csp: `vite preview` of the production build with the production console CSP injected by the
 //    test fixture, for iframe-isolation and CSP-parity checks.
 // Chromium always runs. Firefox and WebKit run the isolation specs when E2E_ALL_BROWSERS=1 and their

@@ -98,7 +98,7 @@ func TestAnnouncerBecomesReadyAndLogsOneFixedLine(t *testing.T) {
 	})
 	mu.Lock()
 	defer mu.Unlock()
-	if len(logs) != 1 || logs[0] != "source neighbours ready n=%d" {
+	if len(logs) != 1 || logs[0] != "source neighbors ready n=%d" {
 		t.Fatalf("logs: %v", logs)
 	}
 	if f.count(srcA) < 1 || f.count(srcB) < 1 {
@@ -191,11 +191,11 @@ func TestReadinessGatingAndLivenessIndependence(t *testing.T) {
 		return w.Code
 	}
 	if code("/readyz") != 503 || code("/livez") != 204 {
-		t.Fatal("unresolved neighbours must fail readiness only")
+		t.Fatal("unresolved neighbors must fail readiness only")
 	}
 	nbrOK = true
 	if code("/readyz") != 204 {
-		t.Fatal("ready once neighbours resolve")
+		t.Fatal("ready once neighbors resolve")
 	}
 	journalOK = false
 	if code("/readyz") != 503 || code("/livez") != 503 {
